@@ -29,6 +29,9 @@ import com.bilimusicplayer.BiliMusicApplication
 import com.bilimusicplayer.network.RetrofitClient
 import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
 import com.bilimusicplayer.network.bilibili.favorite.FavoriteMedia
+import com.bilimusicplayer.service.download.DownloadManager
+import com.bilimusicplayer.data.model.Song
+import com.bilimusicplayer.data.local.AppDatabase
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -46,6 +49,14 @@ fun FavoriteContentScreen(
 
     val repository = remember {
         BiliFavoriteRepository(RetrofitClient.biliFavoriteApi)
+    }
+
+    val downloadManager = remember {
+        DownloadManager(context)
+    }
+
+    val database = remember {
+        AppDatabase.getDatabase(context)
     }
 
     var mediaList by remember { mutableStateOf<List<FavoriteMedia>>(emptyList()) }
@@ -423,7 +434,56 @@ fun FavoriteContentScreen(
                                     }
                                 },
                                 onDownloadClick = {
-                                    // TODO: Implement download
+                                    scope.launch {
+                                        try {
+                                            // Get video detail and audio URL
+                                            val detailResponse = repository.getVideoDetail(media.bvid)
+                                            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
+                                                val cid = detailResponse.body()?.data?.cid
+                                                if (cid != null) {
+                                                    val playUrlResponse = repository.getPlayUrl(cid, media.bvid, quality = 64)
+                                                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
+                                                        val audioUrl = playUrlResponse.body()?.data?.dash?.audio?.firstOrNull()?.baseUrl
+                                                        if (audioUrl != null) {
+                                                            // Create Song entity
+                                                            val song = Song(
+                                                                id = media.bvid,
+                                                                title = media.title,
+                                                                artist = media.upper.name,
+                                                                duration = media.duration,
+                                                                coverUrl = fixImageUrl(media.cover),
+                                                                audioUrl = audioUrl,
+                                                                cid = cid,
+                                                                bvid = media.bvid,
+                                                                aid = media.id,
+                                                                uploaderId = media.upper.mid,
+                                                                uploaderName = media.upper.name,
+                                                                pubDate = media.pubtime
+                                                            )
+
+                                                            // Save to database
+                                                            database.songDao().insertSong(song)
+
+                                                            // Start download
+                                                            downloadManager.startDownload(song, audioUrl)
+
+                                                            snackbarHostState.showSnackbar("已添加到下载队列")
+                                                        } else {
+                                                            snackbarHostState.showSnackbar("无法获取音频URL")
+                                                        }
+                                                    } else {
+                                                        snackbarHostState.showSnackbar("获取播放地址失败")
+                                                    }
+                                                } else {
+                                                    snackbarHostState.showSnackbar("无法获取视频CID")
+                                                }
+                                            } else {
+                                                snackbarHostState.showSnackbar("获取视频详情失败")
+                                            }
+                                        } catch (e: Exception) {
+                                            snackbarHostState.showSnackbar("下载失败: ${e.message}")
+                                        }
+                                    }
                                 }
                             )
                         }
