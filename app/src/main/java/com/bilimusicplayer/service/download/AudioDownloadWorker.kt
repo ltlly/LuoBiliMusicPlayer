@@ -1,6 +1,7 @@
 package com.bilimusicplayer.service.download
 
 import android.content.Context
+import android.os.Environment
 import android.util.Log
 import androidx.work.*
 import com.bilimusicplayer.data.local.AppDatabase
@@ -157,11 +158,18 @@ class AudioDownloadWorker(
     ): File? {
         return withContext(Dispatchers.IO) {
             try {
-                // Create output file
-                val outputFile = File(
-                    applicationContext.getExternalFilesDir(null),
-                    "${inputFile.nameWithoutExtension}.mp3"
-                )
+                // Get public Music directory
+                val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+
+                // Create BiliMusic subdirectory
+                val biliMusicDir = File(musicDir, "BiliMusic")
+                if (!biliMusicDir.exists()) {
+                    biliMusicDir.mkdirs()
+                }
+
+                // Create output file with sanitized filename
+                val sanitizedTitle = title.replace(Regex("[^a-zA-Z0-9\\u4e00-\\u9fa5\\s-]"), "")
+                val outputFile = File(biliMusicDir, "$sanitizedTitle.mp3")
 
                 // TODO: Implement actual FFmpeg conversion
                 // For now, just copy the file as a placeholder
@@ -173,6 +181,7 @@ class AudioDownloadWorker(
                 // TODO: Add ID3 tags using a library like JAudioTagger
                 // This would embed title, artist, album, and cover art
 
+                Log.d(TAG, "File saved to: ${outputFile.absolutePath}")
                 outputFile
             } catch (e: Exception) {
                 Log.e(TAG, "Error converting to MP3", e)
