@@ -43,11 +43,7 @@ class MusicPlaybackService : MediaSessionService() {
                 true
             )
             .setHandleAudioBecomingNoisy(true)
-            .setShuffleOrder(DefaultShuffleOrder(0))
             .build()
-
-        // Configure player for better shuffle behavior
-        player.playWhenReady = true
 
         // Create MediaSession
         mediaSession = MediaSession.Builder(this, player)
