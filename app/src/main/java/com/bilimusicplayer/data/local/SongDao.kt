@@ -1,0 +1,54 @@
+package com.bilimusicplayer.data.local
+
+import androidx.room.*
+import com.bilimusicplayer.data.model.Song
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * Data Access Object for Song operations
+ */
+@Dao
+interface SongDao {
+
+    @Query("SELECT * FROM songs ORDER BY addedDate DESC")
+    fun getAllSongs(): Flow<List<Song>>
+
+    @Query("SELECT * FROM songs WHERE isDownloaded = 1 ORDER BY addedDate DESC")
+    fun getDownloadedSongs(): Flow<List<Song>>
+
+    @Query("SELECT * FROM songs WHERE id = :songId")
+    suspend fun getSongById(songId: String): Song?
+
+    @Query("SELECT * FROM songs WHERE id = :songId")
+    fun getSongByIdFlow(songId: String): Flow<Song?>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSong(song: Song)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSongs(songs: List<Song>)
+
+    @Update
+    suspend fun updateSong(song: Song)
+
+    @Delete
+    suspend fun deleteSong(song: Song)
+
+    @Query("DELETE FROM songs WHERE id = :songId")
+    suspend fun deleteSongById(songId: String)
+
+    @Query("UPDATE songs SET playCount = playCount + 1, lastPlayedAt = :timestamp WHERE id = :songId")
+    suspend fun incrementPlayCount(songId: String, timestamp: Long = System.currentTimeMillis())
+
+    @Query("UPDATE songs SET isDownloaded = :isDownloaded, localPath = :localPath, fileSize = :fileSize WHERE id = :songId")
+    suspend fun updateDownloadStatus(songId: String, isDownloaded: Boolean, localPath: String?, fileSize: Long)
+
+    @Query("SELECT * FROM songs WHERE title LIKE '%' || :query || '%' OR artist LIKE '%' || :query || '%' OR album LIKE '%' || :query || '%'")
+    fun searchSongs(query: String): Flow<List<Song>>
+
+    @Query("SELECT COUNT(*) FROM songs")
+    fun getSongCount(): Flow<Int>
+
+    @Query("SELECT COUNT(*) FROM songs WHERE isDownloaded = 1")
+    fun getDownloadedSongCount(): Flow<Int>
+}
