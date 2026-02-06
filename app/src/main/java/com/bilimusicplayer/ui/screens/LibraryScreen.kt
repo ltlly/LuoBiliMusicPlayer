@@ -32,12 +32,15 @@ fun LibraryScreen(navController: NavController) {
     val database = remember { AppDatabase.getDatabase(context) }
 
     var selectedTab by remember { mutableStateOf(0) }
+    var downloadSubTab by remember { mutableStateOf(0) } // 0=下载中, 1=待下载, 2=已完成
     var localSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
     var downloads by remember { mutableStateOf<List<Download>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var showDeleteDialog by remember { mutableStateOf<Song?>(null) }
+    var showDeleteRecordDialog by remember { mutableStateOf<Download?>(null) }
 
     // Load data when tab changes
-    LaunchedEffect(selectedTab) {
+    LaunchedEffect(selectedTab, downloadSubTab) {
         scope.launch {
             isLoading = true
             when (selectedTab) {
@@ -48,13 +51,76 @@ fun LibraryScreen(navController: NavController) {
                     }
                 }
                 1 -> {
+                    // Filter downloads based on sub-tab
                     database.downloadDao().getAllDownloads().collect { downloadList ->
-                        downloads = downloadList
+                        downloads = when (downloadSubTab) {
+                            0 -> downloadList.filter { it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.CONVERTING }
+                            1 -> downloadList.filter { it.status == DownloadStatus.QUEUED }
+                            2 -> downloadList.filter { it.status == DownloadStatus.COMPLETED }
+                            else -> downloadList
+                        }
                         isLoading = false
                     }
                 }
             }
         }
+    }
+
+    // Delete song dialog
+    showDeleteDialog?.let { song ->
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = null },
+            title = { Text("删除歌曲") },
+            text = { Text("确定要删除 \"${song.title}\" 吗？\n\n这将同时删除本地文件和数据库记录。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            // Delete file
+                            song.localPath?.let { path ->
+                                java.io.File(path).delete()
+                            }
+                            // Delete from database
+                            database.songDao().deleteSong(song)
+                            showDeleteDialog = null
+                        }
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteDialog = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
+    // Delete download record dialog
+    showDeleteRecordDialog?.let { download ->
+        AlertDialog(
+            onDismissRequest = { showDeleteRecordDialog = null },
+            title = { Text("删除下载记录") },
+            text = { Text("确定要删除此下载记录吗？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            database.downloadDao().deleteDownloadBySongId(download.songId)
+                            showDeleteRecordDialog = null
+                        }
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteRecordDialog = null }) {
+                    Text("取消")
+                }
+            }
+        )
     }
 
     Scaffold(
@@ -69,18 +135,42 @@ fun LibraryScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Tabs
+            // Main tabs
             TabRow(selectedTabIndex = selectedTab) {
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("本地歌曲 (${localSongs.size})") }
+                    text = { Text("本地歌曲") }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("下载队列 (${downloads.size})") }
+                    text = { Text("下载队列") }
                 )
+            }
+
+            // Download sub-tabs
+            if (selectedTab == 1) {
+                TabRow(
+                    selectedTabIndex = downloadSubTab,
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                ) {
+                    Tab(
+                        selected = downloadSubTab == 0,
+                        onClick = { downloadSubTab = 0 },
+                        text = { Text("下载中") }
+                    )
+                    Tab(
+                        selected = downloadSubTab == 1,
+                        onClick = { downloadSubTab = 1 },
+                        text = { Text("待下载") }
+                    )
+                    Tab(
+                        selected = downloadSubTab == 2,
+                        onClick = { downloadSubTab = 2 },
+                        text = { Text("已完成") }
+                    )
+                }
             }
 
             // Content
@@ -134,6 +224,9 @@ fun LibraryScreen(navController: NavController) {
                                                 BiliMusicApplication.musicPlayerController.setMediaItems(listOf(mediaItem), 0)
                                                 navController.navigate("player")
                                             }
+                                        },
+                                        onDelete = {
+                                            showDeleteDialog = song
                                         }
                                     )
                                 }
@@ -149,7 +242,11 @@ fun LibraryScreen(navController: NavController) {
                                                     DownloadStatus.CANCELLED
                                                 )
                                             }
-                                        }
+                                        },
+                                        onDelete = {
+                                            showDeleteRecordDialog = download
+                                        },
+                                        showDelete = downloadSubTab == 2 // Only show delete in completed tab
                                     )
                                 }
                             }
@@ -162,7 +259,7 @@ fun LibraryScreen(navController: NavController) {
 }
 
 @Composable
-fun SongListItem(song: Song, onClick: () -> Unit) {
+fun SongListItem(song: Song, onClick: () -> Unit, onDelete: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -204,12 +301,21 @@ fun SongListItem(song: Song, onClick: () -> Unit) {
                 )
             }
 
-            // Downloaded icon
+            // Downloaded icon and delete button
             if (song.isDownloaded) {
                 Icon(
                     imageVector = Icons.Default.CloudDone,
                     contentDescription = "已下载",
                     tint = MaterialTheme.colorScheme.primary
+                )
+            }
+
+            // Delete button
+            IconButton(onClick = onDelete) {
+                Icon(
+                    imageVector = Icons.Default.Delete,
+                    contentDescription = "删除",
+                    tint = MaterialTheme.colorScheme.error
                 )
             }
         }
@@ -219,7 +325,9 @@ fun SongListItem(song: Song, onClick: () -> Unit) {
 @Composable
 fun DownloadListItem(
     download: Download,
-    onCancel: () -> Unit
+    onCancel: () -> Unit,
+    onDelete: () -> Unit = {},
+    showDelete: Boolean = false
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -280,14 +388,22 @@ fun DownloadListItem(
                     )
                 }
 
-                // Action button
-                when (download.status) {
-                    DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED -> {
+                // Action buttons
+                when {
+                    download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED -> {
                         IconButton(onClick = onCancel) {
                             Icon(Icons.Default.Cancel, contentDescription = "取消")
                         }
                     }
-                    else -> {}
+                    showDelete && download.status == DownloadStatus.COMPLETED -> {
+                        IconButton(onClick = onDelete) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "删除记录",
+                                tint = MaterialTheme.colorScheme.error
+                            )
+                        }
+                    }
                 }
             }
 
