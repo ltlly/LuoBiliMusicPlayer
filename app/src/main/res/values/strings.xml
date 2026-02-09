@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">B站音乐播放器</string>
+    <string name="app_name">洛</string>
     <string name="login">登录</string>
     <string name="scan_qr_code">扫码登录</string>
     <string name="favorites">收藏夹</string>
@@ -40,7 +40,7 @@
     <string name="appearance">外观</string>
     <string name="appearance_subtitle">主题和显示选项</string>
     <string name="about">关于</string>
-    <string name="version">版本 1.0.0</string>
+    <string name="version">版本 1.1.0</string>
     <string name="now_playing">正在播放</string>
     <string name="back">返回</string>
     <string name="song_title">歌曲标题</string>
