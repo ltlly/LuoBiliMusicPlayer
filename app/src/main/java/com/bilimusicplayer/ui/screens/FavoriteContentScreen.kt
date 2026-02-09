@@ -81,14 +81,32 @@ fun FavoriteContentScreen(
     // Search state
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
-    val filteredMediaList = remember(mediaList, searchQuery) {
-        if (searchQuery.isBlank()) {
-            mediaList
-        } else {
-            mediaList.filter { media ->
-                media.title.contains(searchQuery, ignoreCase = true) ||
-                media.upper.name.contains(searchQuery, ignoreCase = true)
+    var isSearching by remember { mutableStateOf(false) }
+
+    // Function to load data (with optional search)
+    suspend fun loadData(page: Int = 1, keyword: String? = null, append: Boolean = false) {
+        try {
+            val response = repository.getFavoriteResources(
+                mediaId = folderId,
+                pageNumber = page,
+                pageSize = 20,
+                keyword = keyword
+            )
+            if (response.isSuccessful && response.body()?.code == 0) {
+                val data = response.body()?.data
+                val newMedias = data?.medias ?: emptyList()
+                mediaList = if (append) {
+                    mediaList + newMedias
+                } else {
+                    newMedias
+                }
+                totalCount = data?.info?.mediaCount ?: 0
+                hasMore = mediaList.size < totalCount
+            } else {
+                errorMessage = "加载失败: ${response.body()?.message ?: "未知错误"}"
             }
+        } catch (e: Exception) {
+            errorMessage = e.message ?: "未知错误"
         }
     }
 
@@ -98,51 +116,35 @@ fun FavoriteContentScreen(
             isLoading = true
             errorMessage = null
             currentPage = 1
-            try {
-                val response = repository.getFavoriteResources(
-                    mediaId = folderId,
-                    pageNumber = 1,
-                    pageSize = 20
-                )
-                if (response.isSuccessful && response.body()?.code == 0) {
-                    val data = response.body()?.data
-                    mediaList = data?.medias ?: emptyList()
-                    totalCount = data?.info?.mediaCount ?: 0
-                    hasMore = mediaList.size < totalCount
-                } else {
-                    errorMessage = "加载失败: ${response.body()?.message ?: "未知错误"}"
-                }
-            } catch (e: Exception) {
-                errorMessage = e.message ?: "未知错误"
-            } finally {
-                isLoading = false
+            loadData(page = 1)
+            isLoading = false
+        }
+    }
+
+    // Perform search when search query changes
+    LaunchedEffect(searchQuery) {
+        if (isSearchActive) {
+            scope.launch {
+                isSearching = true
+                currentPage = 1
+                val keyword = if (searchQuery.isBlank()) null else searchQuery
+                loadData(page = 1, keyword = keyword)
+                isSearching = false
             }
         }
     }
 
     // Function to load more
     fun loadMore() {
-        if (isLoadingMore || !hasMore || isLoading) return
+        if (isLoadingMore || !hasMore || isLoading || isSearching) return
 
         scope.launch {
             isLoadingMore = true
             try {
                 val nextPage = currentPage + 1
-                val response = repository.getFavoriteResources(
-                    mediaId = folderId,
-                    pageNumber = nextPage,
-                    pageSize = 20
-                )
-                if (response.isSuccessful && response.body()?.code == 0) {
-                    val newMedias = response.body()?.data?.medias ?: emptyList()
-                    if (newMedias.isNotEmpty()) {
-                        mediaList = mediaList + newMedias
-                        currentPage = nextPage
-                        hasMore = mediaList.size < totalCount
-                    } else {
-                        hasMore = false
-                    }
-                }
+                val keyword = if (isSearchActive && searchQuery.isNotBlank()) searchQuery else null
+                loadData(page = nextPage, keyword = keyword, append = true)
+                currentPage = nextPage
             } catch (e: Exception) {
                 // Ignore load more errors
             } finally {
@@ -211,14 +213,14 @@ fun FavoriteContentScreen(
                     if (isSelectionMode) {
                         // Select all button
                         IconButton(onClick = {
-                            selectedMediaIds = if (selectedMediaIds.size == filteredMediaList.size) {
+                            selectedMediaIds = if (selectedMediaIds.size == mediaList.size) {
                                 emptySet()
                             } else {
-                                filteredMediaList.map { it.bvid }.toSet()
+                                mediaList.map { it.bvid }.toSet()
                             }
                         }) {
                             Icon(
-                                if (selectedMediaIds.size == filteredMediaList.size) {
+                                if (selectedMediaIds.size == mediaList.size) {
                                     Icons.Default.CheckBox
                                 } else {
                                     Icons.Default.CheckBoxOutlineBlank
@@ -236,7 +238,7 @@ fun FavoriteContentScreen(
                                     var failCount = 0
 
                                     var skippedCount = 0
-                                    for (media in filteredMediaList.filter { selectedMediaIds.contains(it.bvid) }) {
+                                    for (media in mediaList.filter { selectedMediaIds.contains(it.bvid) }) {
                                         try {
                                             // Check if already downloaded
                                             val existingSong = database.songDao().getSongById(media.bvid)
@@ -321,7 +323,7 @@ fun FavoriteContentScreen(
                                 var failCount = 0
                                 var skippedCount = 0
 
-                                for (media in filteredMediaList) {
+                                for (media in mediaList) {
                                     try {
                                         // Check if already downloaded
                                         val existingSong = database.songDao().getSongById(media.bvid)
@@ -385,7 +387,7 @@ fun FavoriteContentScreen(
                                 snackbarHostState.showSnackbar(message)
                             }
                         },
-                        enabled = !isBatchDownloading && filteredMediaList.isNotEmpty()
+                        enabled = !isBatchDownloading && mediaList.isNotEmpty()
                     ) {
                         if (isBatchDownloading) {
                             CircularProgressIndicator(
@@ -462,7 +464,7 @@ fun FavoriteContentScreen(
                     )
                 }
 
-                filteredMediaList.isEmpty() && searchQuery.isNotEmpty() -> {
+                mediaList.isEmpty() && searchQuery.isNotEmpty() -> {
                     Text(
                         text = "未找到匹配的歌曲",
                         modifier = Modifier.align(Alignment.Center),
@@ -502,7 +504,7 @@ fun FavoriteContentScreen(
                         item {
                             Text(
                                 text = if (searchQuery.isNotEmpty()) {
-                                    "找到 ${filteredMediaList.size} 个结果"
+                                    "找到 ${mediaList.size} 个结果"
                                 } else {
                                     "共 $totalCount 个视频"
                                 },
@@ -513,7 +515,7 @@ fun FavoriteContentScreen(
                         }
 
                         items(
-                            items = filteredMediaList,
+                            items = mediaList,
                             key = { media -> media.id }
                         ) { media ->
                             MediaItem(
@@ -536,14 +538,14 @@ fun FavoriteContentScreen(
                                             playingBvid = media.bvid
                                             isPlaying = true
 
-                                            val clickedIndex = filteredMediaList.indexOf(media)
+                                            val clickedIndex = mediaList.indexOf(media)
 
                                             // Phase 1: Load first 5 songs quickly from current page
                                             val initialPlaylist = mutableListOf<MediaItem>()
-                                            val initialBatchSize = 5.coerceAtMost(filteredMediaList.size - clickedIndex)
+                                            val initialBatchSize = 5.coerceAtMost(mediaList.size - clickedIndex)
 
                                             for (i in clickedIndex until (clickedIndex + initialBatchSize)) {
-                                                val currentMedia = filteredMediaList[i]
+                                                val currentMedia = mediaList[i]
                                                 try {
                                                     val detailResponse = repository.getVideoDetail(currentMedia.bvid)
                                                     if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
@@ -591,8 +593,8 @@ fun FavoriteContentScreen(
                                                     var loadedCount = 0
 
                                                     // First, load remaining songs from current page
-                                                    for (i in (clickedIndex + initialBatchSize) until filteredMediaList.size) {
-                                                        val currentMedia = filteredMediaList[i]
+                                                    for (i in (clickedIndex + initialBatchSize) until mediaList.size) {
+                                                        val currentMedia = mediaList[i]
                                                         try {
                                                             Log.d("FavoriteContent", "加载当前页第 ${i - clickedIndex + 1} 首: ${currentMedia.title}")
                                                             val detailResponse = repository.getVideoDetail(currentMedia.bvid)
