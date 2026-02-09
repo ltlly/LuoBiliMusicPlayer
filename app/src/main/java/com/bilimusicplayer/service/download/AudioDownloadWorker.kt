@@ -169,14 +169,15 @@ class AudioDownloadWorker(
 
                 // Create output file with sanitized filename
                 val sanitizedTitle = title.replace(Regex("[^a-zA-Z0-9\\u4e00-\\u9fa5\\s-]"), "")
-                val outputFile = File(biliMusicDir, "$sanitizedTitle.mp3")
+                // Use .m4a extension since Bilibili downloads are M4A format
+                val outputFile = File(biliMusicDir, "$sanitizedTitle.m4a")
 
-                // TODO: Implement actual FFmpeg conversion
-                // For now, just copy the file as a placeholder
-                // In a real implementation, you would use:
-                // FFmpeg.execute("-i ${inputFile.absolutePath} -c:a libmp3lame -b:a 192k ${outputFile.absolutePath}")
-
+                // TODO: Implement actual FFmpeg conversion to MP3
+                // For now, save as M4A which ExoPlayer supports natively
+                // Bilibili audio is already in M4A/AAC format
                 inputFile.copyTo(outputFile, overwrite = true)
+
+                Log.d(TAG, "保存为M4A格式: ${outputFile.name}")
 
                 // TODO: Add ID3 tags using a library like JAudioTagger
                 // This would embed title, artist, album, and cover art

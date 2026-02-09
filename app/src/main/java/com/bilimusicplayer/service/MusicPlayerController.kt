@@ -120,17 +120,14 @@ class MusicPlayerController(private val context: Context) {
             Log.d(TAG, "skipToNext - 当前索引: $currentIndex, 总数: $totalItems, 随机模式: $shuffleEnabled")
 
             if (totalItems > 0) {
-                if (currentIndex < totalItems - 1 || shuffleEnabled) {
-                    controller.seekToNext()
-                    // Force prepare and play to ensure smooth transition
-                    if (!controller.isPlaying) {
-                        controller.prepare()
-                        controller.play()
-                    }
-                    Log.d(TAG, "skipToNext - 切换到下一首")
-                } else {
-                    Log.d(TAG, "skipToNext - 已到最后一首")
+                // Let ExoPlayer handle next track with repeat mode
+                controller.seekToNext()
+                // Force prepare and play to ensure smooth transition
+                if (!controller.isPlaying) {
+                    controller.prepare()
+                    controller.play()
                 }
+                Log.d(TAG, "skipToNext - 切换到下一首")
             }
         }
     }
@@ -143,6 +140,7 @@ class MusicPlayerController(private val context: Context) {
             val currentIndex = controller.currentMediaItemIndex
             Log.d(TAG, "skipToPrevious - 当前索引: $currentIndex")
 
+            // Let ExoPlayer handle previous track with repeat mode
             controller.seekToPrevious()
             if (!controller.isPlaying) {
                 controller.prepare()
@@ -164,6 +162,8 @@ class MusicPlayerController(private val context: Context) {
     fun setMediaItems(mediaItems: List<MediaItem>, startIndex: Int = 0) {
         mediaController?.apply {
             setMediaItems(mediaItems, startIndex, 0)
+            // Enable repeat all mode for continuous playback
+            repeatMode = Player.REPEAT_MODE_ALL
             prepare()
             play()
         }
