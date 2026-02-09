@@ -15,6 +15,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.Player
 import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 import com.bilimusicplayer.BiliMusicApplication
 import com.bilimusicplayer.service.PlaybackState
 
@@ -57,6 +58,7 @@ fun MiniPlayer(
                         AsyncImage(
                             model = playbackState.currentMediaItem?.mediaMetadata?.artworkUri,
                             contentDescription = "封面",
+                            contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {

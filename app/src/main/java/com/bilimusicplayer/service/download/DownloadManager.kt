@@ -25,6 +25,8 @@ class DownloadManager(private val context: Context) {
         // Create download record
         val download = Download(
             songId = song.id,
+            title = song.title,
+            artist = song.artist,
             status = DownloadStatus.QUEUED,
             audioUrl = audioUrl,
             totalBytes = 0
@@ -87,7 +89,9 @@ class DownloadManager(private val context: Context) {
             // Recreate work request
             val workData = workDataOf(
                 AudioDownloadWorker.KEY_SONG_ID to songId,
-                AudioDownloadWorker.KEY_AUDIO_URL to download.audioUrl
+                AudioDownloadWorker.KEY_AUDIO_URL to download.audioUrl,
+                AudioDownloadWorker.KEY_TITLE to download.title,
+                AudioDownloadWorker.KEY_ARTIST to download.artist
             )
 
             val downloadRequest = OneTimeWorkRequestBuilder<AudioDownloadWorker>()

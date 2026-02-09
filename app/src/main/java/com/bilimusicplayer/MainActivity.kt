@@ -16,13 +16,26 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import com.bilimusicplayer.ui.screens.*
 import com.bilimusicplayer.ui.theme.BiliMusicPlayerTheme
+import com.bilimusicplayer.ui.theme.ThemeManager
+import com.bilimusicplayer.ui.theme.ThemeMode
 import com.bilimusicplayer.ui.components.MiniPlayer
+import androidx.compose.foundation.isSystemInDarkTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            BiliMusicPlayerTheme {
+            val themeManager = remember { ThemeManager(this) }
+            val themeMode by themeManager.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
+            val systemDarkTheme = isSystemInDarkTheme()
+
+            val darkTheme = when (themeMode) {
+                ThemeMode.SYSTEM -> systemDarkTheme
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+            }
+
+            BiliMusicPlayerTheme(darkTheme = darkTheme) {
                 MainScreen()
             }
         }
@@ -140,6 +153,12 @@ fun NavigationGraph(
             val folderId = backStackEntry.arguments?.getString("folderId")?.toLongOrNull() ?: 0L
             val folderTitle = backStackEntry.arguments?.getString("folderTitle") ?: ""
             FavoriteContentScreen(navController, folderId, folderTitle)
+        }
+        composable("download_settings") {
+            DownloadSettingsScreen(navController)
+        }
+        composable("appearance_settings") {
+            AppearanceSettingsScreen(navController)
         }
     }
 }

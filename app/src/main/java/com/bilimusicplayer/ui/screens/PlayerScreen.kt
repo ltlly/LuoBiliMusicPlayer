@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 import com.bilimusicplayer.BiliMusicApplication
 import androidx.media3.common.Player
 import com.bilimusicplayer.ui.components.PlayQueueSheet
@@ -80,6 +81,7 @@ fun PlayerScreen(navController: NavController) {
                         AsyncImage(
                             model = playbackState.currentMediaItem?.mediaMetadata?.artworkUri,
                             contentDescription = "封面",
+                            contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {

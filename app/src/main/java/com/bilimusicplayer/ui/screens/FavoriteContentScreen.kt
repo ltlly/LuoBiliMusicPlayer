@@ -72,6 +72,10 @@ fun FavoriteContentScreen(
     var loadingPlaylist by remember { mutableStateOf(false) }
     var isBatchDownloading by remember { mutableStateOf(false) }
 
+    // Multi-selection state
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
     // Load first page
     LaunchedEffect(folderId) {
         scope.launch {
@@ -134,16 +138,109 @@ fun FavoriteContentScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(folderTitle) },
+                title = {
+                    if (isSelectionMode) {
+                        Text("已选择 ${selectedMediaIds.size} 项")
+                    } else {
+                        Text(folderTitle)
+                    }
+                },
                 navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                    if (isSelectionMode) {
+                        IconButton(onClick = {
+                            isSelectionMode = false
+                            selectedMediaIds = emptySet()
+                        }) {
+                            Icon(Icons.Default.Close, "取消选择")
+                        }
+                    } else {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                        }
                     }
                 },
                 actions = {
-                    // Batch download button
-                    IconButton(
-                        onClick = {
+                    if (isSelectionMode) {
+                        // Select all button
+                        IconButton(onClick = {
+                            selectedMediaIds = if (selectedMediaIds.size == mediaList.size) {
+                                emptySet()
+                            } else {
+                                mediaList.map { it.bvid }.toSet()
+                            }
+                        }) {
+                            Icon(
+                                if (selectedMediaIds.size == mediaList.size) {
+                                    Icons.Default.CheckBox
+                                } else {
+                                    Icons.Default.CheckBoxOutlineBlank
+                                },
+                                "全选"
+                            )
+                        }
+                        // Batch download selected button
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    isBatchDownloading = true
+                                    snackbarHostState.showSnackbar("开始下载选中的 ${selectedMediaIds.size} 项...")
+                                    var successCount = 0
+                                    var failCount = 0
+
+                                    for (media in mediaList.filter { selectedMediaIds.contains(it.bvid) }) {
+                                        try {
+                                            val detailResponse = repository.getVideoDetail(media.bvid)
+                                            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
+                                                val cid = detailResponse.body()?.data?.cid
+                                                if (cid != null) {
+                                                    val playUrlResponse = repository.getPlayUrl(cid, media.bvid, quality = 64)
+                                                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
+                                                        val audioUrl = playUrlResponse.body()?.data?.dash?.audio?.firstOrNull()?.baseUrl
+                                                        if (audioUrl != null) {
+                                                            val song = Song(
+                                                                id = media.bvid,
+                                                                title = media.title,
+                                                                artist = media.upper.name,
+                                                                duration = media.duration,
+                                                                coverUrl = fixImageUrl(media.cover),
+                                                                audioUrl = audioUrl,
+                                                                cid = cid,
+                                                                bvid = media.bvid,
+                                                                aid = media.id,
+                                                                uploaderId = media.upper.mid,
+                                                                uploaderName = media.upper.name,
+                                                                pubDate = media.pubtime
+                                                            )
+                                                            database.songDao().insertSong(song)
+                                                            downloadManager.startDownload(song, audioUrl)
+                                                            successCount++
+                                                        } else failCount++
+                                                    } else failCount++
+                                                } else failCount++
+                                            } else failCount++
+                                        } catch (e: Exception) {
+                                            failCount++
+                                        }
+                                    }
+
+                                    isBatchDownloading = false
+                                    isSelectionMode = false
+                                    selectedMediaIds = emptySet()
+                                    snackbarHostState.showSnackbar("下载完成：成功 $successCount 个，失败 $failCount 个")
+                                }
+                            },
+                            enabled = !isBatchDownloading && selectedMediaIds.isNotEmpty()
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "下载选中")
+                        }
+                    } else {
+                        // Enter selection mode button
+                        IconButton(onClick = { isSelectionMode = true }) {
+                            Icon(Icons.Default.CheckBox, "多选")
+                        }
+                        // Batch download all button
+                        IconButton(
+                            onClick = {
                             scope.launch {
                                 isBatchDownloading = true
                                 snackbarHostState.showSnackbar("开始批量下载...")
@@ -200,6 +297,7 @@ fun FavoriteContentScreen(
                         } else {
                             Icon(Icons.Default.Download, contentDescription = "全部下载")
                         }
+                    }
                     }
                 }
             )
@@ -310,6 +408,17 @@ fun FavoriteContentScreen(
                             MediaItem(
                                 media = media,
                                 isPlaying = playingBvid == media.bvid,
+                                isSelectionMode = isSelectionMode,
+                                isSelected = selectedMediaIds.contains(media.bvid),
+                                onClick = {
+                                    if (isSelectionMode) {
+                                        selectedMediaIds = if (selectedMediaIds.contains(media.bvid)) {
+                                            selectedMediaIds - media.bvid
+                                        } else {
+                                            selectedMediaIds + media.bvid
+                                        }
+                                    }
+                                },
                                 onPlayClick = {
                                     scope.launch {
                                         try {
@@ -495,58 +604,6 @@ fun FavoriteContentScreen(
                                             playingBvid = null
                                         }
                                     }
-                                },
-                                onDownloadClick = {
-                                    scope.launch {
-                                        try {
-                                            // Get video detail and audio URL
-                                            val detailResponse = repository.getVideoDetail(media.bvid)
-                                            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
-                                                val cid = detailResponse.body()?.data?.cid
-                                                if (cid != null) {
-                                                    val playUrlResponse = repository.getPlayUrl(cid, media.bvid, quality = 64)
-                                                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
-                                                        val audioUrl = playUrlResponse.body()?.data?.dash?.audio?.firstOrNull()?.baseUrl
-                                                        if (audioUrl != null) {
-                                                            // Create Song entity
-                                                            val song = Song(
-                                                                id = media.bvid,
-                                                                title = media.title,
-                                                                artist = media.upper.name,
-                                                                duration = media.duration,
-                                                                coverUrl = fixImageUrl(media.cover),
-                                                                audioUrl = audioUrl,
-                                                                cid = cid,
-                                                                bvid = media.bvid,
-                                                                aid = media.id,
-                                                                uploaderId = media.upper.mid,
-                                                                uploaderName = media.upper.name,
-                                                                pubDate = media.pubtime
-                                                            )
-
-                                                            // Save to database
-                                                            database.songDao().insertSong(song)
-
-                                                            // Start download
-                                                            downloadManager.startDownload(song, audioUrl)
-
-                                                            snackbarHostState.showSnackbar("已添加到下载队列")
-                                                        } else {
-                                                            snackbarHostState.showSnackbar("无法获取音频URL")
-                                                        }
-                                                    } else {
-                                                        snackbarHostState.showSnackbar("获取播放地址失败")
-                                                    }
-                                                } else {
-                                                    snackbarHostState.showSnackbar("无法获取视频CID")
-                                                }
-                                            } else {
-                                                snackbarHostState.showSnackbar("获取视频详情失败")
-                                            }
-                                        } catch (e: Exception) {
-                                            snackbarHostState.showSnackbar("下载失败: ${e.message}")
-                                        }
-                                    }
                                 }
                             )
                         }
@@ -590,12 +647,17 @@ fun FavoriteContentScreen(
 fun MediaItem(
     media: FavoriteMedia,
     isPlaying: Boolean = false,
-    onPlayClick: () -> Unit,
-    onDownloadClick: () -> Unit
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onClick: () -> Unit = {},
+    onPlayClick: () -> Unit
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        tonalElevation = 1.dp
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = isSelectionMode, onClick = onClick),
+        tonalElevation = 1.dp,
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     ) {
         Row(
             modifier = Modifier
@@ -603,6 +665,14 @@ fun MediaItem(
                 .padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Selection checkbox
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
             // Cover image - optimized for smooth scrolling
             val context = LocalContext.current
             AsyncImage(
@@ -656,16 +726,17 @@ fun MediaItem(
                 }
             }
 
-            // Action buttons
-            Row(
-                horizontalArrangement = Arrangement.End
-            ) {
-                IconButton(
-                    onClick = onPlayClick,
-                    modifier = Modifier.size(40.dp),
-                    enabled = !isPlaying
+            // Action buttons (hidden in selection mode)
+            if (!isSelectionMode) {
+                Row(
+                    horizontalArrangement = Arrangement.End
                 ) {
-                    if (isPlaying) {
+                    IconButton(
+                        onClick = onPlayClick,
+                        modifier = Modifier.size(40.dp),
+                        enabled = !isPlaying
+                    ) {
+                        if (isPlaying) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(24.dp),
                             strokeWidth = 2.dp
@@ -678,15 +749,6 @@ fun MediaItem(
                         )
                     }
                 }
-                IconButton(
-                    onClick = onDownloadClick,
-                    modifier = Modifier.size(40.dp)
-                ) {
-                    Icon(
-                        Icons.Default.Download,
-                        contentDescription = "下载",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
                 }
             }
         }

@@ -17,7 +17,7 @@ import com.bilimusicplayer.data.model.*
         PlaylistSongCrossRef::class,
         Download::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 @TypeConverters(Converters::class)

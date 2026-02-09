@@ -67,6 +67,8 @@ data class PlaylistSongCrossRef(
 data class Download(
     @PrimaryKey
     val songId: String,  // BVID
+    val title: String,  // Song title
+    val artist: String,  // Song artist
     val status: DownloadStatus,
     val progress: Int = 0,  // 0-100
     val totalBytes: Long = 0,
