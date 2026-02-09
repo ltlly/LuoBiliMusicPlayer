@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -349,7 +350,18 @@ fun PlayerScreen(navController: NavController) {
                     )
                 }
 
-                // Main play/pause button
+                // Main play/pause button with pulsing animation
+                val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+                val scale by infiniteTransition.animateFloat(
+                    initialValue = 1f,
+                    targetValue = if (playbackState.isPlaying) 1.05f else 1f,
+                    animationSpec = infiniteRepeatable(
+                        animation = tween(1000, easing = FastOutSlowInEasing),
+                        repeatMode = RepeatMode.Reverse
+                    ),
+                    label = "scale"
+                )
+
                 FilledIconButton(
                     onClick = {
                         if (playbackState.isPlaying) {
@@ -358,7 +370,12 @@ fun PlayerScreen(navController: NavController) {
                             playerController.play()
                         }
                     },
-                    modifier = Modifier.size(72.dp),
+                    modifier = Modifier
+                        .size(72.dp)
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                        },
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
