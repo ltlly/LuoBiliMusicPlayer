@@ -72,11 +72,16 @@ class BiliFavoriteRepository(
         // Add keyword if provided
         if (!keyword.isNullOrBlank()) {
             params["keyword"] = keyword
+            Log.d(TAG, "添加搜索关键词: $keyword")
         }
+
+        Log.d(TAG, "请求参数: $params")
 
         // Sign the parameters with WBI
         val signedQuery = WbiSignature.encWbi(params)
         val signedParams = parseQueryString(signedQuery)
+
+        Log.d(TAG, "签名后参数: $signedParams")
 
         return api.getFavoriteResources(signedParams)
     }
