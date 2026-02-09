@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -13,6 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import com.bilimusicplayer.data.local.AppDatabase
+import com.bilimusicplayer.data.model.BiliFavoriteFolder
+import com.bilimusicplayer.data.repository.FavoriteFolderCacheRepository
+import com.bilimusicplayer.data.repository.toNetworkModel
 import com.bilimusicplayer.network.RetrofitClient
 import com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository
 import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
@@ -38,27 +43,40 @@ fun FavoriteListScreen(navController: NavController) {
         )
     }
 
-    var favoriteFolders by remember { mutableStateOf<List<FavoriteFolder>>(emptyList()) }
+    val database = remember {
+        AppDatabase.getDatabase(context)
+    }
+
+    val cacheRepository = remember {
+        FavoriteFolderCacheRepository(database, repository)
+    }
+
+    var favoriteFolders by remember { mutableStateOf<List<BiliFavoriteFolder>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
+    var isRefreshing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
+    // Load folders with cache support
+    fun loadFolders(forceRefresh: Boolean = false) {
         scope.launch {
-            isLoading = true
+            if (forceRefresh) {
+                isRefreshing = true
+            } else {
+                isLoading = true
+            }
             errorMessage = null
-            try {
-                // Initialize WBI keys
-                repository.initWbiKeys()
 
+            try {
                 // Get user ID from auth repository
                 val userId = authRepository.getUserId()
 
                 if (userId != null && userId != 0L) {
-                    val response = repository.getFavoriteFolders(userId)
-                    if (response.isSuccessful && response.body()?.code == 0) {
-                        favoriteFolders = response.body()?.data?.list ?: emptyList()
-                    } else {
-                        errorMessage = "加载收藏夹失败: ${response.body()?.message ?: "未知错误"}"
+                    // Load with cache support
+                    val result = cacheRepository.getFavoriteFolders(userId, forceRefresh)
+                    result.onSuccess { folders ->
+                        favoriteFolders = folders
+                    }.onFailure { e ->
+                        errorMessage = e.message ?: "加载失败"
                     }
                 } else {
                     errorMessage = "请先登录"
@@ -67,14 +85,34 @@ fun FavoriteListScreen(navController: NavController) {
                 errorMessage = e.message ?: "未知错误"
             } finally {
                 isLoading = false
+                isRefreshing = false
             }
         }
+    }
+
+    LaunchedEffect(Unit) {
+        loadFolders()
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("哔哩哔哩收藏夹") }
+                title = { Text("哔哩哔哩收藏夹") },
+                actions = {
+                    IconButton(
+                        onClick = { loadFolders(forceRefresh = true) },
+                        enabled = !isRefreshing
+                    ) {
+                        if (isRefreshing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Refresh, contentDescription = "刷新")
+                        }
+                    }
+                }
             )
         }
     ) { paddingValues ->
@@ -103,7 +141,7 @@ fun FavoriteListScreen(navController: NavController) {
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(onClick = {
-                            // Retry logic
+                            loadFolders(forceRefresh = true)
                         }) {
                             Text("重试")
                         }
@@ -125,7 +163,7 @@ fun FavoriteListScreen(navController: NavController) {
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         items(favoriteFolders) { folder ->
-                            FavoriteFolderItem(folder = folder, onClick = {
+                            FavoriteFolderItem(folder = folder.toNetworkModel(), onClick = {
                                 // Navigate to folder contents
                                 navController.navigate("favorite_content/${folder.id}/${folder.title}")
                             })

@@ -237,6 +237,79 @@ class MusicPlayerController(private val context: Context) {
         return mediaController?.mediaItemCount ?: 0
     }
 
+    /**
+     * Get all media items in the queue
+     */
+    fun getAllMediaItems(): List<MediaItem> {
+        val controller = mediaController ?: return emptyList()
+        val items = mutableListOf<MediaItem>()
+        for (i in 0 until controller.mediaItemCount) {
+            items.add(controller.getMediaItemAt(i))
+        }
+        return items
+    }
+
+    /**
+     * Remove media item at specified index
+     */
+    fun removeMediaItem(index: Int) {
+        mediaController?.let { controller ->
+            if (index >= 0 && index < controller.mediaItemCount) {
+                Log.d(TAG, "从队列删除歌曲，位置: $index")
+                controller.removeMediaItem(index)
+                updatePlaybackState()
+            } else {
+                Log.w(TAG, "无效的索引: $index, 队列大小: ${controller.mediaItemCount}")
+            }
+        }
+    }
+
+    /**
+     * Clear all media items from queue
+     */
+    fun clearQueue() {
+        mediaController?.let { controller ->
+            Log.d(TAG, "清空播放队列")
+            controller.clearMediaItems()
+            updatePlaybackState()
+        }
+    }
+
+    /**
+     * Move media item from one position to another
+     */
+    fun moveMediaItem(fromIndex: Int, toIndex: Int) {
+        mediaController?.let { controller ->
+            if (fromIndex >= 0 && fromIndex < controller.mediaItemCount &&
+                toIndex >= 0 && toIndex < controller.mediaItemCount) {
+                Log.d(TAG, "移动歌曲: $fromIndex -> $toIndex")
+                controller.moveMediaItem(fromIndex, toIndex)
+                updatePlaybackState()
+            } else {
+                Log.w(TAG, "无效的索引: from=$fromIndex, to=$toIndex, 队列大小: ${controller.mediaItemCount}")
+            }
+        }
+    }
+
+    /**
+     * Skip to specific media item by index
+     */
+    fun skipToMediaItem(index: Int) {
+        mediaController?.let { controller ->
+            if (index >= 0 && index < controller.mediaItemCount) {
+                Log.d(TAG, "跳转到歌曲: $index")
+                controller.seekToDefaultPosition(index)
+                if (!controller.isPlaying) {
+                    controller.prepare()
+                    controller.play()
+                }
+                updatePlaybackState()
+            } else {
+                Log.w(TAG, "无效的索引: $index, 队列大小: ${controller.mediaItemCount}")
+            }
+        }
+    }
+
     companion object {
         private const val TAG = "MusicPlayerController"
     }
