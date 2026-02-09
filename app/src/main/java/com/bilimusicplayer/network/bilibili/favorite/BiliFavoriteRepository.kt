@@ -49,23 +49,30 @@ class BiliFavoriteRepository(
      * @param mediaId Favorite folder ID
      * @param pageNumber Page number (default 1)
      * @param pageSize Page size (default 20)
+     * @param keyword Search keyword (optional)
      */
     suspend fun getFavoriteResources(
         mediaId: Long,
         pageNumber: Int = 1,
-        pageSize: Int = 20
+        pageSize: Int = 20,
+        keyword: String? = null
     ): Response<FavoriteResourceResponse> {
         // Ensure WBI keys are initialized
         if (!WbiSignature.isInitialized()) {
             initWbiKeys()
         }
 
-        val params = mapOf(
+        val params = mutableMapOf(
             "media_id" to mediaId.toString(),
             "pn" to pageNumber.toString(),
             "ps" to pageSize.toString(),
             "platform" to "web"
         )
+
+        // Add keyword if provided
+        if (!keyword.isNullOrBlank()) {
+            params["keyword"] = keyword
+        }
 
         // Sign the parameters with WBI
         val signedQuery = WbiSignature.encWbi(params)
