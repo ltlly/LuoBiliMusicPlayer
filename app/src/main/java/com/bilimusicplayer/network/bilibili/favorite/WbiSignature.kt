@@ -79,6 +79,41 @@ object WbiSignature {
     }
 
     /**
+     * Generate WBI signature and return parameters map (without URL encoding)
+     * This is used with Retrofit which will handle URL encoding
+     * @param params Query parameters map
+     * @return Signed parameters map with wts and w_rid
+     */
+    fun signParams(params: Map<String, String>): Map<String, String> {
+        if (wbiKeys.imgKey.isEmpty() || wbiKeys.subKey.isEmpty()) {
+            throw IllegalStateException("WBI keys not initialized. Call updateKeys() first.")
+        }
+
+        val mixinKey = getMixinKey(wbiKeys.imgKey + wbiKeys.subKey)
+        val wts = System.currentTimeMillis() / 1000
+        val chrFilter = Regex("[!'()*]")
+
+        // Add wts timestamp and filter special characters
+        val newParams = params.mapValues { (_, value) ->
+            value.replace(chrFilter, "")
+        }.toMutableMap()
+        newParams["wts"] = wts.toString()
+
+        // Sort parameters by key and build query string for signing
+        val query = newParams.toSortedMap().entries.joinToString("&") { (key, value) ->
+            val encodedKey = URLEncoder.encode(key, "UTF-8")
+            val encodedValue = URLEncoder.encode(value, "UTF-8")
+            "$encodedKey=$encodedValue"
+        }
+
+        // Calculate w_rid signature
+        val wbiSign = md5(query + mixinKey)
+        newParams["w_rid"] = wbiSign
+
+        return newParams
+    }
+
+    /**
      * Extract img_key and sub_key from WBI image URLs
      */
     fun extractKeys(imgUrl: String, subUrl: String): WbiKeys {
