@@ -32,6 +32,7 @@ import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
 import com.bilimusicplayer.network.bilibili.favorite.FavoriteMedia
 import com.bilimusicplayer.service.download.DownloadManager
 import com.bilimusicplayer.data.model.Song
+import com.bilimusicplayer.data.model.DownloadStatus
 import com.bilimusicplayer.data.local.AppDatabase
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
@@ -234,8 +235,28 @@ fun FavoriteContentScreen(
                                     var successCount = 0
                                     var failCount = 0
 
+                                    var skippedCount = 0
                                     for (media in filteredMediaList.filter { selectedMediaIds.contains(it.bvid) }) {
                                         try {
+                                            // Check if already downloaded
+                                            val existingSong = database.songDao().getSongById(media.bvid)
+                                            if (existingSong != null && existingSong.isDownloaded &&
+                                                existingSong.localPath != null &&
+                                                java.io.File(existingSong.localPath).exists()) {
+                                                skippedCount++
+                                                continue
+                                            }
+
+                                            // Check if already in download queue
+                                            val existingDownload = database.downloadDao().getDownloadBySongId(media.bvid)
+                                            if (existingDownload != null &&
+                                                (existingDownload.status == DownloadStatus.QUEUED ||
+                                                 existingDownload.status == DownloadStatus.DOWNLOADING ||
+                                                 existingDownload.status == DownloadStatus.CONVERTING)) {
+                                                skippedCount++
+                                                continue
+                                            }
+
                                             val detailResponse = repository.getVideoDetail(media.bvid)
                                             if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
                                                 val cid = detailResponse.body()?.data?.cid
@@ -273,7 +294,12 @@ fun FavoriteContentScreen(
                                     isBatchDownloading = false
                                     isSelectionMode = false
                                     selectedMediaIds = emptySet()
-                                    snackbarHostState.showSnackbar("下载完成：成功 $successCount 个，失败 $failCount 个")
+                                    val message = buildString {
+                                        append("下载完成：成功 $successCount 个")
+                                        if (failCount > 0) append("，失败 $failCount 个")
+                                        if (skippedCount > 0) append("，跳过 $skippedCount 个（已下载）")
+                                    }
+                                    snackbarHostState.showSnackbar(message)
                                 }
                             },
                             enabled = !isBatchDownloading && selectedMediaIds.isNotEmpty()
@@ -293,9 +319,29 @@ fun FavoriteContentScreen(
                                 snackbarHostState.showSnackbar("开始批量下载...")
                                 var successCount = 0
                                 var failCount = 0
+                                var skippedCount = 0
 
                                 for (media in filteredMediaList) {
                                     try {
+                                        // Check if already downloaded
+                                        val existingSong = database.songDao().getSongById(media.bvid)
+                                        if (existingSong != null && existingSong.isDownloaded &&
+                                            existingSong.localPath != null &&
+                                            java.io.File(existingSong.localPath).exists()) {
+                                            skippedCount++
+                                            continue
+                                        }
+
+                                        // Check if already in download queue
+                                        val existingDownload = database.downloadDao().getDownloadBySongId(media.bvid)
+                                        if (existingDownload != null &&
+                                            (existingDownload.status == DownloadStatus.QUEUED ||
+                                             existingDownload.status == DownloadStatus.DOWNLOADING ||
+                                             existingDownload.status == DownloadStatus.CONVERTING)) {
+                                            skippedCount++
+                                            continue
+                                        }
+
                                         val detailResponse = repository.getVideoDetail(media.bvid)
                                         if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
                                             val cid = detailResponse.body()?.data?.cid
@@ -331,7 +377,12 @@ fun FavoriteContentScreen(
                                 }
 
                                 isBatchDownloading = false
-                                snackbarHostState.showSnackbar("批量下载完成：成功 $successCount 个，失败 $failCount 个")
+                                val message = buildString {
+                                    append("批量下载完成：成功 $successCount 个")
+                                    if (failCount > 0) append("，失败 $failCount 个")
+                                    if (skippedCount > 0) append("，跳过 $skippedCount 个（已下载）")
+                                }
+                                snackbarHostState.showSnackbar(message)
                             }
                         },
                         enabled = !isBatchDownloading && filteredMediaList.isNotEmpty()

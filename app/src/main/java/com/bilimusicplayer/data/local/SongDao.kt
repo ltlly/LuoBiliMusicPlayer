@@ -25,6 +25,9 @@ interface SongDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSong(song: Song)
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertSongIfNotExists(song: Song): Long
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertSongs(songs: List<Song>)
 
