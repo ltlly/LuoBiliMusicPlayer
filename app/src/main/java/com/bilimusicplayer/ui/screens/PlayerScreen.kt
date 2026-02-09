@@ -15,10 +15,16 @@ import com.bilimusicplayer.BiliMusicApplication
 import androidx.media3.common.Player
 import com.bilimusicplayer.ui.components.PlayQueueSheet
 import kotlinx.coroutines.launch
+import androidx.compose.ui.platform.LocalContext
+import com.bilimusicplayer.data.local.AppDatabase
+import com.bilimusicplayer.data.model.Song
+import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(navController: NavController) {
+    val context = LocalContext.current
+    val database = remember { AppDatabase.getDatabase(context) }
     val playerController = BiliMusicApplication.musicPlayerController
     val playbackState by playerController.playbackState.collectAsState()
     val scope = rememberCoroutineScope()
@@ -28,6 +34,50 @@ fun PlayerScreen(navController: NavController) {
     // Track current position for smooth progress updates
     var currentPosition by remember { mutableStateOf(0L) }
     var duration by remember { mutableStateOf(0L) }
+
+    // Track download/cache status
+    var currentSong by remember { mutableStateOf<Song?>(null) }
+    var isDownloaded by remember { mutableStateOf(false) }
+    var isCached by remember { mutableStateOf(false) }
+
+    // Extract song ID from current media item URI
+    val currentSongId = remember(playbackState.currentMediaItem) {
+        playbackState.currentMediaItem?.mediaMetadata?.title?.toString()?.let { title ->
+            // Try to extract BVID from the media item
+            // We'll use the requestMetadata URI to check
+            playbackState.currentMediaItem?.requestMetadata?.mediaUri?.toString()
+        }
+    }
+
+    // Check if song is downloaded or cached
+    LaunchedEffect(playbackState.currentMediaItem) {
+        val mediaUri = playbackState.currentMediaItem?.requestMetadata?.mediaUri?.toString()
+        if (mediaUri != null) {
+            // Check if it's a local file (downloaded)
+            isDownloaded = mediaUri.startsWith("file://") || mediaUri.startsWith("/")
+
+            // Check if song exists in database and has local file
+            val title = playbackState.currentMediaItem?.mediaMetadata?.title?.toString()
+            if (title != null) {
+                // Query database to find song by title (not ideal but works for now)
+                database.songDao().getAllSongs().collect { songs ->
+                    currentSong = songs.find { it.title == title }
+                    if (currentSong != null) {
+                        isDownloaded = currentSong?.isDownloaded == true &&
+                                     currentSong?.localPath != null &&
+                                     File(currentSong?.localPath ?: "").exists()
+                    }
+                }
+            }
+
+            // Check if it's cached (ExoPlayer cache)
+            // For now, we'll assume online URLs might be cached
+            isCached = !isDownloaded && mediaUri.startsWith("http")
+        } else {
+            isDownloaded = false
+            isCached = false
+        }
+    }
 
     // Update progress periodically
     LaunchedEffect(playbackState.isPlaying, playbackState.currentMediaItem) {
@@ -110,6 +160,53 @@ fun PlayerScreen(navController: NavController) {
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(modifier = Modifier.height(8.dp))
+                // Download/Cache status
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (isDownloaded) {
+                        Icon(
+                            imageVector = Icons.Default.CloudDone,
+                            contentDescription = "已下载",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "本地播放",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else if (isCached) {
+                        Icon(
+                            imageVector = Icons.Default.CloudQueue,
+                            contentDescription = "可能已缓存",
+                            tint = MaterialTheme.colorScheme.secondary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "在线播放（可能已缓存）",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.Cloud,
+                            contentDescription = "在线播放",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = "在线播放",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
             // Progress bar

@@ -7,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,11 +46,37 @@ fun LibraryScreen(navController: NavController) {
     var selectedSongs by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedDownloads by remember { mutableStateOf<Set<String>>(emptySet()) }
 
-    // Reset selection when tab changes
+    // Search state
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+    val filteredSongs = remember(localSongs, searchQuery) {
+        if (searchQuery.isBlank()) {
+            localSongs
+        } else {
+            localSongs.filter { song ->
+                song.title.contains(searchQuery, ignoreCase = true) ||
+                song.artist.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+    val filteredDownloads = remember(downloads, searchQuery) {
+        if (searchQuery.isBlank()) {
+            downloads
+        } else {
+            downloads.filter { download ->
+                download.title.contains(searchQuery, ignoreCase = true) ||
+                download.artist.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
+    // Reset selection and search when tab changes
     LaunchedEffect(selectedTab, downloadSubTab) {
         isSelectionMode = false
         selectedSongs = emptySet()
         selectedDownloads = emptySet()
+        isSearchActive = false
+        searchQuery = ""
     }
 
     // Load data when tab changes
@@ -140,7 +167,21 @@ fun LibraryScreen(navController: NavController) {
         topBar = {
             TopAppBar(
                 title = {
-                    if (isSelectionMode) {
+                    if (isSearchActive) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("搜索歌曲或艺术家") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                            )
+                        )
+                    } else if (isSelectionMode) {
                         val count = if (selectedTab == 0) selectedSongs.size else selectedDownloads.size
                         Text("已选择 $count 项")
                     } else {
@@ -148,7 +189,14 @@ fun LibraryScreen(navController: NavController) {
                     }
                 },
                 navigationIcon = {
-                    if (isSelectionMode) {
+                    if (isSearchActive) {
+                        IconButton(onClick = {
+                            isSearchActive = false
+                            searchQuery = ""
+                        }) {
+                            Icon(Icons.Default.ArrowBack, "关闭搜索")
+                        }
+                    } else if (isSelectionMode) {
                         IconButton(onClick = {
                             isSelectionMode = false
                             selectedSongs = emptySet()
@@ -159,26 +207,37 @@ fun LibraryScreen(navController: NavController) {
                     }
                 },
                 actions = {
+                    if (isSearchActive) {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, "清除搜索")
+                            }
+                        }
+                    } else {
+                        // Search button
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(Icons.Default.Search, "搜索")
+                        }
                     if (isSelectionMode) {
                         // Select all button
                         IconButton(onClick = {
                             if (selectedTab == 0) {
-                                selectedSongs = if (selectedSongs.size == localSongs.size) {
+                                selectedSongs = if (selectedSongs.size == filteredSongs.size) {
                                     emptySet()
                                 } else {
-                                    localSongs.map { it.id }.toSet()
+                                    filteredSongs.map { it.id }.toSet()
                                 }
                             } else {
-                                selectedDownloads = if (selectedDownloads.size == downloads.size) {
+                                selectedDownloads = if (selectedDownloads.size == filteredDownloads.size) {
                                     emptySet()
                                 } else {
-                                    downloads.map { it.songId }.toSet()
+                                    filteredDownloads.map { it.songId }.toSet()
                                 }
                             }
                         }) {
                             Icon(
-                                if ((selectedTab == 0 && selectedSongs.size == localSongs.size) ||
-                                    (selectedTab == 1 && selectedDownloads.size == downloads.size)) {
+                                if ((selectedTab == 0 && selectedSongs.size == filteredSongs.size) ||
+                                    (selectedTab == 1 && selectedDownloads.size == filteredDownloads.size)) {
                                     Icons.Default.CheckBox
                                 } else {
                                     Icons.Default.CheckBoxOutlineBlank
@@ -221,6 +280,7 @@ fun LibraryScreen(navController: NavController) {
                         IconButton(onClick = { isSelectionMode = true }) {
                             Icon(Icons.Default.CheckBox, "多选")
                         }
+                    }
                     }
                 }
             )
@@ -286,11 +346,25 @@ fun LibraryScreen(navController: NavController) {
                         subtitle = "从收藏夹下载歌曲来构建您的音乐库"
                     )
                 }
+                selectedTab == 0 && filteredSongs.isEmpty() && searchQuery.isNotEmpty() -> {
+                    EmptyState(
+                        icon = Icons.Default.Search,
+                        title = "未找到匹配的歌曲",
+                        subtitle = "尝试使用其他关键词搜索"
+                    )
+                }
                 selectedTab == 1 && downloads.isEmpty() -> {
                     EmptyState(
                         icon = Icons.Default.Download,
                         title = "没有下载任务",
                         subtitle = "在收藏夹中点击下载按钮来添加下载任务"
+                    )
+                }
+                selectedTab == 1 && filteredDownloads.isEmpty() && searchQuery.isNotEmpty() -> {
+                    EmptyState(
+                        icon = Icons.Default.Search,
+                        title = "未找到匹配的下载任务",
+                        subtitle = "尝试使用其他关键词搜索"
                     )
                 }
                 else -> {
@@ -301,7 +375,7 @@ fun LibraryScreen(navController: NavController) {
                     ) {
                         when (selectedTab) {
                             0 -> {
-                                items(localSongs) { song ->
+                                items(filteredSongs) { song ->
                                     SongListItem(
                                         song = song,
                                         isSelectionMode = isSelectionMode,
@@ -316,7 +390,7 @@ fun LibraryScreen(navController: NavController) {
                                             } else {
                                                 scope.launch {
                                                 // Create MediaItems for all songs in the library
-                                                val allMediaItems = localSongs.map { s ->
+                                                val allMediaItems = filteredSongs.map { s ->
                                                     val uri = if (s.localPath != null && java.io.File(s.localPath).exists()) {
                                                         android.net.Uri.fromFile(java.io.File(s.localPath))
                                                     } else {
@@ -336,7 +410,7 @@ fun LibraryScreen(navController: NavController) {
                                                 }
 
                                                 // Find the index of the clicked song
-                                                val startIndex = localSongs.indexOf(song)
+                                                val startIndex = filteredSongs.indexOf(song)
                                                 android.util.Log.d("LibraryScreen", "播放列表: ${allMediaItems.size}首歌, 从第${startIndex + 1}首开始")
 
                                                     // Set all songs as playlist, start from clicked song
@@ -352,7 +426,7 @@ fun LibraryScreen(navController: NavController) {
                                 }
                             }
                             1 -> {
-                                items(downloads) { download ->
+                                items(filteredDownloads) { download ->
                                     DownloadListItem(
                                         download = download,
                                         isSelectionMode = isSelectionMode,

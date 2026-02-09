@@ -4,16 +4,80 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group
-        android:scaleX="0.5"
-        android:scaleY="0.5"
-        android:translateX="27"
-        android:translateY="27">
+
+    <!-- 背景圆形 -->
+    <path
+        android:fillColor="#FF6699"
+        android:pathData="M54,54m-46,0a46,46 0,1 1,92 0a46,46 0,1 1,-92 0"/>
+
+    <!-- 内层装饰圆 -->
+    <path
+        android:fillColor="#FF99CC"
+        android:pathData="M54,54m-40,0a40,40 0,1 1,80 0a40,40 0,1 1,-80 0"/>
+
+    <!-- "洛"字的笔画 - 使用更清晰的设计 -->
+
+    <!-- 三点水 -->
+    <group>
+        <!-- 第一点 -->
         <path
-            android:fillColor="#FF6699"
-            android:pathData="M54,27C39.64,27 28,38.64 28,53s11.64,26 26,26 26,-11.64 26,-26S68.36,27 54,27zM54,75c-12.15,0 -22,-9.85 -22,-22s9.85,-22 22,-22 22,9.85 22,22 -9.85,22 -22,22z"/>
+            android:fillColor="#FFFFFF"
+            android:pathData="M26,35 L28,33 L30,35 L28,37 Z"/>
+        <!-- 第二点 -->
         <path
-            android:fillColor="#FF6699"
-            android:pathData="M43,48l20,10 -20,10z"/>
+            android:fillColor="#FFFFFF"
+            android:pathData="M26,46 L28,44 L30,46 L28,48 Z"/>
+        <!-- 第三点 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M26,57 L28,55 L30,57 L28,59 Z"/>
+    </group>
+
+    <!-- "各"字部分 -->
+    <group>
+        <!-- 顶部横 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M38,34 L78,34 L78,37 L38,37 Z"/>
+
+        <!-- 中间竖 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M56,34 L59,34 L59,74 L56,74 Z"/>
+
+        <!-- 中间横撇 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M38,44 L56,44 L56,47 L38,47 Z"/>
+
+        <!-- 中间横捺 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M59,44 L78,44 L78,47 L59,47 Z"/>
+
+        <!-- 口字框左竖 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M40,50 L43,50 L43,68 L40,68 Z"/>
+
+        <!-- 口字框右竖 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M73,50 L76,50 L76,68 L73,68 Z"/>
+
+        <!-- 口字框上横 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M40,50 L76,50 L76,53 L40,53 Z"/>
+
+        <!-- 口字框下横 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M40,65 L76,65 L76,68 L40,68 Z"/>
+
+        <!-- 底部横 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M35,71 L80,71 L80,74 L35,74 Z"/>
     </group>
 </vector>
