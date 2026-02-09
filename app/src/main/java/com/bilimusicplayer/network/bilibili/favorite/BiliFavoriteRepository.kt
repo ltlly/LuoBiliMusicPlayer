@@ -77,9 +77,8 @@ class BiliFavoriteRepository(
 
         Log.d(TAG, "请求参数: $params")
 
-        // Sign the parameters with WBI
-        val signedQuery = WbiSignature.encWbi(params)
-        val signedParams = parseQueryString(signedQuery)
+        // Sign the parameters with WBI (without URL encoding)
+        val signedParams = WbiSignature.signParams(params)
 
         Log.d(TAG, "签名后参数: $signedParams")
 
@@ -118,9 +117,8 @@ class BiliFavoriteRepository(
             "fourk" to "1"
         )
 
-        // Sign the parameters with WBI
-        val signedQuery = WbiSignature.encWbi(params)
-        val signedParams = parseQueryString(signedQuery)
+        // Sign the parameters with WBI (without URL encoding)
+        val signedParams = WbiSignature.signParams(params)
 
         return api.getPlayUrl(signedParams)
     }
@@ -158,15 +156,6 @@ class BiliFavoriteRepository(
         return allVideos
     }
 
-    /**
-     * Parse query string to parameter map
-     */
-    private fun parseQueryString(query: String): Map<String, String> {
-        return query.split("&").associate { param ->
-            val parts = param.split("=", limit = 2)
-            parts[0] to (parts.getOrNull(1) ?: "")
-        }
-    }
 
     companion object {
         private const val TAG = "BiliFavoriteRepository"
