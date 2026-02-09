@@ -96,12 +96,12 @@ class BiliFavoriteRepository(
      * Get play URL with WBI signature
      * @param cid Video CID
      * @param bvid Video BVID
-     * @param quality Video quality (default 64 for audio)
+     * @param quality Video quality (default 127 to request highest available quality)
      */
     suspend fun getPlayUrl(
         cid: Long,
         bvid: String,
-        quality: Int = 64  // Quality 64 for audio only
+        quality: Int = 127  // Request highest quality, actual quality depends on video source and account level
     ): Response<PlayUrlResponse> {
         // Ensure WBI keys are initialized
         if (!WbiSignature.isInitialized()) {
@@ -156,6 +156,29 @@ class BiliFavoriteRepository(
         return allVideos
     }
 
+    /**
+     * Select the best quality audio stream from available audio streams
+     * Prioritizes by audio quality ID (higher is better)
+     * @param audioStreams List of available audio streams
+     * @return Best quality audio stream or null if list is empty
+     */
+    fun selectBestAudioStream(audioStreams: List<DashStream>?): DashStream? {
+        if (audioStreams.isNullOrEmpty()) {
+            Log.w(TAG, "No audio streams available")
+            return null
+        }
+
+        // Sort by audio quality ID (higher ID = better quality)
+        // Audio quality IDs: 30216 (64K), 30232 (132K), 30280 (192K Hi-Res), etc.
+        val bestStream = audioStreams.maxByOrNull { it.id }
+
+        if (bestStream != null) {
+            Log.d(TAG, "Selected audio quality: ID=${bestStream.id}, bandwidth=${bestStream.bandwidth}, codecs=${bestStream.codecs}")
+            Log.d(TAG, "Available audio streams: ${audioStreams.map { "ID=${it.id}(${it.bandwidth}bps)" }.joinToString(", ")}")
+        }
+
+        return bestStream
+    }
 
     companion object {
         private const val TAG = "BiliFavoriteRepository"

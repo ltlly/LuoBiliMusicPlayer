@@ -94,6 +94,25 @@ enum class DownloadStatus {
 }
 
 /**
+ * Bilibili Favorite Folder Cache
+ */
+@Entity(tableName = "bili_favorite_folders")
+data class BiliFavoriteFolder(
+    @PrimaryKey
+    val id: Long,  // Bilibili favorite folder ID
+    val fid: Long,
+    val mid: Long,  // User ID
+    val title: String,
+    val cover: String?,  // Cover can be null
+    val mediaCount: Int,
+    val attr: Int,
+    val ctime: Long,
+    val mtime: Long,
+    val cachedAt: Long = System.currentTimeMillis(),  // When this was cached
+    val updatedAt: Long = System.currentTimeMillis()  // Last update time
+)
+
+/**
  * Playlist with songs
  */
 data class PlaylistWithSongs(

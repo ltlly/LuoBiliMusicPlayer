@@ -82,7 +82,7 @@ fun SettingsScreen(navController: NavController) {
                 Column {
                     Text("B站音乐播放器", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("版本: 1.0.0", style = MaterialTheme.typography.bodyMedium)
+                    Text("版本: 1.3.0", style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("一款与哔哩哔哩收藏夹同步的音乐播放器", style = MaterialTheme.typography.bodySmall)
                     Spacer(modifier = Modifier.height(8.dp))
@@ -157,7 +157,7 @@ fun SettingsScreen(navController: NavController) {
             SettingsItem(
                 icon = Icons.Default.Info,
                 title = "关于",
-                subtitle = "版本 1.0.0"
+                subtitle = "版本 1.3.0"
             ) {
                 showAboutDialog = true
             }
