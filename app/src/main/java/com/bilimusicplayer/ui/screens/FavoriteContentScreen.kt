@@ -86,15 +86,18 @@ fun FavoriteContentScreen(
     // Function to load data (with optional search)
     suspend fun loadData(page: Int = 1, keyword: String? = null, append: Boolean = false) {
         try {
+            Log.d("FavoriteContent", "loadData: page=$page, keyword=$keyword, append=$append")
             val response = repository.getFavoriteResources(
                 mediaId = folderId,
                 pageNumber = page,
                 pageSize = 20,
                 keyword = keyword
             )
+            Log.d("FavoriteContent", "API Response: code=${response.body()?.code}, message=${response.body()?.message}")
             if (response.isSuccessful && response.body()?.code == 0) {
                 val data = response.body()?.data
                 val newMedias = data?.medias ?: emptyList()
+                Log.d("FavoriteContent", "获取到 ${newMedias.size} 条数据, totalCount=${data?.info?.mediaCount}")
                 mediaList = if (append) {
                     mediaList + newMedias
                 } else {
@@ -103,10 +106,14 @@ fun FavoriteContentScreen(
                 totalCount = data?.info?.mediaCount ?: 0
                 hasMore = mediaList.size < totalCount
             } else {
-                errorMessage = "加载失败: ${response.body()?.message ?: "未知错误"}"
+                val errorMsg = "加载失败: code=${response.body()?.code}, ${response.body()?.message ?: "未知错误"}"
+                errorMessage = errorMsg
+                Log.e("FavoriteContent", errorMsg)
             }
         } catch (e: Exception) {
-            errorMessage = e.message ?: "未知错误"
+            val errorMsg = e.message ?: "未知错误"
+            errorMessage = errorMsg
+            Log.e("FavoriteContent", "loadData异常", e)
         }
     }
 
@@ -122,12 +129,16 @@ fun FavoriteContentScreen(
     }
 
     // Perform search when search query changes
-    LaunchedEffect(searchQuery) {
+    LaunchedEffect(searchQuery, isSearchActive) {
         if (isSearchActive) {
+            // Add debounce for better UX
+            kotlinx.coroutines.delay(300)
             scope.launch {
                 isSearching = true
                 currentPage = 1
+                hasMore = true
                 val keyword = if (searchQuery.isBlank()) null else searchQuery
+                Log.d("FavoriteContent", "执行搜索: keyword=$keyword, folderId=$folderId")
                 loadData(page = 1, keyword = keyword)
                 isSearching = false
             }
