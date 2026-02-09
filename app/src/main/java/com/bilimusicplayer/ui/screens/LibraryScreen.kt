@@ -17,6 +17,7 @@ import androidx.navigation.NavController
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 import com.bilimusicplayer.BiliMusicApplication
 import com.bilimusicplayer.data.local.AppDatabase
 import com.bilimusicplayer.data.model.Download
@@ -38,6 +39,18 @@ fun LibraryScreen(navController: NavController) {
     var isLoading by remember { mutableStateOf(true) }
     var showDeleteDialog by remember { mutableStateOf<Song?>(null) }
     var showDeleteRecordDialog by remember { mutableStateOf<Download?>(null) }
+
+    // Multi-selection state
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedSongs by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var selectedDownloads by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Reset selection when tab changes
+    LaunchedEffect(selectedTab, downloadSubTab) {
+        isSelectionMode = false
+        selectedSongs = emptySet()
+        selectedDownloads = emptySet()
+    }
 
     // Load data when tab changes
     LaunchedEffect(selectedTab, downloadSubTab) {
@@ -126,7 +139,90 @@ fun LibraryScreen(navController: NavController) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("我的音乐库") }
+                title = {
+                    if (isSelectionMode) {
+                        val count = if (selectedTab == 0) selectedSongs.size else selectedDownloads.size
+                        Text("已选择 $count 项")
+                    } else {
+                        Text("我的音乐库")
+                    }
+                },
+                navigationIcon = {
+                    if (isSelectionMode) {
+                        IconButton(onClick = {
+                            isSelectionMode = false
+                            selectedSongs = emptySet()
+                            selectedDownloads = emptySet()
+                        }) {
+                            Icon(Icons.Default.Close, "取消选择")
+                        }
+                    }
+                },
+                actions = {
+                    if (isSelectionMode) {
+                        // Select all button
+                        IconButton(onClick = {
+                            if (selectedTab == 0) {
+                                selectedSongs = if (selectedSongs.size == localSongs.size) {
+                                    emptySet()
+                                } else {
+                                    localSongs.map { it.id }.toSet()
+                                }
+                            } else {
+                                selectedDownloads = if (selectedDownloads.size == downloads.size) {
+                                    emptySet()
+                                } else {
+                                    downloads.map { it.songId }.toSet()
+                                }
+                            }
+                        }) {
+                            Icon(
+                                if ((selectedTab == 0 && selectedSongs.size == localSongs.size) ||
+                                    (selectedTab == 1 && selectedDownloads.size == downloads.size)) {
+                                    Icons.Default.CheckBox
+                                } else {
+                                    Icons.Default.CheckBoxOutlineBlank
+                                },
+                                "全选"
+                            )
+                        }
+                        // Delete button
+                        IconButton(
+                            onClick = {
+                                scope.launch {
+                                    if (selectedTab == 0) {
+                                        // Delete selected songs
+                                        selectedSongs.forEach { songId ->
+                                            localSongs.find { it.id == songId }?.let { song ->
+                                                song.localPath?.let { path ->
+                                                    java.io.File(path).delete()
+                                                }
+                                                database.songDao().deleteSong(song)
+                                            }
+                                        }
+                                    } else {
+                                        // Delete selected download records
+                                        selectedDownloads.forEach { songId ->
+                                            database.downloadDao().deleteDownloadBySongId(songId)
+                                        }
+                                    }
+                                    isSelectionMode = false
+                                    selectedSongs = emptySet()
+                                    selectedDownloads = emptySet()
+                                }
+                            },
+                            enabled = (selectedTab == 0 && selectedSongs.isNotEmpty()) ||
+                                     (selectedTab == 1 && selectedDownloads.isNotEmpty())
+                        ) {
+                            Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
+                        }
+                    } else {
+                        // Enter selection mode button
+                        IconButton(onClick = { isSelectionMode = true }) {
+                            Icon(Icons.Default.CheckBox, "多选")
+                        }
+                    }
+                }
             )
         }
     ) { paddingValues ->
@@ -208,21 +304,45 @@ fun LibraryScreen(navController: NavController) {
                                 items(localSongs) { song ->
                                     SongListItem(
                                         song = song,
+                                        isSelectionMode = isSelectionMode,
+                                        isSelected = selectedSongs.contains(song.id),
                                         onClick = {
-                                            scope.launch {
-                                                val mediaItem = MediaItem.Builder()
-                                                    .setUri(song.localPath ?: song.audioUrl ?: "")
-                                                    .setMediaMetadata(
-                                                        MediaMetadata.Builder()
-                                                            .setTitle(song.title)
-                                                            .setArtist(song.artist)
-                                                            .setArtworkUri(android.net.Uri.parse(song.coverUrl))
-                                                            .build()
-                                                    )
-                                                    .build()
+                                            if (isSelectionMode) {
+                                                selectedSongs = if (selectedSongs.contains(song.id)) {
+                                                    selectedSongs - song.id
+                                                } else {
+                                                    selectedSongs + song.id
+                                                }
+                                            } else {
+                                                scope.launch {
+                                                // Create MediaItems for all songs in the library
+                                                val allMediaItems = localSongs.map { s ->
+                                                    val uri = if (s.localPath != null && java.io.File(s.localPath).exists()) {
+                                                        android.net.Uri.fromFile(java.io.File(s.localPath))
+                                                    } else {
+                                                        android.net.Uri.parse(s.audioUrl ?: "")
+                                                    }
 
-                                                BiliMusicApplication.musicPlayerController.setMediaItems(listOf(mediaItem), 0)
-                                                navController.navigate("player")
+                                                    MediaItem.Builder()
+                                                        .setUri(uri)
+                                                        .setMediaMetadata(
+                                                            MediaMetadata.Builder()
+                                                                .setTitle(s.title)
+                                                                .setArtist(s.artist)
+                                                                .setArtworkUri(android.net.Uri.parse(s.coverUrl))
+                                                                .build()
+                                                        )
+                                                        .build()
+                                                }
+
+                                                // Find the index of the clicked song
+                                                val startIndex = localSongs.indexOf(song)
+                                                android.util.Log.d("LibraryScreen", "播放列表: ${allMediaItems.size}首歌, 从第${startIndex + 1}首开始")
+
+                                                    // Set all songs as playlist, start from clicked song
+                                                    BiliMusicApplication.musicPlayerController.setMediaItems(allMediaItems, startIndex)
+                                                    navController.navigate("player")
+                                                }
                                             }
                                         },
                                         onDelete = {
@@ -235,6 +355,17 @@ fun LibraryScreen(navController: NavController) {
                                 items(downloads) { download ->
                                     DownloadListItem(
                                         download = download,
+                                        isSelectionMode = isSelectionMode,
+                                        isSelected = selectedDownloads.contains(download.songId),
+                                        onClick = {
+                                            if (isSelectionMode) {
+                                                selectedDownloads = if (selectedDownloads.contains(download.songId)) {
+                                                    selectedDownloads - download.songId
+                                                } else {
+                                                    selectedDownloads + download.songId
+                                                }
+                                            }
+                                        },
                                         onCancel = {
                                             scope.launch {
                                                 database.downloadDao().updateDownloadStatus(
@@ -259,12 +390,19 @@ fun LibraryScreen(navController: NavController) {
 }
 
 @Composable
-fun SongListItem(song: Song, onClick: () -> Unit, onDelete: () -> Unit) {
+fun SongListItem(
+    song: Song,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onClick: () -> Unit,
+    onDelete: () -> Unit
+) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        tonalElevation = 1.dp
+        tonalElevation = 1.dp,
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     ) {
         Row(
             modifier = Modifier
@@ -272,11 +410,21 @@ fun SongListItem(song: Song, onClick: () -> Unit, onDelete: () -> Unit) {
                 .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Selection checkbox
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+
             // Cover
             Card(modifier = Modifier.size(56.dp)) {
                 AsyncImage(
                     model = song.coverUrl,
                     contentDescription = "封面",
+                    contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -301,22 +449,24 @@ fun SongListItem(song: Song, onClick: () -> Unit, onDelete: () -> Unit) {
                 )
             }
 
-            // Downloaded icon and delete button
-            if (song.isDownloaded) {
-                Icon(
-                    imageVector = Icons.Default.CloudDone,
-                    contentDescription = "已下载",
-                    tint = MaterialTheme.colorScheme.primary
-                )
-            }
+            // Downloaded icon and delete button (hidden in selection mode)
+            if (!isSelectionMode) {
+                if (song.isDownloaded) {
+                    Icon(
+                        imageVector = Icons.Default.CloudDone,
+                        contentDescription = "已下载",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
 
-            // Delete button
-            IconButton(onClick = onDelete) {
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "删除",
-                    tint = MaterialTheme.colorScheme.error
-                )
+                // Delete button
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "删除",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
     }
@@ -325,13 +475,19 @@ fun SongListItem(song: Song, onClick: () -> Unit, onDelete: () -> Unit) {
 @Composable
 fun DownloadListItem(
     download: Download,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onClick: () -> Unit = {},
     onCancel: () -> Unit,
     onDelete: () -> Unit = {},
     showDelete: Boolean = false
 ) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
-        tonalElevation = 1.dp
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = isSelectionMode, onClick = onClick),
+        tonalElevation = 1.dp,
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     ) {
         Column(
             modifier = Modifier
@@ -342,6 +498,15 @@ fun DownloadListItem(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Selection checkbox
+                if (isSelectionMode) {
+                    Checkbox(
+                        checked = isSelected,
+                        onCheckedChange = { onClick() }
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                }
+
                 // Status icon
                 Icon(
                     imageVector = when (download.status) {
@@ -367,12 +532,20 @@ fun DownloadListItem(
                 // Info
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = download.songId,
+                        text = download.title,
                         style = MaterialTheme.typography.bodyLarge,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = download.artist,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
                     Text(
                         text = when (download.status) {
                             DownloadStatus.QUEUED -> "等待中..."
@@ -383,25 +556,27 @@ fun DownloadListItem(
                             DownloadStatus.PAUSED -> "已暂停"
                             DownloadStatus.CANCELLED -> "已取消"
                         },
-                        style = MaterialTheme.typography.bodySmall,
+                        style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
 
-                // Action buttons
-                when {
-                    download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED -> {
-                        IconButton(onClick = onCancel) {
-                            Icon(Icons.Default.Cancel, contentDescription = "取消")
+                // Action buttons (hidden in selection mode)
+                if (!isSelectionMode) {
+                    when {
+                        download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED -> {
+                            IconButton(onClick = onCancel) {
+                                Icon(Icons.Default.Cancel, contentDescription = "取消")
+                            }
                         }
-                    }
-                    showDelete && download.status == DownloadStatus.COMPLETED -> {
-                        IconButton(onClick = onDelete) {
-                            Icon(
-                                Icons.Default.Delete,
-                                contentDescription = "删除记录",
-                                tint = MaterialTheme.colorScheme.error
-                            )
+                        showDelete && download.status == DownloadStatus.COMPLETED -> {
+                            IconButton(onClick = onDelete) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "删除记录",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 }

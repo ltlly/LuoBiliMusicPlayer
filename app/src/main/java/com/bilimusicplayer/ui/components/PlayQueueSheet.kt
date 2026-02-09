@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import androidx.compose.ui.layout.ContentScale
 import com.bilimusicplayer.BiliMusicApplication
 
 /**
@@ -129,6 +130,7 @@ private fun QueueItem(
                     AsyncImage(
                         model = artworkUri,
                         contentDescription = "封面",
+                        contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {

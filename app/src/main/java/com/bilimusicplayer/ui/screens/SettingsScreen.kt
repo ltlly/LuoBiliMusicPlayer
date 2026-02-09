@@ -139,7 +139,7 @@ fun SettingsScreen(navController: NavController) {
                 title = "下载设置",
                 subtitle = "音频质量和存储位置"
             ) {
-                // TODO: Navigate to download settings
+                navController.navigate("download_settings")
             }
 
             HorizontalDivider()
@@ -149,7 +149,7 @@ fun SettingsScreen(navController: NavController) {
                 title = "外观",
                 subtitle = "主题和显示选项"
             ) {
-                // TODO: Navigate to appearance settings
+                navController.navigate("appearance_settings")
             }
 
             HorizontalDivider()
