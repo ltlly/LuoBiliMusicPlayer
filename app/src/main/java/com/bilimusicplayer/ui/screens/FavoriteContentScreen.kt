@@ -8,6 +8,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -76,6 +77,20 @@ fun FavoriteContentScreen(
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
+    // Search state
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+    val filteredMediaList = remember(mediaList, searchQuery) {
+        if (searchQuery.isBlank()) {
+            mediaList
+        } else {
+            mediaList.filter { media ->
+                media.title.contains(searchQuery, ignoreCase = true) ||
+                media.upper.name.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
+
     // Load first page
     LaunchedEffect(folderId) {
         scope.launch {
@@ -139,14 +154,35 @@ fun FavoriteContentScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    if (isSelectionMode) {
+                    if (isSearchActive) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("搜索歌曲或艺术家") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                            )
+                        )
+                    } else if (isSelectionMode) {
                         Text("已选择 ${selectedMediaIds.size} 项")
                     } else {
                         Text(folderTitle)
                     }
                 },
                 navigationIcon = {
-                    if (isSelectionMode) {
+                    if (isSearchActive) {
+                        IconButton(onClick = {
+                            isSearchActive = false
+                            searchQuery = ""
+                        }) {
+                            Icon(Icons.Default.ArrowBack, "关闭搜索")
+                        }
+                    } else if (isSelectionMode) {
                         IconButton(onClick = {
                             isSelectionMode = false
                             selectedMediaIds = emptySet()
@@ -160,17 +196,28 @@ fun FavoriteContentScreen(
                     }
                 },
                 actions = {
+                    if (isSearchActive) {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, "清除搜索")
+                            }
+                        }
+                    } else {
+                        // Search button
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(Icons.Default.Search, "搜索")
+                        }
                     if (isSelectionMode) {
                         // Select all button
                         IconButton(onClick = {
-                            selectedMediaIds = if (selectedMediaIds.size == mediaList.size) {
+                            selectedMediaIds = if (selectedMediaIds.size == filteredMediaList.size) {
                                 emptySet()
                             } else {
-                                mediaList.map { it.bvid }.toSet()
+                                filteredMediaList.map { it.bvid }.toSet()
                             }
                         }) {
                             Icon(
-                                if (selectedMediaIds.size == mediaList.size) {
+                                if (selectedMediaIds.size == filteredMediaList.size) {
                                     Icons.Default.CheckBox
                                 } else {
                                     Icons.Default.CheckBoxOutlineBlank
@@ -187,7 +234,7 @@ fun FavoriteContentScreen(
                                     var successCount = 0
                                     var failCount = 0
 
-                                    for (media in mediaList.filter { selectedMediaIds.contains(it.bvid) }) {
+                                    for (media in filteredMediaList.filter { selectedMediaIds.contains(it.bvid) }) {
                                         try {
                                             val detailResponse = repository.getVideoDetail(media.bvid)
                                             if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
@@ -247,7 +294,7 @@ fun FavoriteContentScreen(
                                 var successCount = 0
                                 var failCount = 0
 
-                                for (media in mediaList) {
+                                for (media in filteredMediaList) {
                                     try {
                                         val detailResponse = repository.getVideoDetail(media.bvid)
                                         if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
@@ -287,7 +334,7 @@ fun FavoriteContentScreen(
                                 snackbarHostState.showSnackbar("批量下载完成：成功 $successCount 个，失败 $failCount 个")
                             }
                         },
-                        enabled = !isBatchDownloading && mediaList.isNotEmpty()
+                        enabled = !isBatchDownloading && filteredMediaList.isNotEmpty()
                     ) {
                         if (isBatchDownloading) {
                             CircularProgressIndicator(
@@ -297,6 +344,7 @@ fun FavoriteContentScreen(
                         } else {
                             Icon(Icons.Default.Download, contentDescription = "全部下载")
                         }
+                    }
                     }
                     }
                 }
@@ -363,6 +411,14 @@ fun FavoriteContentScreen(
                     )
                 }
 
+                filteredMediaList.isEmpty() && searchQuery.isNotEmpty() -> {
+                    Text(
+                        text = "未找到匹配的歌曲",
+                        modifier = Modifier.align(Alignment.Center),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+
                 else -> {
                     val listState = rememberLazyListState()
 
@@ -394,7 +450,11 @@ fun FavoriteContentScreen(
                         // Header showing total count
                         item {
                             Text(
-                                text = "共 $totalCount 个视频",
+                                text = if (searchQuery.isNotEmpty()) {
+                                    "找到 ${filteredMediaList.size} 个结果"
+                                } else {
+                                    "共 $totalCount 个视频"
+                                },
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.padding(bottom = 8.dp)
@@ -402,7 +462,7 @@ fun FavoriteContentScreen(
                         }
 
                         items(
-                            items = mediaList,
+                            items = filteredMediaList,
                             key = { media -> media.id }
                         ) { media ->
                             MediaItem(
@@ -425,14 +485,14 @@ fun FavoriteContentScreen(
                                             playingBvid = media.bvid
                                             isPlaying = true
 
-                                            val clickedIndex = mediaList.indexOf(media)
+                                            val clickedIndex = filteredMediaList.indexOf(media)
 
                                             // Phase 1: Load first 5 songs quickly from current page
                                             val initialPlaylist = mutableListOf<MediaItem>()
-                                            val initialBatchSize = 5.coerceAtMost(mediaList.size - clickedIndex)
+                                            val initialBatchSize = 5.coerceAtMost(filteredMediaList.size - clickedIndex)
 
                                             for (i in clickedIndex until (clickedIndex + initialBatchSize)) {
-                                                val currentMedia = mediaList[i]
+                                                val currentMedia = filteredMediaList[i]
                                                 try {
                                                     val detailResponse = repository.getVideoDetail(currentMedia.bvid)
                                                     if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
@@ -480,8 +540,8 @@ fun FavoriteContentScreen(
                                                     var loadedCount = 0
 
                                                     // First, load remaining songs from current page
-                                                    for (i in (clickedIndex + initialBatchSize) until mediaList.size) {
-                                                        val currentMedia = mediaList[i]
+                                                    for (i in (clickedIndex + initialBatchSize) until filteredMediaList.size) {
+                                                        val currentMedia = filteredMediaList[i]
                                                         try {
                                                             Log.d("FavoriteContent", "加载当前页第 ${i - clickedIndex + 1} 首: ${currentMedia.title}")
                                                             val detailResponse = repository.getVideoDetail(currentMedia.bvid)
