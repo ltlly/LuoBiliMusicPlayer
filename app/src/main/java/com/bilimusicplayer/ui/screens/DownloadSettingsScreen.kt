@@ -109,7 +109,7 @@ fun DownloadSettingsScreen(navController: NavController) {
             SettingsInfoItem(
                 icon = Icons.Default.MusicNote,
                 title = "下载质量",
-                subtitle = "高品质 (64kbps) - 来自B站"
+                subtitle = "自动选择最高可用音质 (最高192K Hi-Res)"
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -141,7 +141,7 @@ fun DownloadSettingsScreen(navController: NavController) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 音频质量由B站提供的源决定",
+                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 自动选择最高可用音质，大会员可获得Hi-Res无损音质\n• 实际音质取决于视频源和账户等级",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
