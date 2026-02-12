@@ -16,9 +16,10 @@ import com.bilimusicplayer.data.model.*
         Playlist::class,
         PlaylistSongCrossRef::class,
         Download::class,
-        BiliFavoriteFolder::class
+        BiliFavoriteFolder::class,
+        CachedPlaybackUrl::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -28,6 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun playlistDao(): PlaylistDao
     abstract fun downloadDao(): DownloadDao
     abstract fun biliFavoriteFolderDao(): BiliFavoriteFolderDao
+    abstract fun cachedPlaybackUrlDao(): CachedPlaybackUrlDao
 
     companion object {
         @Volatile
