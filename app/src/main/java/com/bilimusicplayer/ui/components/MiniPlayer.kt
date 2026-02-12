@@ -7,6 +7,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -17,12 +18,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import com.bilimusicplayer.BiliMusicApplication
+import kotlin.math.abs
 
 /**
  * Modern mini player with glassmorphic effect
@@ -34,6 +38,9 @@ fun MiniPlayer(
 ) {
     val playerController = BiliMusicApplication.musicPlayerController
     val playbackState by playerController.playbackState.collectAsState()
+
+    // Swipe gesture state
+    var swipeOffset by remember { mutableStateOf(0f) }
 
     // Show mini player only when there's a current media item
     AnimatedVisibility(
@@ -47,7 +54,30 @@ fun MiniPlayer(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
-                .clickable(onClick = onExpand),
+                .clickable(onClick = onExpand)
+                .pointerInput(Unit) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            // Trigger skip if swipe is significant enough
+                            if (abs(swipeOffset) > 100) {
+                                if (swipeOffset > 0) {
+                                    // Swipe right -> Previous
+                                    playerController.skipToPrevious()
+                                } else {
+                                    // Swipe left -> Next
+                                    playerController.skipToNext()
+                                }
+                            }
+                            swipeOffset = 0f
+                        },
+                        onDragCancel = {
+                            swipeOffset = 0f
+                        },
+                        onHorizontalDrag = { _, dragAmount ->
+                            swipeOffset += dragAmount
+                        }
+                    )
+                },
             shape = RoundedCornerShape(20.dp),
             elevation = CardDefaults.cardElevation(
                 defaultElevation = 6.dp
@@ -59,6 +89,12 @@ fun MiniPlayer(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .graphicsLayer {
+                        // Subtle horizontal translation during swipe
+                        translationX = swipeOffset * 0.3f
+                        // Slight rotation for visual feedback
+                        rotationZ = swipeOffset * 0.01f
+                    }
                     .background(
                         brush = Brush.horizontalGradient(
                             colors = listOf(
@@ -129,7 +165,20 @@ fun MiniPlayer(
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+
+                    // Skip to previous button
+                    IconButton(
+                        onClick = { playerController.skipToPrevious() },
+                        modifier = Modifier.size(44.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.SkipPrevious,
+                            contentDescription = "上一首",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
 
                     // Play/Pause button with filled style
                     FilledIconButton(
@@ -152,8 +201,6 @@ fun MiniPlayer(
                             modifier = Modifier.size(24.dp)
                         )
                     }
-
-                    Spacer(modifier = Modifier.width(4.dp))
 
                     // Skip to next button
                     IconButton(

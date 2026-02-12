@@ -89,7 +89,8 @@ fun LibraryScreen(navController: NavController) {
             isLoading = true
             when (selectedTab) {
                 0 -> {
-                    database.songDao().getAllSongs().collect { songs ->
+                    // Only show downloaded songs in library, not cached songs
+                    database.songDao().getDownloadedSongs().collect { songs ->
                         localSongs = songs
                         isLoading = false
                     }
