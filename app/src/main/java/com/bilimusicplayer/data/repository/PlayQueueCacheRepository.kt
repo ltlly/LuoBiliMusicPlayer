@@ -2,6 +2,7 @@ package com.bilimusicplayer.data.repository
 
 import android.util.Log
 import com.bilimusicplayer.data.local.AppDatabase
+import com.bilimusicplayer.data.model.CachedPlaybackUrl
 import com.bilimusicplayer.data.model.Playlist
 import com.bilimusicplayer.data.model.PlaylistSongCrossRef
 import com.bilimusicplayer.data.model.Song
@@ -19,6 +20,7 @@ class PlayQueueCacheRepository(
 
     private val playlistDao = database.playlistDao()
     private val songDao = database.songDao()
+    private val cachedUrlDao = database.cachedPlaybackUrlDao()
 
     /**
      * Get or create playlist for a Bilibili favorite folder
@@ -58,28 +60,70 @@ class PlayQueueCacheRepository(
     }
 
     /**
-     * Cache a song and add it to playlist
+     * Cache playback URL (for streaming only, not for library)
      */
+    suspend fun cachePlaybackUrl(
+        bvid: String,
+        cid: Long,
+        audioUrl: String,
+        title: String,
+        artist: String,
+        coverUrl: String,
+        duration: Int
+    ) {
+        val cachedUrl = CachedPlaybackUrl(
+            bvid = bvid,
+            cid = cid,
+            audioUrl = audioUrl,
+            title = title,
+            artist = artist,
+            coverUrl = coverUrl,
+            duration = duration
+        )
+        cachedUrlDao.insertCachedUrl(cachedUrl)
+        Log.d(TAG, "缓存播放URL: $bvid -> $title")
+    }
+
+    /**
+     * Get cached playback URL
+     */
+    suspend fun getCachedPlaybackUrl(bvid: String): CachedPlaybackUrl? {
+        val cached = cachedUrlDao.getCachedUrl(bvid)
+        if (cached != null && cached.expiresAt < System.currentTimeMillis()) {
+            // URL expired, delete it
+            cachedUrlDao.deleteCachedUrl(cached)
+            Log.d(TAG, "缓存已过期: $bvid")
+            return null
+        }
+        return cached
+    }
+
+    /**
+     * Cache a song and add it to playlist (deprecated - use cachePlaybackUrl instead)
+     */
+    @Deprecated("Use cachePlaybackUrl for streaming, only use this for downloaded songs")
     suspend fun cacheSong(
         playlistId: Long,
         song: Song,
         position: Int
     ) {
-        // Insert or update song
-        songDao.insertSong(song)
+        // Only insert song if it's downloaded
+        if (song.isDownloaded && song.localPath != null) {
+            songDao.insertSong(song)
 
-        // Add to playlist
-        playlistDao.insertPlaylistSong(
-            PlaylistSongCrossRef(
-                playlistId = playlistId,
-                songId = song.id,
-                position = position
+            // Add to playlist
+            playlistDao.insertPlaylistSong(
+                PlaylistSongCrossRef(
+                    playlistId = playlistId,
+                    songId = song.id,
+                    position = position
+                )
             )
-        )
 
-        // Update playlist song count
-        val count = playlistDao.getPlaylistSongCount(playlistId)
-        playlistDao.updatePlaylistSongCount(playlistId, count)
+            // Update playlist song count
+            val count = playlistDao.getPlaylistSongCount(playlistId)
+            playlistDao.updatePlaylistSongCount(playlistId, count)
+        }
     }
 
     /**
