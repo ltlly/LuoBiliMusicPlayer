@@ -11,8 +11,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import android.os.Environment
+import com.bilimusicplayer.service.download.DownloadSettingsManager
 import kotlinx.coroutines.launch
 import java.io.File
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -20,9 +22,18 @@ fun DownloadSettingsScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
+    val downloadSettingsManager = remember { DownloadSettingsManager(context) }
+
     // Calculate cache size
     var cacheSize by remember { mutableStateOf("计算中...") }
     var showClearCacheDialog by remember { mutableStateOf(false) }
+
+    // Concurrent downloads setting
+    val maxConcurrentDownloads by downloadSettingsManager.maxConcurrentDownloads.collectAsState(
+        initial = DownloadSettingsManager.DEFAULT_MAX_CONCURRENT
+    )
+    var sliderValue by remember { mutableStateOf<Float?>(null) }
+    val displayValue = sliderValue?.roundToInt() ?: maxConcurrentDownloads
 
     LaunchedEffect(Unit) {
         scope.launch {
@@ -103,6 +114,80 @@ fun DownloadSettingsScreen(navController: NavController) {
 
             HorizontalDivider()
 
+            // Concurrent downloads setting
+            SettingsSection(title = "并发下载")
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Speed,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "最大并发线程数",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = "$displayValue",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "控制同时下载的任务数量，过多可能触发B站风控",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Slider(
+                        value = sliderValue ?: maxConcurrentDownloads.toFloat(),
+                        onValueChange = { sliderValue = it },
+                        onValueChangeFinished = {
+                            sliderValue?.let { value ->
+                                scope.launch {
+                                    downloadSettingsManager.setMaxConcurrentDownloads(value.roundToInt())
+                                }
+                            }
+                        },
+                        valueRange = DownloadSettingsManager.MIN_CONCURRENT.toFloat()..DownloadSettingsManager.MAX_CONCURRENT.toFloat(),
+                        steps = DownloadSettingsManager.MAX_CONCURRENT - DownloadSettingsManager.MIN_CONCURRENT - 1
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${DownloadSettingsManager.MIN_CONCURRENT}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${DownloadSettingsManager.MAX_CONCURRENT}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
             // Audio quality
             SettingsSection(title = "音频质量")
 
@@ -141,7 +226,7 @@ fun DownloadSettingsScreen(navController: NavController) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 自动选择最高可用音质，大会员可获得Hi-Res无损音质\n• 实际音质取决于视频源和账户等级",
+                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 自动选择最高可用音质，大会员可获得Hi-Res无损音质\n• 实际音质取决于视频源和账户等级\n• 并发线程数建议设为2-4，过高可能触发B站风控",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
