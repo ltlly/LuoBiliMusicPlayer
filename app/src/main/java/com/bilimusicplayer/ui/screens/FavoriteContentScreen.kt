@@ -34,6 +34,7 @@ import com.bilimusicplayer.service.download.DownloadManager
 import com.bilimusicplayer.data.model.Song
 import com.bilimusicplayer.data.model.DownloadStatus
 import com.bilimusicplayer.data.local.AppDatabase
+import com.bilimusicplayer.data.repository.FavoriteContentCacheRepository
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,6 +66,10 @@ fun FavoriteContentScreen(
         com.bilimusicplayer.data.repository.PlayQueueCacheRepository(database, repository)
     }
 
+    val contentCacheRepository = remember {
+        FavoriteContentCacheRepository(database)
+    }
+
     var mediaList by remember { mutableStateOf<List<FavoriteMedia>>(emptyList()) }
     var isLoading by remember { mutableStateOf(true) }
     var isLoadingMore by remember { mutableStateOf(false) }
@@ -86,10 +91,10 @@ fun FavoriteContentScreen(
     var isSearchActive by remember { mutableStateOf(false) }
     var isSearching by remember { mutableStateOf(false) }
 
-    // Function to load data (with optional search)
-    suspend fun loadData(page: Int = 1, keyword: String? = null, append: Boolean = false) {
+    // Function to load data from API (with optional search)
+    suspend fun loadDataFromApi(page: Int = 1, keyword: String? = null, append: Boolean = false) {
         try {
-            Log.d("FavoriteContent", "loadData: page=$page, keyword=$keyword, append=$append")
+            Log.d("FavoriteContent", "loadDataFromApi: page=$page, keyword=$keyword, append=$append")
             val response = repository.getFavoriteResources(
                 mediaId = folderId,
                 pageNumber = page,
@@ -108,6 +113,19 @@ fun FavoriteContentScreen(
                 }
                 totalCount = data?.info?.mediaCount ?: 0
                 hasMore = mediaList.size < totalCount
+
+                // Cache the data (only for non-search requests)
+                if (keyword == null) {
+                    withContext(Dispatchers.IO) {
+                        if (page == 1 && !append) {
+                            // Refresh page 1 without wiping later cached pages
+                            contentCacheRepository.refreshPage(folderId, newMedias, pageNumber = 1)
+                        } else {
+                            // Append new page to cache
+                            contentCacheRepository.appendToCache(folderId, newMedias, (page - 1) * 20)
+                        }
+                    }
+                }
             } else {
                 val errorMsg = "加载失败: code=${response.body()?.code}, ${response.body()?.message ?: "未知错误"}"
                 errorMessage = errorMsg
@@ -116,17 +134,71 @@ fun FavoriteContentScreen(
         } catch (e: Exception) {
             val errorMsg = e.message ?: "未知错误"
             errorMessage = errorMsg
-            Log.e("FavoriteContent", "loadData异常", e)
+            Log.e("FavoriteContent", "loadDataFromApi异常", e)
         }
     }
 
-    // Load first page
+    // Load first page with cache support
     LaunchedEffect(folderId) {
         scope.launch {
             isLoading = true
             errorMessage = null
             currentPage = 1
-            loadData(page = 1)
+
+            // Step 1: Try loading from cache first for instant display
+            val cachedData = withContext(Dispatchers.IO) {
+                contentCacheRepository.getCachedMediaList(folderId)
+            }
+
+            if (cachedData != null && cachedData.isNotEmpty()) {
+                Log.d("FavoriteContent", "从缓存加载 ${cachedData.size} 条数据")
+                mediaList = cachedData
+                // Calculate which page we're on based on cached data count
+                currentPage = (cachedData.size + 19) / 20
+                // We don't know the real totalCount yet, but we know hasMore is at least true
+                // unless the API tells us otherwise
+                isLoading = false
+            }
+
+            // Step 2: Always load page 1 from API to get real totalCount
+            // This refreshes page 1 in cache without wiping later pages
+            try {
+                val response = repository.getFavoriteResources(
+                    mediaId = folderId,
+                    pageNumber = 1,
+                    pageSize = 20
+                )
+                if (response.isSuccessful && response.body()?.code == 0) {
+                    val data = response.body()?.data
+                    val newMedias = data?.medias ?: emptyList()
+                    totalCount = data?.info?.mediaCount ?: 0
+
+                    // Update page 1 in cache
+                    withContext(Dispatchers.IO) {
+                        contentCacheRepository.refreshPage(folderId, newMedias, pageNumber = 1)
+                    }
+
+                    if (cachedData != null && cachedData.size > 20) {
+                        // We had more than 1 page cached — keep using the full cached list
+                        // but replace the first 20 items with fresh data
+                        val updatedList = newMedias + cachedData.drop(20)
+                        mediaList = updatedList
+                        currentPage = (updatedList.size + 19) / 20
+                    } else {
+                        // Only had 1 page or no cache — just use the fresh data
+                        mediaList = newMedias
+                        currentPage = 1
+                    }
+                    hasMore = mediaList.size < totalCount
+                    Log.d("FavoriteContent", "API刷新完成: ${mediaList.size}条, totalCount=$totalCount, hasMore=$hasMore")
+                } else if (cachedData == null || cachedData.isEmpty()) {
+                    errorMessage = "加载失败: ${response.body()?.message ?: "未知错误"}"
+                }
+            } catch (e: Exception) {
+                if (cachedData == null || cachedData.isEmpty()) {
+                    errorMessage = e.message ?: "未知错误"
+                }
+            }
             isLoading = false
         }
     }
@@ -142,7 +214,7 @@ fun FavoriteContentScreen(
                 hasMore = true
                 val keyword = if (searchQuery.isBlank()) null else searchQuery
                 Log.d("FavoriteContent", "执行搜索: keyword=$keyword, folderId=$folderId")
-                loadData(page = 1, keyword = keyword)
+                loadDataFromApi(page = 1, keyword = keyword)
                 isSearching = false
             }
         }
@@ -157,7 +229,7 @@ fun FavoriteContentScreen(
             try {
                 val nextPage = currentPage + 1
                 val keyword = if (isSearchActive && searchQuery.isNotBlank()) searchQuery else null
-                loadData(page = nextPage, keyword = keyword, append = true)
+                loadDataFromApi(page = nextPage, keyword = keyword, append = true)
                 currentPage = nextPage
             } catch (e: Exception) {
                 // Ignore load more errors
@@ -245,77 +317,23 @@ fun FavoriteContentScreen(
                         // Batch download selected button
                         IconButton(
                             onClick = {
+                                // Capture needed data before launching in application scope
+                                val selectedMedia = mediaList.filter { selectedMediaIds.contains(it.bvid) }
+                                val selectedCount = selectedMedia.size
+                                isBatchDownloading = true
+                                isSelectionMode = false
+                                selectedMediaIds = emptySet()
+
                                 scope.launch {
-                                    isBatchDownloading = true
-                                    snackbarHostState.showSnackbar("开始下载选中的 ${selectedMediaIds.size} 项...")
-                                    var successCount = 0
-                                    var failCount = 0
+                                    snackbarHostState.showSnackbar("开始下载选中的 $selectedCount 项（后台进行中）...")
+                                }
 
-                                    var skippedCount = 0
-                                    for (media in mediaList.filter { selectedMediaIds.contains(it.bvid) }) {
-                                        try {
-                                            // Check if already downloaded
-                                            val existingSong = database.songDao().getSongById(media.bvid)
-                                            if (existingSong != null && existingSong.isDownloaded &&
-                                                existingSong.localPath != null &&
-                                                java.io.File(existingSong.localPath).exists()) {
-                                                skippedCount++
-                                                continue
-                                            }
-
-                                            // Check if already in download queue
-                                            val existingDownload = database.downloadDao().getDownloadBySongId(media.bvid)
-                                            if (existingDownload != null &&
-                                                (existingDownload.status == DownloadStatus.QUEUED ||
-                                                 existingDownload.status == DownloadStatus.DOWNLOADING ||
-                                                 existingDownload.status == DownloadStatus.CONVERTING)) {
-                                                skippedCount++
-                                                continue
-                                            }
-
-                                            val detailResponse = repository.getVideoDetail(media.bvid)
-                                            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
-                                                val cid = detailResponse.body()?.data?.cid
-                                                if (cid != null) {
-                                                    val playUrlResponse = repository.getPlayUrl(cid, media.bvid)
-                                                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
-                                                        val audioUrl = repository.selectBestAudioStream(playUrlResponse.body()?.data?.dash?.audio)?.baseUrl
-                                                        if (audioUrl != null) {
-                                                            val song = Song(
-                                                                id = media.bvid,
-                                                                title = media.title,
-                                                                artist = media.upper.name,
-                                                                duration = media.duration,
-                                                                coverUrl = fixImageUrl(media.cover),
-                                                                audioUrl = audioUrl,
-                                                                cid = cid,
-                                                                bvid = media.bvid,
-                                                                aid = media.id,
-                                                                uploaderId = media.upper.mid,
-                                                                uploaderName = media.upper.name,
-                                                                pubDate = media.pubtime
-                                                            )
-                                                            database.songDao().insertSong(song)
-                                                            downloadManager.startDownload(song, audioUrl)
-                                                            successCount++
-                                                        } else failCount++
-                                                    } else failCount++
-                                                } else failCount++
-                                            } else failCount++
-                                        } catch (e: Exception) {
-                                            failCount++
-                                        }
+                                // Launch in application scope so it survives navigation
+                                BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
+                                    batchDownloadMedia(selectedMedia, database, repository, downloadManager)
+                                    withContext(Dispatchers.Main) {
+                                        isBatchDownloading = false
                                     }
-
-                                    isBatchDownloading = false
-                                    isSelectionMode = false
-                                    selectedMediaIds = emptySet()
-                                    val message = buildString {
-                                        append("下载完成：成功 $successCount 个")
-                                        if (failCount > 0) append("，失败 $failCount 个")
-                                        if (skippedCount > 0) append("，跳过 $skippedCount 个（已下载）")
-                                    }
-                                    snackbarHostState.showSnackbar(message)
                                 }
                             },
                             enabled = !isBatchDownloading && selectedMediaIds.isNotEmpty()
@@ -330,75 +348,20 @@ fun FavoriteContentScreen(
                         // Batch download all button
                         IconButton(
                             onClick = {
+                            // Capture needed data before launching in application scope
+                            val allMedia = mediaList.toList()
+                            isBatchDownloading = true
+
                             scope.launch {
-                                isBatchDownloading = true
-                                snackbarHostState.showSnackbar("开始批量下载...")
-                                var successCount = 0
-                                var failCount = 0
-                                var skippedCount = 0
+                                snackbarHostState.showSnackbar("开始批量下载（后台进行中）...")
+                            }
 
-                                for (media in mediaList) {
-                                    try {
-                                        // Check if already downloaded
-                                        val existingSong = database.songDao().getSongById(media.bvid)
-                                        if (existingSong != null && existingSong.isDownloaded &&
-                                            existingSong.localPath != null &&
-                                            java.io.File(existingSong.localPath).exists()) {
-                                            skippedCount++
-                                            continue
-                                        }
-
-                                        // Check if already in download queue
-                                        val existingDownload = database.downloadDao().getDownloadBySongId(media.bvid)
-                                        if (existingDownload != null &&
-                                            (existingDownload.status == DownloadStatus.QUEUED ||
-                                             existingDownload.status == DownloadStatus.DOWNLOADING ||
-                                             existingDownload.status == DownloadStatus.CONVERTING)) {
-                                            skippedCount++
-                                            continue
-                                        }
-
-                                        val detailResponse = repository.getVideoDetail(media.bvid)
-                                        if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
-                                            val cid = detailResponse.body()?.data?.cid
-                                            if (cid != null) {
-                                                val playUrlResponse = repository.getPlayUrl(cid, media.bvid)
-                                                if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
-                                                    val audioUrl = repository.selectBestAudioStream(playUrlResponse.body()?.data?.dash?.audio)?.baseUrl
-                                                    if (audioUrl != null) {
-                                                        val song = Song(
-                                                            id = media.bvid,
-                                                            title = media.title,
-                                                            artist = media.upper.name,
-                                                            duration = media.duration,
-                                                            coverUrl = fixImageUrl(media.cover),
-                                                            audioUrl = audioUrl,
-                                                            cid = cid,
-                                                            bvid = media.bvid,
-                                                            aid = media.id,
-                                                            uploaderId = media.upper.mid,
-                                                            uploaderName = media.upper.name,
-                                                            pubDate = media.pubtime
-                                                        )
-                                                        database.songDao().insertSong(song)
-                                                        downloadManager.startDownload(song, audioUrl)
-                                                        successCount++
-                                                    } else failCount++
-                                                } else failCount++
-                                            } else failCount++
-                                        } else failCount++
-                                    } catch (e: Exception) {
-                                        failCount++
-                                    }
+                            // Launch in application scope so it survives navigation
+                            BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
+                                batchDownloadMedia(allMedia, database, repository, downloadManager)
+                                withContext(Dispatchers.Main) {
+                                    isBatchDownloading = false
                                 }
-
-                                isBatchDownloading = false
-                                val message = buildString {
-                                    append("批量下载完成：成功 $successCount 个")
-                                    if (failCount > 0) append("，失败 $failCount 个")
-                                    if (skippedCount > 0) append("，跳过 $skippedCount 个（已下载）")
-                                }
-                                snackbarHostState.showSnackbar(message)
                             }
                         },
                         enabled = !isBatchDownloading && mediaList.isNotEmpty()
@@ -571,187 +534,11 @@ fun FavoriteContentScreen(
                                                     BiliMusicApplication.musicPlayerController.addMediaItem(mediaItem)
                                                 }
                                             )
-
-                                            // OLD CODE - Replaced with cache mechanism
-                                            /*
-                                            val clickedIndex = mediaList.indexOf(media)
-
-                                            // Phase 1: Load first 5 songs quickly from current page
-                                            val initialPlaylist = mutableListOf<MediaItem>()
-                                            val initialBatchSize = 5.coerceAtMost(mediaList.size - clickedIndex)
-
-                                            for (i in clickedIndex until (clickedIndex + initialBatchSize)) {
-                                                val currentMedia = mediaList[i]
-                                                try {
-                                                    val detailResponse = repository.getVideoDetail(currentMedia.bvid)
-                                                    if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
-                                                        val cid = detailResponse.body()?.data?.cid
-                                                        if (cid != null) {
-                                                            val playUrlResponse = repository.getPlayUrl(cid, currentMedia.bvid)
-                                                            if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
-                                                                val audioUrl = repository.selectBestAudioStream(playUrlResponse.body()?.data?.dash?.audio)?.baseUrl
-                                                                if (audioUrl != null) {
-                                                                    val mediaItem = MediaItem.Builder()
-                                                                        .setUri(audioUrl)
-                                                                        .setMediaMetadata(
-                                                                            MediaMetadata.Builder()
-                                                                                .setTitle(currentMedia.title)
-                                                                                .setArtist(currentMedia.upper.name)
-                                                                                .setArtworkUri(android.net.Uri.parse(fixImageUrl(currentMedia.cover)))
-                                                                                .build()
-                                                                        )
-                                                                        .setRequestMetadata(
-                                                                            MediaItem.RequestMetadata.Builder()
-                                                                                .setMediaUri(android.net.Uri.parse(audioUrl))
-                                                                                .build()
-                                                                        )
-                                                                        .build()
-                                                                    initialPlaylist.add(mediaItem)
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                } catch (e: Exception) {
-                                                    continue
-                                                }
-                                            }
-
-                                            if (initialPlaylist.isNotEmpty()) {
-                                                // Start playing immediately with initial batch
-                                                BiliMusicApplication.musicPlayerController.setMediaItems(initialPlaylist, 0)
-                                                navController.navigate("player")
-
-                                                Log.d("FavoriteContent", "初始播放列表加载完成，共 ${initialPlaylist.size} 首")
-                                                Log.d("FavoriteContent", "收藏夹总数: $totalCount, 当前已加载: ${mediaList.size}")
-
-                                                // Phase 2: Load ALL remaining songs from current page and subsequent pages
-                                                kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
-                                                    var loadedCount = 0
-
-                                                    // First, load remaining songs from current page
-                                                    for (i in (clickedIndex + initialBatchSize) until mediaList.size) {
-                                                        val currentMedia = mediaList[i]
-                                                        try {
-                                                            Log.d("FavoriteContent", "加载当前页第 ${i - clickedIndex + 1} 首: ${currentMedia.title}")
-                                                            val detailResponse = repository.getVideoDetail(currentMedia.bvid)
-                                                            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
-                                                                val cid = detailResponse.body()?.data?.cid
-                                                                if (cid != null) {
-                                                                    val playUrlResponse = repository.getPlayUrl(cid, currentMedia.bvid)
-                                                                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
-                                                                        val audioUrl = repository.selectBestAudioStream(playUrlResponse.body()?.data?.dash?.audio)?.baseUrl
-                                                                        if (audioUrl != null) {
-                                                                            val mediaItem = MediaItem.Builder()
-                                                                                .setUri(audioUrl)
-                                                                                .setMediaMetadata(
-                                                                                    MediaMetadata.Builder()
-                                                                                        .setTitle(currentMedia.title)
-                                                                                        .setArtist(currentMedia.upper.name)
-                                                                                        .setArtworkUri(android.net.Uri.parse(fixImageUrl(currentMedia.cover)))
-                                                                                        .build()
-                                                                                )
-                                                                                .setRequestMetadata(
-                                                                                    MediaItem.RequestMetadata.Builder()
-                                                                                        .setMediaUri(android.net.Uri.parse(audioUrl))
-                                                                                        .build()
-                                                                                )
-                                                                                .build()
-                                                                            withContext(Dispatchers.Main) {
-                                                                                BiliMusicApplication.musicPlayerController.addMediaItem(mediaItem)
-                                                                            }
-                                                                            loadedCount++
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        } catch (e: Exception) {
-                                                            Log.e("FavoriteContent", "加载失败: ${currentMedia.title}, ${e.message}")
-                                                            continue
-                                                        }
-                                                    }
-
-                                                    // Then, load songs from subsequent pages
-                                                    if (mediaList.size < totalCount) {
-                                                        Log.d("FavoriteContent", "开始加载后续页面...")
-                                                        var nextPage = currentPage + 1
-                                                        var remainingToLoad = totalCount - mediaList.size
-
-                                                        while (remainingToLoad > 0) {
-                                                            try {
-                                                                Log.d("FavoriteContent", "加载第 $nextPage 页...")
-                                                                val pageResponse = repository.getFavoriteResources(
-                                                                    mediaId = folderId,
-                                                                    pageNumber = nextPage,
-                                                                    pageSize = 20
-                                                                )
-
-                                                                if (pageResponse.isSuccessful && pageResponse.body()?.code == 0) {
-                                                                    val nextPageMedias = pageResponse.body()?.data?.medias ?: emptyList()
-                                                                    Log.d("FavoriteContent", "第 $nextPage 页加载成功，共 ${nextPageMedias.size} 首")
-
-                                                                    for (nextMedia in nextPageMedias) {
-                                                                        try {
-                                                                            val detailResponse = repository.getVideoDetail(nextMedia.bvid)
-                                                                            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
-                                                                                val cid = detailResponse.body()?.data?.cid
-                                                                                if (cid != null) {
-                                                                                    val playUrlResponse = repository.getPlayUrl(cid, nextMedia.bvid)
-                                                                                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
-                                                                                        val audioUrl = repository.selectBestAudioStream(playUrlResponse.body()?.data?.dash?.audio)?.baseUrl
-                                                                                        if (audioUrl != null) {
-                                                                                            val mediaItem = MediaItem.Builder()
-                                                                                                .setUri(audioUrl)
-                                                                                                .setMediaMetadata(
-                                                                                                    MediaMetadata.Builder()
-                                                                                                        .setTitle(nextMedia.title)
-                                                                                                        .setArtist(nextMedia.upper.name)
-                                                                                                        .setArtworkUri(android.net.Uri.parse(fixImageUrl(nextMedia.cover)))
-                                                                                                        .build()
-                                                                                                )
-                                                                                                .setRequestMetadata(
-                                                                                                    MediaItem.RequestMetadata.Builder()
-                                                                                                        .setMediaUri(android.net.Uri.parse(audioUrl))
-                                                                                                        .build()
-                                                                                                )
-                                                                                                .build()
-                                                                                            withContext(Dispatchers.Main) {
-                                                                                                BiliMusicApplication.musicPlayerController.addMediaItem(mediaItem)
-                                                                                            }
-                                                                                            loadedCount++
-                                                                                        }
-                                                                                    }
-                                                                                }
-                                                                            }
-                                                                        } catch (e: Exception) {
-                                                                            Log.e("FavoriteContent", "加载失败: ${nextMedia.title}, ${e.message}")
-                                                                            continue
-                                                                        }
-                                                                    }
-
-                                                                    remainingToLoad -= nextPageMedias.size
-                                                                    nextPage++
-                                                                } else {
-                                                                    Log.e("FavoriteContent", "加载第 $nextPage 页失败")
-                                                                    break
-                                                                }
-                                                            } catch (e: Exception) {
-                                                                Log.e("FavoriteContent", "加载第 $nextPage 页出错: ${e.message}")
-                                                                break
-                                                            }
-                                                        }
-                                                    }
-
-                                                    Log.d("FavoriteContent", "所有歌曲加载完成，总共加载了 $loadedCount 首")
-                                                }
-                                            } else {
-                                                snackbarHostState.showSnackbar("无法加载播放列表")
-                                            }
-                                            */
                                         } catch (e: Exception) {
-                                            snackbarHostState.showSnackbar("播放失败: ${e.message ?: "未知错误"}")
-                                        } finally {
-                                            isPlaying = false
+                                            Log.e("FavoriteContent", "播放失败", e)
                                             playingBvid = null
+                                            isPlaying = false
+                                            snackbarHostState.showSnackbar("播放失败: ${e.message ?: "未知错误"}")
                                         }
                                     }
                                 }
@@ -903,6 +690,90 @@ fun MediaItem(
             }
         }
     }
+}
+
+/**
+ * Batch download media with efficient deduplication and rate limiting.
+ *
+ * Strategy:
+ * 1. Batch-query DB to find already-downloaded and already-queued songs (0 API calls)
+ * 2. For remaining items, sequentially call API with delay between each to avoid B站 rate limiting
+ * 3. DownloadManager internally limits concurrent actual download workers via Semaphore
+ */
+private suspend fun batchDownloadMedia(
+    mediaList: List<FavoriteMedia>,
+    database: AppDatabase,
+    repository: BiliFavoriteRepository,
+    downloadManager: DownloadManager
+) {
+    val allBvids = mediaList.map { it.bvid }
+    var successCount = 0
+    var failCount = 0
+    var skippedCount = 0
+
+    // Step 1: Batch dedup - query DB once for all IDs instead of one-by-one
+    // Room has a limit on IN clause size (~999), so chunk if needed
+    val downloadedIds = mutableSetOf<String>()
+    val activeDownloadIds = mutableSetOf<String>()
+
+    allBvids.chunked(500).forEach { chunk ->
+        downloadedIds.addAll(database.songDao().getDownloadedSongIds(chunk))
+        activeDownloadIds.addAll(database.downloadDao().getActiveDownloadSongIds(chunk))
+    }
+
+    val skipIds = downloadedIds + activeDownloadIds
+    val toDownload = mediaList.filter { it.bvid !in skipIds }
+    skippedCount = mediaList.size - toDownload.size
+
+    Log.d("BatchDownload", "总计: ${mediaList.size}, 跳过: $skippedCount (已下载: ${downloadedIds.size}, 队列中: ${activeDownloadIds.size}), 待处理: ${toDownload.size}")
+
+    // Step 2: Sequential API calls with rate limiting (avoid B站风控)
+    // Each item needs 2 API calls (getVideoDetail + getPlayUrl), so ~500ms delay between items
+    for (media in toDownload) {
+        try {
+            val detailResponse = repository.getVideoDetail(media.bvid)
+            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
+                val cid = detailResponse.body()?.data?.cid
+                if (cid != null) {
+                    // Small delay between the two API calls
+                    kotlinx.coroutines.delay(200)
+
+                    val playUrlResponse = repository.getPlayUrl(cid, media.bvid)
+                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
+                        val audioUrl = repository.selectBestAudioStream(playUrlResponse.body()?.data?.dash?.audio)?.baseUrl
+                        if (audioUrl != null) {
+                            val song = Song(
+                                id = media.bvid,
+                                title = media.title,
+                                artist = media.upper.name,
+                                duration = media.duration,
+                                coverUrl = fixImageUrl(media.cover),
+                                audioUrl = audioUrl,
+                                cid = cid,
+                                bvid = media.bvid,
+                                aid = media.id,
+                                uploaderId = media.upper.mid,
+                                uploaderName = media.upper.name,
+                                pubDate = media.pubtime
+                            )
+                            database.songDao().insertSong(song)
+                            downloadManager.startDownload(song, audioUrl)
+                            successCount++
+                        } else failCount++
+                    } else failCount++
+                } else failCount++
+            } else failCount++
+        } catch (e: Exception) {
+            Log.e("BatchDownload", "下载失败: ${media.title}", e)
+            failCount++
+        }
+
+        // Rate limit: delay between items to avoid B站 API throttling
+        // ~500ms between items = ~2 items/second = ~4 API calls/second
+        kotlinx.coroutines.delay(500)
+    }
+
+    Log.d("BatchDownload", "批量下载入队完成：成功=$successCount, 失败=$failCount, 跳过=$skippedCount")
 }
 
 private fun formatDuration(seconds: Int): String {
@@ -1183,6 +1054,9 @@ private suspend fun loadPlaylistFromNetwork(
 
             Log.d("PlaylistCache", "所有歌曲加载并缓存完成，总共 $position 首")
         }
+    } else {
+        Log.e("PlaylistCache", "无法加载任何歌曲，可能是API请求受限")
+        throw Exception("无法获取播放链接，请稍后重试（可能是请求过于频繁）")
     }
 }
 

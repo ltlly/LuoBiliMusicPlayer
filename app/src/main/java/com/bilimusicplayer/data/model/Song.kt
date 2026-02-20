@@ -113,6 +113,32 @@ data class BiliFavoriteFolder(
 )
 
 /**
+ * Cached Favorite Media entity
+ * Caches the content of a Bilibili favorite folder to avoid re-fetching on every open
+ */
+@Entity(
+    tableName = "cached_favorite_medias",
+    primaryKeys = ["folderId", "bvid"]
+)
+data class CachedFavoriteMedia(
+    val folderId: Long,          // Which favorite folder this belongs to
+    val id: Long,                // Bilibili media ID (aid)
+    val type: Int,               // Media type
+    val title: String,
+    val cover: String,
+    val bvid: String,
+    val upperMid: Long,          // Uploader's mid
+    val upperName: String,       // Uploader's name
+    val upperFace: String,       // Uploader's avatar
+    val duration: Int,           // Duration in seconds
+    val intro: String,           // Introduction/description
+    val ctime: Long,             // Creation time
+    val pubtime: Long,           // Publish time
+    val position: Int = 0,       // Position in the list for ordering
+    val cachedAt: Long = System.currentTimeMillis()
+)
+
+/**
  * Playlist with songs
  */
 data class PlaylistWithSongs(

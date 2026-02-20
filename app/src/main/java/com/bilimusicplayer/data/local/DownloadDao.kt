@@ -55,4 +55,10 @@ interface DownloadDao {
 
     @Query("SELECT COUNT(*) FROM downloads WHERE status IN (:statuses)")
     fun getDownloadCountByStatuses(statuses: List<DownloadStatus>): Flow<Int>
+
+    /**
+     * Get song IDs that are currently in active download states (queued/downloading/converting)
+     */
+    @Query("SELECT songId FROM downloads WHERE songId IN (:songIds) AND status IN ('QUEUED', 'DOWNLOADING', 'CONVERTING')")
+    suspend fun getActiveDownloadSongIds(songIds: List<String>): List<String>
 }

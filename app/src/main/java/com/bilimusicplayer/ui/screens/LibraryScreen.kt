@@ -28,6 +28,8 @@ import com.bilimusicplayer.data.model.DownloadStatus
 import com.bilimusicplayer.data.model.Song
 import com.bilimusicplayer.ui.components.SongListItemSkeleton
 import com.bilimusicplayer.ui.components.DownloadListItemSkeleton
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -97,15 +99,28 @@ fun LibraryScreen(navController: NavController) {
                 }
                 1 -> {
                     // Filter downloads based on sub-tab
-                    database.downloadDao().getAllDownloads().collect { downloadList ->
-                        downloads = when (downloadSubTab) {
-                            0 -> downloadList.filter { it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.CONVERTING }
-                            1 -> downloadList.filter { it.status == DownloadStatus.QUEUED }
-                            2 -> downloadList.filter { it.status == DownloadStatus.COMPLETED }
-                            else -> downloadList
+                    // Use distinctUntilChanged on status list to avoid recomposition on every progress update
+                    database.downloadDao().getAllDownloads()
+                        .map { downloadList ->
+                            when (downloadSubTab) {
+                                0 -> downloadList.filter { it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.CONVERTING }
+                                1 -> downloadList.filter { it.status == DownloadStatus.QUEUED }
+                                2 -> downloadList.filter { it.status == DownloadStatus.COMPLETED }
+                                else -> downloadList
+                            }
                         }
-                        isLoading = false
-                    }
+                        .distinctUntilChanged { old, new ->
+                            // Only skip update if the list of IDs+statuses+progress are identical
+                            // This prevents excessive recomposition from rapid DB progress writes
+                            old.size == new.size && old.zip(new).all { (a, b) ->
+                                a.songId == b.songId && a.status == b.status &&
+                                a.progress == b.progress
+                            }
+                        }
+                        .collect { filteredList ->
+                            downloads = filteredList
+                            isLoading = false
+                        }
                 }
             }
         }
