@@ -35,6 +35,13 @@ fun DownloadSettingsScreen(navController: NavController) {
     var sliderValue by remember { mutableStateOf<Float?>(null) }
     val displayValue = sliderValue?.roundToInt() ?: maxConcurrentDownloads
 
+    // API rate limit setting
+    val apiRateLimit by downloadSettingsManager.apiRateLimit.collectAsState(
+        initial = DownloadSettingsManager.DEFAULT_API_RATE_LIMIT
+    )
+    var rateLimitSliderValue by remember { mutableStateOf<Float?>(null) }
+    val rateLimitDisplayValue = rateLimitSliderValue?.roundToInt() ?: apiRateLimit
+
     LaunchedEffect(Unit) {
         scope.launch {
             val exoplayerCache = File(context.cacheDir, "exoplayer_cache")
@@ -188,6 +195,80 @@ fun DownloadSettingsScreen(navController: NavController) {
 
             HorizontalDivider()
 
+            // API rate limit setting
+            SettingsSection(title = "API限速")
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Timer,
+                    contentDescription = null,
+                    modifier = Modifier.size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary
+                )
+
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "每分钟最大请求数",
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            text = "$rateLimitDisplayValue 次/分",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "控制播放列表加载和批量下载的API请求速率，降低可减少被B站风控的风险",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Slider(
+                        value = rateLimitSliderValue ?: apiRateLimit.toFloat(),
+                        onValueChange = { rateLimitSliderValue = it },
+                        onValueChangeFinished = {
+                            rateLimitSliderValue?.let { value ->
+                                scope.launch {
+                                    downloadSettingsManager.setApiRateLimit(value.roundToInt())
+                                }
+                            }
+                        },
+                        valueRange = DownloadSettingsManager.MIN_API_RATE_LIMIT.toFloat()..DownloadSettingsManager.MAX_API_RATE_LIMIT.toFloat(),
+                        steps = (DownloadSettingsManager.MAX_API_RATE_LIMIT - DownloadSettingsManager.MIN_API_RATE_LIMIT) / 5 - 1
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${DownloadSettingsManager.MIN_API_RATE_LIMIT}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = "${DownloadSettingsManager.MAX_API_RATE_LIMIT}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            HorizontalDivider()
+
             // Audio quality
             SettingsSection(title = "音频质量")
 
@@ -226,7 +307,7 @@ fun DownloadSettingsScreen(navController: NavController) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 自动选择最高可用音质，大会员可获得Hi-Res无损音质\n• 实际音质取决于视频源和账户等级\n• 并发线程数建议设为2-4，过高可能触发B站风控",
+                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 自动选择最高可用音质，大会员可获得Hi-Res无损音质\n• 实际音质取决于视频源和账户等级\n• 并发线程数建议设为2-4，过高可能触发B站风控\n• API限速控制请求频率，已下载和已缓存的歌曲不消耗额度",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )

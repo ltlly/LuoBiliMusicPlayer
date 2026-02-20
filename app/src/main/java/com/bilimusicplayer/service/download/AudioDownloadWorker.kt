@@ -176,7 +176,11 @@ class AudioDownloadWorker(
                 }
 
                 // Create output file with sanitized filename
-                val sanitizedTitle = title.replace(Regex("[^a-zA-Z0-9\\u4e00-\\u9fa5\\s-]"), "")
+                // Only remove characters that are invalid in file systems: / \ : * ? " < > | and control chars
+                val sanitizedTitle = title
+                    .replace(Regex("[/\\\\:*?\"<>|\\x00-\\x1F]"), "")
+                    .trim()
+                    .ifEmpty { "unknown" }
                 // Use .m4a extension since Bilibili downloads are M4A format
                 val outputFile = File(biliMusicDir, "$sanitizedTitle.m4a")
 
