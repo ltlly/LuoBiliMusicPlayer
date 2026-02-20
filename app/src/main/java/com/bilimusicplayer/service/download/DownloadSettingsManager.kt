@@ -21,6 +21,7 @@ private val Context.downloadSettingsDataStore: DataStore<Preferences> by prefere
 class DownloadSettingsManager(private val context: Context) {
 
     private val MAX_CONCURRENT_DOWNLOADS_KEY = intPreferencesKey("max_concurrent_downloads")
+    private val API_RATE_LIMIT_KEY = intPreferencesKey("api_rate_limit_per_minute")
 
     /**
      * Observe max concurrent downloads setting as Flow
@@ -30,10 +31,35 @@ class DownloadSettingsManager(private val context: Context) {
     }
 
     /**
+     * Observe API rate limit (requests per minute) as Flow
+     */
+    val apiRateLimit: Flow<Int> = context.downloadSettingsDataStore.data.map { preferences ->
+        preferences[API_RATE_LIMIT_KEY] ?: DEFAULT_API_RATE_LIMIT
+    }
+
+    /**
      * Get current max concurrent downloads value (blocking/suspending)
      */
     suspend fun getMaxConcurrentDownloads(): Int {
         return maxConcurrentDownloads.first()
+    }
+
+    /**
+     * Get current API rate limit (requests per minute)
+     */
+    suspend fun getApiRateLimit(): Int {
+        return apiRateLimit.first()
+    }
+
+    /**
+     * Calculate delay in milliseconds between API requests based on rate limit
+     */
+    suspend fun getApiDelayMs(): Long {
+        val rateLimit = getApiRateLimit()
+        // Each song needs 2 API calls (getVideoDetail + getPlayUrl)
+        // So for N requests/min, we can process N/2 songs/min
+        // Delay between songs = 60000 / (N/2) = 120000 / N ms
+        return (120_000L / rateLimit).coerceAtLeast(500)
     }
 
     /**
@@ -46,10 +72,24 @@ class DownloadSettingsManager(private val context: Context) {
         }
     }
 
+    /**
+     * Set API rate limit (requests per minute)
+     */
+    suspend fun setApiRateLimit(requestsPerMinute: Int) {
+        val value = requestsPerMinute.coerceIn(MIN_API_RATE_LIMIT, MAX_API_RATE_LIMIT)
+        context.downloadSettingsDataStore.edit { preferences ->
+            preferences[API_RATE_LIMIT_KEY] = value
+        }
+    }
+
     companion object {
         const val DEFAULT_MAX_CONCURRENT = 4
         const val MIN_CONCURRENT = 1
         const val MAX_CONCURRENT = 8
+
+        const val DEFAULT_API_RATE_LIMIT = 30   // 30 requests per minute
+        const val MIN_API_RATE_LIMIT = 10        // minimum 10 req/min
+        const val MAX_API_RATE_LIMIT = 60        // maximum 60 req/min
     }
 }
 
