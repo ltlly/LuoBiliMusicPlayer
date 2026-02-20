@@ -60,4 +60,10 @@ interface SongDao {
      */
     @Query("SELECT id FROM songs WHERE id IN (:songIds) AND isDownloaded = 1 AND localPath IS NOT NULL")
     suspend fun getDownloadedSongIds(songIds: List<String>): List<String>
+
+    /**
+     * Get full Song objects for downloaded songs by bvid list
+     */
+    @Query("SELECT * FROM songs WHERE id IN (:songIds) AND isDownloaded = 1 AND localPath IS NOT NULL")
+    suspend fun getDownloadedSongsByIds(songIds: List<String>): List<Song>
 }

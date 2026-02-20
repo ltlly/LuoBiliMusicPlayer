@@ -432,6 +432,11 @@ fun LibraryScreen(navController: NavController) {
                                                                 .setArtworkUri(android.net.Uri.parse(s.coverUrl))
                                                                 .build()
                                                         )
+                                                        .setRequestMetadata(
+                                                            MediaItem.RequestMetadata.Builder()
+                                                                .setMediaUri(uri)
+                                                                .build()
+                                                        )
                                                         .build()
                                                 }
 

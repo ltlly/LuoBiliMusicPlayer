@@ -34,12 +34,12 @@ interface BiliFavoriteApi {
     ): Response<FavoriteResourceResponse>
 
     /**
-     * Get video detail
+     * Get video detail (requires WBI signature)
      * GET https://api.bilibili.com/x/web-interface/view?bvid={bvid}
      */
     @GET("x/web-interface/view")
     suspend fun getVideoDetail(
-        @Query("bvid") bvid: String
+        @QueryMap params: Map<String, String>
     ): Response<VideoDetailResponse>
 
     /**

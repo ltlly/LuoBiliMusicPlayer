@@ -86,10 +86,21 @@ class BiliFavoriteRepository(
     }
 
     /**
-     * Get video detail by BVID
+     * Get video detail by BVID (with WBI signature)
      */
     suspend fun getVideoDetail(bvid: String): Response<VideoDetailResponse> {
-        return api.getVideoDetail(bvid)
+        // Ensure WBI keys are initialized
+        if (!WbiSignature.isInitialized()) {
+            initWbiKeys()
+        }
+
+        val params = mapOf(
+            "bvid" to bvid
+        )
+
+        val signedParams = WbiSignature.signParams(params)
+
+        return api.getVideoDetail(signedParams)
     }
 
     /**
