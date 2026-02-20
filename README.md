@@ -138,7 +138,7 @@ Room数据库持久化：
 - 播放URL缓存
 
 **关键文件**：
-- `AppDatabase.kt` - Room数据库（v5）
+- `AppDatabase.kt` - Room数据库（v6）
 - `SongDao.kt` - 歌曲操作
 - `PlaylistDao.kt` - 播放列表操作
 - `DownloadDao.kt` - 下载操作
@@ -147,14 +147,16 @@ Room数据库持久化：
 
 ### 6. 缓存系统 (`data/repository/`)
 
-智能双层缓存提升性能：
+智能多层缓存提升性能：
 - 收藏夹列表缓存（5分钟智能刷新）
+- 收藏夹内容缓存（10分钟智能刷新，秒开收藏夹内容）
 - 播放URL缓存（6小时有效期）
 - 自动清理过期缓存
 - 增量更新机制
 
 **关键文件**：
-- `FavoriteFolderCacheRepository.kt` - 收藏夹缓存管理
+- `FavoriteFolderCacheRepository.kt` - 收藏夹列表缓存管理
+- `FavoriteContentCacheRepository.kt` - 收藏夹内容缓存管理
 - `PlayQueueCacheRepository.kt` - 播放队列缓存管理
 
 **性能提升**：
@@ -267,9 +269,10 @@ Room数据库持久化：
   - 影响：下载的音频文件缺少元数据信息
 
 #### 中优先级（增强用户体验）
-- [ ] **下载设置界面** (`SettingsScreen.kt:142`)
-  - 当前状态：设置入口已存在，但详细设置界面未实现
-  - 需要：实现下载路径选择、音质选择、并发下载数等设置
+- [x] **下载设置界面** (`DownloadSettingsScreen.kt`)
+  - 并发下载线程数设置（1-8，默认4）
+  - 缓存管理
+  - 下载路径和音质信息展示
 
 - [ ] **外观设置界面** (`SettingsScreen.kt:152`)
   - 当前状态：主题系统已完成，但设置界面未实现

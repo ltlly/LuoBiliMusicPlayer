@@ -123,16 +123,24 @@ class AudioDownloadWorker(
                 val buffer = ByteArray(8192)
                 var bytesRead: Int
                 var totalBytesRead = 0L
+                var lastReportedProgress = -1
+                var lastProgressTime = 0L
 
                 while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                     outputStream.write(buffer, 0, bytesRead)
                     totalBytesRead += bytesRead
 
-                    // Update progress
+                    // Throttle progress updates: only report every 2% change AND at least 500ms apart
                     if (totalBytes > 0) {
                         val progress = (totalBytesRead * 100 / totalBytes).toInt()
-                        downloadDao.updateDownloadProgress(songId, progress, totalBytesRead)
-                        setProgress(workDataOf(KEY_PROGRESS to progress))
+                        val now = System.currentTimeMillis()
+                        if ((progress - lastReportedProgress >= 2 || progress >= 100) &&
+                            (now - lastProgressTime >= 500 || progress >= 100)) {
+                            downloadDao.updateDownloadProgress(songId, progress, totalBytesRead)
+                            setProgress(workDataOf(KEY_PROGRESS to progress))
+                            lastReportedProgress = progress
+                            lastProgressTime = now
+                        }
                     }
                 }
 

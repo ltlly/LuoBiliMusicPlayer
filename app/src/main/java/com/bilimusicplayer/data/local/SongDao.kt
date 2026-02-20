@@ -54,4 +54,10 @@ interface SongDao {
 
     @Query("SELECT COUNT(*) FROM songs WHERE isDownloaded = 1")
     fun getDownloadedSongCount(): Flow<Int>
+
+    /**
+     * Get IDs of songs that are already downloaded (file exists check must be done in code)
+     */
+    @Query("SELECT id FROM songs WHERE id IN (:songIds) AND isDownloaded = 1 AND localPath IS NOT NULL")
+    suspend fun getDownloadedSongIds(songIds: List<String>): List<String>
 }

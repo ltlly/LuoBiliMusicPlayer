@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
  */
 class BiliMusicApplication : Application() {
 
-    private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     companion object {
         lateinit var instance: BiliMusicApplication
