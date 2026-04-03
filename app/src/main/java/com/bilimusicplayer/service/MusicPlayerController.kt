@@ -30,8 +30,12 @@ class MusicPlayerController(private val context: Context) {
         val controllerFuture = MediaController.Builder(context, sessionToken).buildAsync()
 
         controllerFuture.addListener({
-            mediaController = controllerFuture.get()
-            setupPlayerListener()
+            try {
+                mediaController = controllerFuture.get()
+                setupPlayerListener()
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to connect MediaController", e)
+            }
         }, context.mainExecutor)
     }
 

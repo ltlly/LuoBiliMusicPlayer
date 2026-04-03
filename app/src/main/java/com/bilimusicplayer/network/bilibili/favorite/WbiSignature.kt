@@ -24,6 +24,7 @@ object WbiSignature {
         val subKey: String = ""
     )
 
+    @Volatile
     private var wbiKeys = WbiKeys()
 
     /**

@@ -59,7 +59,9 @@ class BiliFavoriteRepository(
     ): Response<FavoriteResourceResponse> {
         // Ensure WBI keys are initialized
         if (!WbiSignature.isInitialized()) {
-            initWbiKeys()
+            if (!initWbiKeys()) {
+                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
+            }
         }
 
         val params = mutableMapOf(
@@ -91,7 +93,9 @@ class BiliFavoriteRepository(
     suspend fun getVideoDetail(bvid: String): Response<VideoDetailResponse> {
         // Ensure WBI keys are initialized
         if (!WbiSignature.isInitialized()) {
-            initWbiKeys()
+            if (!initWbiKeys()) {
+                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
+            }
         }
 
         val params = mapOf(
@@ -116,7 +120,9 @@ class BiliFavoriteRepository(
     ): Response<PlayUrlResponse> {
         // Ensure WBI keys are initialized
         if (!WbiSignature.isInitialized()) {
-            initWbiKeys()
+            if (!initWbiKeys()) {
+                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
+            }
         }
 
         val params = mapOf(
@@ -142,6 +148,7 @@ class BiliFavoriteRepository(
         var currentPage = 1
         var totalCount = 0
         val pageSize = 20
+        val maxPages = 100 // Safety limit to prevent infinite loops
 
         try {
             do {
@@ -150,7 +157,12 @@ class BiliFavoriteRepository(
                     val data = response.body()?.data
                     if (data != null) {
                         totalCount = data.info.mediaCount
-                        data.medias?.let { allVideos.addAll(it) }
+                        val medias = data.medias
+                        if (medias.isNullOrEmpty()) {
+                            // No more media on this page — stop even if totalCount not reached
+                            break
+                        }
+                        allVideos.addAll(medias)
                         currentPage++
                     } else {
                         break
@@ -159,7 +171,7 @@ class BiliFavoriteRepository(
                     Log.e(TAG, "Failed to get favorite resources: ${response.code()}")
                     break
                 }
-            } while (allVideos.size < totalCount)
+            } while (allVideos.size < totalCount && currentPage <= maxPages)
         } catch (e: Exception) {
             Log.e(TAG, "Error getting all favorite videos", e)
         }

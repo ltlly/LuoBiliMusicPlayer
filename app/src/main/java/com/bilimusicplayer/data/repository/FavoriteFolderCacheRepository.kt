@@ -5,7 +5,8 @@ import com.bilimusicplayer.data.local.AppDatabase
 import com.bilimusicplayer.data.model.BiliFavoriteFolder
 import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
 import com.bilimusicplayer.network.bilibili.favorite.FavoriteFolder
-import kotlinx.coroutines.CoroutineScope
+import androidx.room.withTransaction
+import com.bilimusicplayer.BiliMusicApplication
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
@@ -45,8 +46,12 @@ class FavoriteFolderCacheRepository(
                     } else {
                         Log.d(TAG, "缓存过期，后台刷新")
                         // Return cached data first, refresh in background
-                        CoroutineScope(Dispatchers.IO).launch {
-                            refreshFoldersFromNetwork(userId)
+                        BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
+                            try {
+                                refreshFoldersFromNetwork(userId)
+                            } catch (e: Exception) {
+                                Log.e(TAG, "后台刷新失败", e)
+                            }
                         }
                         return Result.success(cachedFolders)
                     }
@@ -79,9 +84,11 @@ class FavoriteFolderCacheRepository(
             // Convert to cache entities
             val cacheFolders = networkFolders.map { it.toCacheEntity() }
 
-            // Update cache
-            folderDao.deleteAllFolders()
-            folderDao.insertFolders(cacheFolders)
+            // Update cache atomically
+            database.withTransaction {
+                folderDao.deleteAllFolders()
+                folderDao.insertFolders(cacheFolders)
+            }
             Log.d(TAG, "缓存已更新")
 
             return cacheFolders

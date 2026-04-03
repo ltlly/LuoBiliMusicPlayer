@@ -1,6 +1,7 @@
 package com.bilimusicplayer.data.repository
 
 import android.util.Log
+import androidx.room.withTransaction
 import com.bilimusicplayer.data.local.AppDatabase
 import com.bilimusicplayer.data.model.CachedFavoriteMedia
 import com.bilimusicplayer.network.bilibili.favorite.FavoriteMedia
@@ -32,11 +33,13 @@ class FavoriteContentCacheRepository(private val database: AppDatabase) {
      * Save media list to cache for the first time (replaces everything)
      */
     suspend fun cacheMediaList(folderId: Long, mediaList: List<FavoriteMedia>) {
-        dao.deleteByFolderId(folderId)
         val entities = mediaList.mapIndexed { index, media ->
             media.toCachedEntity(folderId, index)
         }
-        dao.insertAll(entities)
+        database.withTransaction {
+            dao.deleteByFolderId(folderId)
+            dao.insertAll(entities)
+        }
         Log.d(TAG, "缓存 ${entities.size} 条收藏夹内容, folderId=$folderId")
     }
 

@@ -138,9 +138,14 @@ fun FavoriteContentScreen(
         }
     }
 
+    // Save as last opened folder for next launch
+    LaunchedEffect(folderId) {
+        BiliMusicApplication.instance.saveLastFolder(folderId, folderTitle)
+    }
+
     // Load first page with cache support
     LaunchedEffect(folderId) {
-        scope.launch {
+        run {
             isLoading = true
             errorMessage = null
             currentPage = 1
@@ -208,15 +213,13 @@ fun FavoriteContentScreen(
         if (isSearchActive) {
             // Add debounce for better UX
             kotlinx.coroutines.delay(300)
-            scope.launch {
-                isSearching = true
-                currentPage = 1
-                hasMore = true
-                val keyword = if (searchQuery.isBlank()) null else searchQuery
-                Log.d("FavoriteContent", "执行搜索: keyword=$keyword, folderId=$folderId")
-                loadDataFromApi(page = 1, keyword = keyword)
-                isSearching = false
-            }
+            isSearching = true
+            currentPage = 1
+            hasMore = true
+            val keyword = if (searchQuery.isBlank()) null else searchQuery
+            Log.d("FavoriteContent", "执行搜索: keyword=$keyword, folderId=$folderId")
+            loadDataFromApi(page = 1, keyword = keyword)
+            isSearching = false
         }
     }
 
@@ -433,17 +436,17 @@ fun FavoriteContentScreen(
                     }
                 }
 
-                mediaList.isEmpty() -> {
+                mediaList.isEmpty() && searchQuery.isNotEmpty() -> {
                     Text(
-                        text = "收藏夹为空",
+                        text = "未找到匹配的歌曲",
                         modifier = Modifier.align(Alignment.Center),
                         style = MaterialTheme.typography.bodyLarge
                     )
                 }
 
-                mediaList.isEmpty() && searchQuery.isNotEmpty() -> {
+                mediaList.isEmpty() -> {
                     Text(
-                        text = "未找到匹配的歌曲",
+                        text = "收藏夹为空",
                         modifier = Modifier.align(Alignment.Center),
                         style = MaterialTheme.typography.bodyLarge
                     )
@@ -515,25 +518,50 @@ fun FavoriteContentScreen(
                                             playingBvid = media.bvid
                                             isPlaying = true
 
-                                            // Use cache-enabled playlist loading
-                                            loadPlaylistWithCache(
-                                                cacheRepository = cacheRepository,
-                                                biliRepository = repository,
-                                                folderId = folderId,
-                                                folderName = folderTitle,
-                                                folderCover = mediaList.firstOrNull()?.cover ?: "",
-                                                clickedMedia = media,
-                                                mediaList = mediaList,
-                                                totalCount = totalCount,
-                                                currentPage = currentPage,
-                                                onPlaylistReady = { playlist ->
-                                                    BiliMusicApplication.musicPlayerController.setMediaItems(playlist, 0)
-                                                    navController.navigate("player")
-                                                },
-                                                onSongLoaded = { mediaItem ->
-                                                    BiliMusicApplication.musicPlayerController.addMediaItem(mediaItem)
+                                            if (isSearchActive && searchQuery.isNotEmpty()) {
+                                                // Search mode: add single song to queue end and play it
+                                                val playerController = BiliMusicApplication.musicPlayerController
+                                                val downloadedSongsMap = mutableMapOf<String, com.bilimusicplayer.data.model.Song>()
+                                                val cachedUrlsMap = mutableMapOf<String, com.bilimusicplayer.data.model.CachedPlaybackUrl>()
+                                                withContext(Dispatchers.IO) {
+                                                    database.songDao().getDownloadedSongsByIds(listOf(media.bvid)).forEach { song ->
+                                                        if (song.localPath != null && java.io.File(song.localPath).exists()) {
+                                                            downloadedSongsMap[song.bvid] = song
+                                                        }
+                                                    }
+                                                    database.cachedPlaybackUrlDao().getCachedUrls(listOf(media.bvid))
+                                                        .filter { it.expiresAt > System.currentTimeMillis() }
+                                                        .forEach { cachedUrlsMap[it.bvid] = it }
                                                 }
-                                            )
+                                                val mediaItem = withContext(Dispatchers.IO) {
+                                                    resolveMediaItem(media, downloadedSongsMap, cachedUrlsMap, repository, database.cachedPlaybackUrlDao())
+                                                } ?: throw Exception("无法获取播放链接")
+
+                                                playerController.addMediaItem(mediaItem)
+                                                val newIndex = playerController.getMediaItemCount() - 1
+                                                playerController.skipToMediaItem(newIndex)
+                                                navController.navigate("player")
+                                            } else {
+                                                // Normal mode: load full playlist from folder
+                                                loadPlaylistWithCache(
+                                                    cacheRepository = cacheRepository,
+                                                    biliRepository = repository,
+                                                    folderId = folderId,
+                                                    folderName = folderTitle,
+                                                    folderCover = mediaList.firstOrNull()?.cover ?: "",
+                                                    clickedMedia = media,
+                                                    mediaList = mediaList,
+                                                    totalCount = totalCount,
+                                                    currentPage = currentPage,
+                                                    onPlaylistReady = { playlist ->
+                                                        BiliMusicApplication.musicPlayerController.setMediaItems(playlist, 0)
+                                                        navController.navigate("player")
+                                                    },
+                                                    onSongLoaded = { mediaItem ->
+                                                        BiliMusicApplication.musicPlayerController.addMediaItem(mediaItem)
+                                                    }
+                                                )
+                                            }
                                         } catch (e: Exception) {
                                             Log.e("FavoriteContent", "播放失败", e)
                                             playingBvid = null
@@ -929,7 +957,7 @@ suspend fun loadPlaylistWithCache(
     val apiDelayMs = settingsManager.getApiDelayMs()
     Log.d("PlaylistCache", "API限速: ${settingsManager.getApiRateLimit()}次/分钟, 间隔=${apiDelayMs}ms")
 
-    kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+    BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
         var loadedCount = 0
         var apiCallCount = 0
         var lastApiCallTime = 0L
