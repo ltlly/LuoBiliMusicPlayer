@@ -26,6 +26,29 @@ class MusicPlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private lateinit var player: ExoPlayer
 
+    companion object {
+        private const val TAG = "MusicPlaybackService"
+        const val COMMAND_SET_REPEAT_MODE = "SET_REPEAT_MODE"
+        const val COMMAND_SET_SHUFFLE_MODE = "SET_SHUFFLE_MODE"
+        const val KEY_REPEAT_MODE = "repeat_mode"
+        const val KEY_SHUFFLE_MODE = "shuffle_mode"
+
+        // SimpleCache must be a singleton — creating two instances for the same dir crashes
+        private var simpleCache: SimpleCache? = null
+        private fun getCache(context: android.content.Context): SimpleCache {
+            return simpleCache ?: synchronized(this) {
+                simpleCache ?: run {
+                    val cacheDir = File(context.cacheDir, "exoplayer_cache")
+                    SimpleCache(
+                        cacheDir,
+                        LeastRecentlyUsedCacheEvictor(100 * 1024 * 1024), // 100MB
+                        StandaloneDatabaseProvider(context)
+                    ).also { simpleCache = it }
+                }
+            }
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
 
@@ -38,13 +61,8 @@ class MusicPlaybackService : MediaSessionService() {
                 )
             )
 
-        // Initialize cache for audio streaming (100MB cache)
-        val cacheDir = File(cacheDir, "exoplayer_cache")
-        val cache = SimpleCache(
-            cacheDir,
-            LeastRecentlyUsedCacheEvictor(100 * 1024 * 1024), // 100MB
-            StandaloneDatabaseProvider(this)
-        )
+        // Initialize cache for audio streaming (100MB cache) — singleton to avoid lock conflicts
+        val cache = getCache(this)
 
         // Create cache data source factory
         val cacheDataSourceFactory = CacheDataSource.Factory()
@@ -121,10 +139,10 @@ class MusicPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
-        mediaSession?.run {
+        mediaSession?.release()
+        mediaSession = null
+        if (::player.isInitialized) {
             player.release()
-            release()
-            mediaSession = null
         }
         super.onDestroy()
     }
@@ -200,11 +218,4 @@ class MusicPlaybackService : MediaSessionService() {
         }
     }
 
-    companion object {
-        private const val TAG = "MusicPlaybackService"
-        const val COMMAND_SET_REPEAT_MODE = "SET_REPEAT_MODE"
-        const val COMMAND_SET_SHUFFLE_MODE = "SET_SHUFFLE_MODE"
-        const val KEY_REPEAT_MODE = "repeat_mode"
-        const val KEY_SHUFFLE_MODE = "shuffle_mode"
-    }
 }

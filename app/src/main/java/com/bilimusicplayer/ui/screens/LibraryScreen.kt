@@ -46,6 +46,7 @@ fun LibraryScreen(navController: NavController) {
     var isLoading by remember { mutableStateOf(true) }
     var showDeleteDialog by remember { mutableStateOf<Song?>(null) }
     var showDeleteRecordDialog by remember { mutableStateOf<Download?>(null) }
+    var showBatchDeleteDialog by remember { mutableStateOf(false) }
 
     // Multi-selection state
     var isSelectionMode by remember { mutableStateOf(false) }
@@ -76,6 +77,49 @@ fun LibraryScreen(navController: NavController) {
         }
     }
 
+    // Batch delete confirmation dialog
+    if (showBatchDeleteDialog) {
+        val count = if (selectedTab == 0) selectedSongs.size else selectedDownloads.size
+        AlertDialog(
+            onDismissRequest = { showBatchDeleteDialog = false },
+            title = { Text("批量删除") },
+            text = { Text("确定要删除选中的 $count 项吗？此操作不可撤销。") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        scope.launch {
+                            if (selectedTab == 0) {
+                                selectedSongs.forEach { songId ->
+                                    localSongs.find { it.id == songId }?.let { song ->
+                                        song.localPath?.let { path ->
+                                            java.io.File(path).delete()
+                                        }
+                                        database.songDao().deleteSong(song)
+                                    }
+                                }
+                            } else {
+                                selectedDownloads.forEach { songId ->
+                                    database.downloadDao().deleteDownloadBySongId(songId)
+                                }
+                            }
+                            isSelectionMode = false
+                            selectedSongs = emptySet()
+                            selectedDownloads = emptySet()
+                            showBatchDeleteDialog = false
+                        }
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBatchDeleteDialog = false }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
+
     // Reset selection and search when tab changes
     LaunchedEffect(selectedTab, downloadSubTab) {
         isSelectionMode = false
@@ -87,9 +131,8 @@ fun LibraryScreen(navController: NavController) {
 
     // Load data when tab changes
     LaunchedEffect(selectedTab, downloadSubTab) {
-        scope.launch {
-            isLoading = true
-            when (selectedTab) {
+        isLoading = true
+        when (selectedTab) {
                 0 -> {
                     // Only show downloaded songs in library, not cached songs
                     database.songDao().getDownloadedSongs().collect { songs ->
@@ -123,7 +166,6 @@ fun LibraryScreen(navController: NavController) {
                         }
                 }
             }
-        }
     }
 
     // Delete song dialog
@@ -265,31 +307,9 @@ fun LibraryScreen(navController: NavController) {
                                 "全选"
                             )
                         }
-                        // Delete button
+                        // Delete button — shows confirmation dialog
                         IconButton(
-                            onClick = {
-                                scope.launch {
-                                    if (selectedTab == 0) {
-                                        // Delete selected songs
-                                        selectedSongs.forEach { songId ->
-                                            localSongs.find { it.id == songId }?.let { song ->
-                                                song.localPath?.let { path ->
-                                                    java.io.File(path).delete()
-                                                }
-                                                database.songDao().deleteSong(song)
-                                            }
-                                        }
-                                    } else {
-                                        // Delete selected download records
-                                        selectedDownloads.forEach { songId ->
-                                            database.downloadDao().deleteDownloadBySongId(songId)
-                                        }
-                                    }
-                                    isSelectionMode = false
-                                    selectedSongs = emptySet()
-                                    selectedDownloads = emptySet()
-                                }
-                            },
+                            onClick = { showBatchDeleteDialog = true },
                             enabled = (selectedTab == 0 && selectedSongs.isNotEmpty()) ||
                                      (selectedTab == 1 && selectedDownloads.isNotEmpty())
                         ) {

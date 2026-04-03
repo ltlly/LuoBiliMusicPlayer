@@ -13,6 +13,9 @@ interface SongDao {
     @Query("SELECT * FROM songs ORDER BY addedDate DESC")
     fun getAllSongs(): Flow<List<Song>>
 
+    @Query("SELECT * FROM songs ORDER BY addedDate DESC")
+    suspend fun getAllSongsOnce(): List<Song>
+
     @Query("SELECT * FROM songs WHERE isDownloaded = 1 ORDER BY addedDate DESC")
     fun getDownloadedSongs(): Flow<List<Song>>
 

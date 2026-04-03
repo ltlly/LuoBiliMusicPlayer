@@ -136,8 +136,11 @@ class DownloadManager(private val context: Context) {
      */
     private suspend fun waitForWorkerCompletion(uniqueWorkName: String) {
         val songId = uniqueWorkName.removePrefix("download_")
-        while (true) {
+        val maxChecks = 900 // 30 minutes (900 * 2 seconds)
+        var checks = 0
+        while (checks < maxChecks) {
             kotlinx.coroutines.delay(2000) // Check every 2 seconds
+            checks++
             val download = downloadDao.getDownloadBySongId(songId) ?: break
             when (download.status) {
                 DownloadStatus.COMPLETED,
@@ -146,6 +149,10 @@ class DownloadManager(private val context: Context) {
                 DownloadStatus.PAUSED -> break
                 else -> continue
             }
+        }
+        if (checks >= maxChecks) {
+            Log.e(TAG, "Download timed out after 30 minutes: $songId")
+            downloadDao.failDownload(songId, DownloadStatus.FAILED, "下载超时")
         }
     }
 
