@@ -44,7 +44,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "bili_music_database"
                 )
-                    .fallbackToDestructiveMigration()
+                    .fallbackToDestructiveMigrationFrom(1, 2, 3, 4, 5)
                     .build()
                 INSTANCE = instance
                 instance
@@ -64,6 +64,10 @@ class Converters {
 
     @androidx.room.TypeConverter
     fun toDownloadStatus(value: String): DownloadStatus {
-        return DownloadStatus.valueOf(value)
+        return try {
+            DownloadStatus.valueOf(value)
+        } catch (_: IllegalArgumentException) {
+            DownloadStatus.FAILED
+        }
     }
 }

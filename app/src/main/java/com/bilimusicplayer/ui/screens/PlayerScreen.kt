@@ -59,13 +59,16 @@ fun PlayerScreen(navController: NavController) {
             isDownloaded = mediaUri.startsWith("file://") || mediaUri.startsWith("/")
             val title = playbackState.currentMediaItem?.mediaMetadata?.title?.toString()
             if (title != null) {
-                database.songDao().getAllSongs().collect { songs ->
-                    currentSong = songs.find { it.title == title }
-                    if (currentSong != null) {
-                        isDownloaded = currentSong?.isDownloaded == true &&
-                                     currentSong?.localPath != null &&
-                                     File(currentSong?.localPath ?: "").exists()
-                    }
+                // Single query instead of infinite Flow collect
+                val songs = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    database.songDao().getAllSongsOnce()
+                }
+                val found = songs.find { it.title == title }
+                currentSong = found
+                if (found != null) {
+                    isDownloaded = found.isDownloaded &&
+                                 found.localPath != null &&
+                                 File(found.localPath).exists()
                 }
             }
             isCached = !isDownloaded && mediaUri.startsWith("http")
@@ -75,12 +78,12 @@ fun PlayerScreen(navController: NavController) {
         }
     }
 
-    // Update progress periodically
+    // Update progress periodically (skip frequent polling when paused)
     LaunchedEffect(playbackState.isPlaying, playbackState.currentMediaItem) {
         while (true) {
             currentPosition = playerController.getCurrentPosition()
             duration = playerController.getDuration()
-            kotlinx.coroutines.delay(100)
+            kotlinx.coroutines.delay(if (playbackState.isPlaying) 100 else 500)
         }
     }
 

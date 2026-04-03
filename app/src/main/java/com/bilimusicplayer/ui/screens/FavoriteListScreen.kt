@@ -23,6 +23,7 @@ import com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository
 import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
 import com.bilimusicplayer.network.bilibili.favorite.FavoriteFolder
 import kotlinx.coroutines.launch
+import android.net.Uri
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -165,7 +166,7 @@ fun FavoriteListScreen(navController: NavController) {
                         items(favoriteFolders) { folder ->
                             FavoriteFolderItem(folder = folder.toNetworkModel(), onClick = {
                                 // Navigate to folder contents
-                                navController.navigate("favorite_content/${folder.id}/${folder.title}")
+                                navController.navigate("favorite_content/${folder.id}/${Uri.encode(folder.title)}")
                             })
                         }
                     }

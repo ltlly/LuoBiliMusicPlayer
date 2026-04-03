@@ -34,7 +34,7 @@ fun PlayQueueSheet(
 
     LaunchedEffect(Unit) {
         while (true) {
-            kotlinx.coroutines.delay(1000) // Refresh every second
+            kotlinx.coroutines.delay(3000) // Refresh every 3 seconds (battery friendly)
             refreshTrigger++
         }
     }
@@ -43,7 +43,10 @@ fun PlayQueueSheet(
     val queueItems = remember(playbackState, refreshTrigger) {
         playerController.getAllMediaItems()
     }
-    val currentIndex = playerController.getCurrentMediaItemIndex()
+    // Reactive currentIndex — updates with playbackState and refreshTrigger
+    val currentIndex = remember(playbackState, refreshTrigger) {
+        playerController.getCurrentMediaItemIndex()
+    }
     val queueSize = queueItems.size
 
     var showDeleteDialog by remember { mutableStateOf(false) }
@@ -179,26 +182,9 @@ fun PlayQueueSheet(
                         }
                     }
 
-                    // Loading indicator at the end of list
+                    // Bottom spacer
                     item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(16.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "正在加载更多歌曲...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
                 }
             }

@@ -46,13 +46,11 @@ fun LoginScreen(onLoginSuccess: () -> Unit) {
 
     // Start QR login on first composition
     LaunchedEffect(Unit) {
-        scope.launch {
-            val isLoggedIn = authRepository.isLoggedIn()
-            if (isLoggedIn) {
-                onLoginSuccess()
-            } else {
-                loginManager.startQRLogin()
-            }
+        val isLoggedIn = authRepository.isLoggedIn()
+        if (isLoggedIn) {
+            onLoginSuccess()
+        } else {
+            loginManager.startQRLogin()
         }
     }
 
