@@ -69,4 +69,24 @@ interface SongDao {
      */
     @Query("SELECT * FROM songs WHERE id IN (:songIds) AND isDownloaded = 1 AND localPath IS NOT NULL")
     suspend fun getDownloadedSongsByIds(songIds: List<String>): List<Song>
+
+    /**
+     * Drop "local_*" placeholder rows that point at the same file as a freshly
+     * downloaded song, so the Library doesn't list the same file twice. `keepId`
+     * is the row we want to preserve (the just-downloaded one with the real bvid).
+     */
+    @Query("DELETE FROM songs WHERE localPath = :path AND id LIKE 'local_%' AND id != :keepId")
+    suspend fun deleteOrphanRowsForPath(path: String, keepId: String)
+
+    /** Count of placeholder rows (id like 'local_*') — orphan files we couldn't match to B站 cache. */
+    @Query("SELECT COUNT(*) FROM songs WHERE id LIKE 'local_%'")
+    suspend fun countUnsyncedLocalSongs(): Int
+
+    /** Get all placeholder rows so we can also delete the underlying files. */
+    @Query("SELECT * FROM songs WHERE id LIKE 'local_%'")
+    suspend fun getUnsyncedLocalSongs(): List<Song>
+
+    /** Bulk delete all placeholder rows. Files must be deleted separately. */
+    @Query("DELETE FROM songs WHERE id LIKE 'local_%'")
+    suspend fun deleteAllUnsyncedLocalSongs(): Int
 }

@@ -28,9 +28,11 @@ import com.bilimusicplayer.data.model.DownloadStatus
 import com.bilimusicplayer.data.model.Song
 import com.bilimusicplayer.ui.components.SongListItemSkeleton
 import com.bilimusicplayer.ui.components.DownloadListItemSkeleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,6 +54,110 @@ fun LibraryScreen(navController: NavController) {
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedSongs by remember { mutableStateOf<Set<String>>(emptySet()) }
     var selectedDownloads by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // Scan state — recovers orphan files in Music/BiliMusic that are missing DB entries
+    var isScanning by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // "Clear unsynced" state — wipes local-only placeholder rows + their files
+    // so the user can re-download cleanly from B站 favorites.
+    var isCleaningUnsynced by remember { mutableStateOf(false) }
+    var unsyncedCleanupConfirm by remember { mutableStateOf<Int?>(null) }
+
+    // Files we asked the user to delete via the system MediaStore prompt — kept
+    // around so we can clean up DB rows + try the direct-delete fallback once
+    // the user dismisses the dialog.
+    var pendingDeletionPaths by remember { mutableStateOf<List<String>>(emptyList()) }
+    val deleteRequestLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        scope.launch {
+            isCleaningUnsynced = true
+            val paths = pendingDeletionPaths
+            pendingDeletionPaths = emptyList()
+            val granted = result.resultCode == android.app.Activity.RESULT_OK
+            // Files the system already removed are gone now; for anything left
+            // (user denied, or files weren't in MediaStore) try a direct delete.
+            val stillThere = paths.filter { java.io.File(it).exists() }
+            val fallbackDeleted = withContext(Dispatchers.IO) { deletePathsDirectly(stillThere) }
+            val totalRemoved = (paths.size - stillThere.size) + fallbackDeleted
+            // Drop DB rows regardless — keeping rows whose files still exist would
+            // re-import them on the next scan.
+            val rowsRemoved = deleteUnsyncedDbRows(database)
+            isCleaningUnsynced = false
+            snackbarHostState.showSnackbar(
+                if (granted) "已删除 $rowsRemoved 条记录, $totalRemoved 个文件"
+                else "用户取消; 已删除 $rowsRemoved 条记录, $totalRemoved 个文件 (其余文件归属其它应用)"
+            )
+        }
+    }
+
+    // Clear-unsynced confirmation dialog
+    unsyncedCleanupConfirm?.let { count ->
+        AlertDialog(
+            onDismissRequest = { unsyncedCleanupConfirm = null },
+            title = { Text("清理未同步本地音乐") },
+            text = {
+                Text(
+                    "将删除 $count 首未匹配 B站 收藏夹的本地歌曲及其文件。\n\n" +
+                    "用途：删除后,可从收藏夹页面重新下载,以获得正确的封面与元数据。\n\n" +
+                    "已匹配真实 BV 号的本地歌曲不会被删除。\n\n" +
+                    "若文件归属早期版本(不同 uid)，系统会弹一次确认框授权批量删除。"
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        unsyncedCleanupConfirm = null
+                        scope.launch {
+                            isCleaningUnsynced = true
+                            // Pull the paths we want to delete.
+                            val paths = withContext(Dispatchers.IO) {
+                                database.songDao().getUnsyncedLocalSongs()
+                                    .mapNotNull { it.localPath }
+                            }
+                            if (paths.isEmpty()) {
+                                isCleaningUnsynced = false
+                                snackbarHostState.showSnackbar("没有可删除的文件")
+                                return@launch
+                            }
+                            val (uris, missing) = withContext(Dispatchers.IO) {
+                                resolveMediaStoreUris(context, paths)
+                            }
+                            if (uris.isNotEmpty() &&
+                                android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R
+                            ) {
+                                // Android 11+: one batched system prompt. Keep `paths` so we
+                                // can also handle the `missing` (un-indexed) ones afterwards.
+                                pendingDeletionPaths = paths
+                                val pendingIntent = android.provider.MediaStore.createDeleteRequest(
+                                    context.contentResolver, uris
+                                )
+                                val request = androidx.activity.result.IntentSenderRequest.Builder(
+                                    pendingIntent.intentSender
+                                ).build()
+                                deleteRequestLauncher.launch(request)
+                                // launcher callback finishes cleanup; release the spinner there
+                            } else {
+                                // Pre-R or no MediaStore entries: just try direct delete.
+                                val deleted = withContext(Dispatchers.IO) { deletePathsDirectly(paths) }
+                                val rows = deleteUnsyncedDbRows(database)
+                                isCleaningUnsynced = false
+                                snackbarHostState.showSnackbar("已删除 $rows 条记录, $deleted 个文件")
+                            }
+                        }
+                    }
+                ) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { unsyncedCleanupConfirm = null }) {
+                    Text("取消")
+                }
+            }
+        )
+    }
 
     // Search state
     var searchQuery by remember { mutableStateOf("") }
@@ -129,14 +235,25 @@ fun LibraryScreen(navController: NavController) {
         searchQuery = ""
     }
 
+    // Auto-scan local Music/BiliMusic directory on first entering the Local tab.
+    // Recovers downloaded files that lost their DB entries (e.g. after a
+    // destructive Room migration or app reinstall).
+    LaunchedEffect(selectedTab) {
+        if (selectedTab == 0) {
+            scanAndImportOrphanFiles(database)
+        }
+    }
+
     // Load data when tab changes
     LaunchedEffect(selectedTab, downloadSubTab) {
         isLoading = true
         when (selectedTab) {
                 0 -> {
-                    // Only show downloaded songs in library, not cached songs
+                    // Show all downloaded songs whose local file still exists on disk
                     database.songDao().getDownloadedSongs().collect { songs ->
-                        localSongs = songs
+                        localSongs = songs.filter { song ->
+                            song.localPath?.let { java.io.File(it).exists() } == true
+                        }
                         isLoading = false
                     }
                 }
@@ -316,6 +433,59 @@ fun LibraryScreen(navController: NavController) {
                             Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
                         }
                     } else {
+                        // Rescan local files (only on Local tab)
+                        if (selectedTab == 0) {
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        isScanning = true
+                                        val imported = scanAndImportOrphanFiles(database)
+                                        isScanning = false
+                                        snackbarHostState.showSnackbar(
+                                            if (imported > 0) "已恢复 $imported 首本地歌曲"
+                                            else "未找到新的本地文件"
+                                        )
+                                    }
+                                },
+                                enabled = !isScanning
+                            ) {
+                                if (isScanning) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(Icons.Default.Refresh, "扫描本地文件")
+                                }
+                            }
+                            // Clean up "未同步" (local_*) songs so they can be re-downloaded
+                            IconButton(
+                                onClick = {
+                                    scope.launch {
+                                        val n = countUnsyncedLocalSongs(database)
+                                        if (n == 0) {
+                                            snackbarHostState.showSnackbar("没有需要清理的未同步歌曲")
+                                        } else {
+                                            unsyncedCleanupConfirm = n
+                                        }
+                                    }
+                                },
+                                enabled = !isCleaningUnsynced && !isScanning
+                            ) {
+                                if (isCleaningUnsynced) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(20.dp),
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Icon(
+                                        Icons.Default.DeleteSweep,
+                                        contentDescription = "清理未同步本地音乐",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
+                            }
+                        }
                         // Enter selection mode button
                         IconButton(onClick = { isSelectionMode = true }) {
                             Icon(Icons.Default.CheckBox, "多选")
@@ -324,7 +494,8 @@ fun LibraryScreen(navController: NavController) {
                     }
                 }
             )
-        }
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { paddingValues ->
         Column(
             modifier = Modifier
@@ -780,3 +951,221 @@ fun EmptyState(
         )
     }
 }
+
+/** Number of placeholder local songs that haven't been matched to B站 favorites yet. */
+private suspend fun countUnsyncedLocalSongs(database: AppDatabase): Int =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        database.songDao().countUnsyncedLocalSongs()
+    }
+
+/**
+ * Resolve the MediaStore content URIs for a list of file paths under
+ * Music/BiliMusic. Files in shared storage created by a previous install
+ * (different uid) cannot be deleted via direct java.io.File.delete() on
+ * Android 11+ — they have to go through a MediaStore delete request that the
+ * user explicitly approves once for the whole batch.
+ *
+ * Returns (uris, pathsNotInMediaStore).
+ */
+private fun resolveMediaStoreUris(
+    context: android.content.Context,
+    paths: List<String>
+): Pair<List<android.net.Uri>, List<String>> {
+    if (paths.isEmpty()) return emptyList<android.net.Uri>() to emptyList()
+    val uris = mutableListOf<android.net.Uri>()
+    val missing = mutableListOf<String>()
+    val collection = android.provider.MediaStore.Audio.Media.getContentUri(
+        android.provider.MediaStore.VOLUME_EXTERNAL
+    )
+    val projection = arrayOf(
+        android.provider.MediaStore.Audio.Media._ID,
+        android.provider.MediaStore.Audio.Media.DATA
+    )
+    // Chunk to keep the SQL placeholder list sane.
+    paths.chunked(400).forEach { chunk ->
+        val placeholders = chunk.joinToString(",") { "?" }
+        val sel = "${android.provider.MediaStore.Audio.Media.DATA} IN ($placeholders)"
+        context.contentResolver.query(
+            collection, projection, sel, chunk.toTypedArray(), null
+        )?.use { c ->
+            val foundPaths = mutableSetOf<String>()
+            val idIdx = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media._ID)
+            val dataIdx = c.getColumnIndexOrThrow(android.provider.MediaStore.Audio.Media.DATA)
+            while (c.moveToNext()) {
+                val id = c.getLong(idIdx)
+                foundPaths += c.getString(dataIdx)
+                uris += android.content.ContentUris.withAppendedId(collection, id)
+            }
+            chunk.filterNot { it in foundPaths }.forEach { missing += it }
+        } ?: chunk.forEach { missing += it }
+    }
+    return uris to missing
+}
+
+/**
+ * Best-effort fallback: try direct File.delete for any path the MediaStore
+ * approach didn't cover (e.g. files that haven't been indexed yet).
+ */
+private fun deletePathsDirectly(paths: List<String>): Int {
+    var deleted = 0
+    for (p in paths) {
+        try {
+            if (java.io.File(p).delete()) deleted++
+        } catch (e: Exception) {
+            android.util.Log.w("LibraryScan", "Direct delete failed: $p", e)
+        }
+    }
+    return deleted
+}
+
+/**
+ * Drop the placeholder rows whose files were just deleted by MediaStore (or
+ * directly). Removes both the songs entry and any matching downloads entry.
+ */
+private suspend fun deleteUnsyncedDbRows(database: AppDatabase): Int =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        val songDao = database.songDao()
+        val rows = songDao.getUnsyncedLocalSongs()
+        val deleted = songDao.deleteAllUnsyncedLocalSongs()
+        if (deleted > 0) deleted else rows.size
+    }
+
+/**
+ * Scan /sdcard/Music/BiliMusic/ for .m4a files that have no matching Song row
+ * (typically after a destructive Room migration) and import them.
+ *
+ * For each orphan file, we try to match it against the cached B站 favorite-folder
+ * entries (`cached_favorite_medias`) by sanitized title. A match lets us recover
+ * the real bvid, cover URL, uploader, duration, etc. — so the imported entry
+ * looks like a normal downloaded song and dedup works on later re-downloads.
+ *
+ * Files with no cache match fall back to a synthetic `local_*` placeholder.
+ *
+ * Re-running the scan upgrades existing `local_*` rows in place when new cache
+ * data becomes available.
+ *
+ * Returns number of files newly imported or upgraded.
+ */
+private suspend fun scanAndImportOrphanFiles(database: AppDatabase): Int =
+    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+        try {
+            val musicDir = android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_MUSIC
+            )
+            val biliDir = java.io.File(musicDir, "BiliMusic")
+            if (!biliDir.exists() || !biliDir.isDirectory) return@withContext 0
+
+            val files = biliDir.listFiles { f ->
+                f.isFile && f.length() > 0 && f.name.endsWith(".m4a", ignoreCase = true)
+            }?.toList() ?: return@withContext 0
+
+            if (files.isEmpty()) return@withContext 0
+
+            val songDao = database.songDao()
+            val allSongs = songDao.getAllSongsOnce()
+            val songsByPath = allSongs.filter { it.localPath != null }
+                .associateBy { it.localPath!! }
+            val songsById = allSongs.associateBy { it.id }
+            val knownIds = allSongs.map { it.id }.toMutableSet()
+
+            // Build cache index keyed by both filename forms a cache entry could
+            // produce: the new full-width sanitization AND the legacy strip-only
+            // form used by old releases. Lets us recover even files that were
+            // downloaded before the sanitization fix.
+            val cachedAll = database.cachedFavoriteMediaDao().getAll()
+            val cacheByFilename = mutableMapOf<String, com.bilimusicplayer.data.model.CachedFavoriteMedia>()
+            for (c in cachedAll) {
+                val newForm = com.bilimusicplayer.service.download.AudioDownloadWorker
+                    .sanitizeFilename(c.title)
+                val oldForm = com.bilimusicplayer.service.download.AudioDownloadWorker
+                    .legacyStripFilename(c.title)
+                cacheByFilename.putIfAbsent(newForm, c)
+                cacheByFilename.putIfAbsent(oldForm, c)
+            }
+
+            var imported = 0
+            for (file in files) {
+                val absPath = file.absolutePath
+                val baseName = file.nameWithoutExtension
+                val existing = songsByPath[absPath]
+                val matched = cacheByFilename[baseName]
+
+                // Already imported with full B站 metadata AND marked downloaded — done.
+                if (existing != null && !existing.id.startsWith("local_") &&
+                    existing.isDownloaded && existing.localPath == absPath) continue
+
+                if (matched != null) {
+                    val existingByBv = songsById[matched.bvid]
+                    val cover = matched.cover.let {
+                        when {
+                            it.startsWith("//") -> "https:$it"
+                            it.startsWith("http://") -> it.replaceFirst("http://", "https://")
+                            else -> it
+                        }
+                    }
+                    val newSong = com.bilimusicplayer.data.model.Song(
+                        id = matched.bvid,
+                        title = matched.title,
+                        artist = matched.upperName.ifBlank { "本地音乐" },
+                        album = null,
+                        duration = matched.duration,
+                        coverUrl = cover,
+                        localPath = absPath,
+                        audioUrl = existingByBv?.audioUrl,
+                        cid = existingByBv?.cid ?: 0L,
+                        bvid = matched.bvid,
+                        aid = matched.id,
+                        uploaderId = matched.upperMid,
+                        uploaderName = matched.upperName,
+                        pubDate = matched.pubtime,
+                        addedDate = existingByBv?.addedDate ?: file.lastModified(),
+                        isDownloaded = true,
+                        fileSize = file.length()
+                    )
+                    // Drop any stale local_* placeholder for this same file.
+                    existing?.takeIf { it.id.startsWith("local_") && it.id != matched.bvid }
+                        ?.let { songDao.deleteSongById(it.id) }
+                    // REPLACE-on-conflict will upgrade an existing BV row that
+                    // was inserted earlier with isDownloaded=false.
+                    songDao.insertSong(newSong)
+                    knownIds.add(matched.bvid)
+                    imported++
+                    continue
+                }
+
+                // No cache match. Skip if we've already imported a placeholder for it.
+                if (existing != null) continue
+                val syntheticId = "local_${baseName.hashCode().toUInt().toString(16)}"
+                if (syntheticId in knownIds) continue
+
+                songDao.insertSongIfNotExists(
+                    com.bilimusicplayer.data.model.Song(
+                        id = syntheticId,
+                        title = baseName,
+                        artist = "本地音乐",
+                        album = null,
+                        duration = 0,
+                        coverUrl = "",
+                        localPath = absPath,
+                        audioUrl = null,
+                        cid = 0L,
+                        bvid = syntheticId,
+                        aid = 0L,
+                        uploaderId = 0L,
+                        uploaderName = "",
+                        pubDate = file.lastModified(),
+                        addedDate = file.lastModified(),
+                        isDownloaded = true,
+                        fileSize = file.length()
+                    )
+                )
+                knownIds.add(syntheticId)
+                imported++
+            }
+            android.util.Log.d("LibraryScan", "imported/upgraded $imported orphan files")
+            imported
+        } catch (e: Exception) {
+            android.util.Log.e("LibraryScan", "scanAndImportOrphanFiles failed", e)
+            0
+        }
+    }

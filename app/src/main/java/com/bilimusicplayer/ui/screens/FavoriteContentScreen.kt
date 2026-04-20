@@ -107,9 +107,12 @@ fun FavoriteContentScreen(
                 val newMedias = data?.medias ?: emptyList()
                 Log.d("FavoriteContent", "获取到 ${newMedias.size} 条数据, totalCount=${data?.info?.mediaCount}")
                 mediaList = if (append) {
-                    mediaList + newMedias
+                    // Deduplicate by bvid to prevent LazyColumn "key already used" crash
+                    // (B站 API can return overlapping items across pages if the folder
+                    //  changes between requests).
+                    (mediaList + newMedias).distinctBy { it.bvid }
                 } else {
-                    newMedias
+                    newMedias.distinctBy { it.bvid }
                 }
                 totalCount = data?.info?.mediaCount ?: 0
                 hasMore = mediaList.size < totalCount
@@ -157,9 +160,9 @@ fun FavoriteContentScreen(
 
             if (cachedData != null && cachedData.isNotEmpty()) {
                 Log.d("FavoriteContent", "从缓存加载 ${cachedData.size} 条数据")
-                mediaList = cachedData
+                mediaList = cachedData.distinctBy { it.bvid }
                 // Calculate which page we're on based on cached data count
-                currentPage = (cachedData.size + 19) / 20
+                currentPage = (mediaList.size + 19) / 20
                 // We don't know the real totalCount yet, but we know hasMore is at least true
                 // unless the API tells us otherwise
                 isLoading = false
@@ -185,13 +188,14 @@ fun FavoriteContentScreen(
 
                     if (cachedData != null && cachedData.size > 20) {
                         // We had more than 1 page cached — keep using the full cached list
-                        // but replace the first 20 items with fresh data
-                        val updatedList = newMedias + cachedData.drop(20)
+                        // but replace the first 20 items with fresh data.
+                        // distinctBy avoids "key already used" if B站 moved items between pages.
+                        val updatedList = (newMedias + cachedData.drop(20)).distinctBy { it.bvid }
                         mediaList = updatedList
                         currentPage = (updatedList.size + 19) / 20
                     } else {
                         // Only had 1 page or no cache — just use the fresh data
-                        mediaList = newMedias
+                        mediaList = newMedias.distinctBy { it.bvid }
                         currentPage = 1
                     }
                     hasMore = mediaList.size < totalCount
@@ -420,7 +424,11 @@ fun FavoriteContentScreen(
                                         pageSize = 20
                                     )
                                     if (response.isSuccessful && response.body()?.code == 0) {
-                                        mediaList = response.body()?.data?.medias ?: emptyList()
+                                        val data = response.body()?.data
+                                        mediaList = (data?.medias ?: emptyList()).distinctBy { it.bvid }
+                                        totalCount = data?.info?.mediaCount ?: 0
+                                        currentPage = 1
+                                        hasMore = mediaList.size < totalCount
                                     } else {
                                         errorMessage = "加载失败"
                                     }
@@ -496,7 +504,7 @@ fun FavoriteContentScreen(
 
                         items(
                             items = mediaList,
-                            key = { media -> media.id }
+                            key = { media -> media.bvid }
                         ) { media ->
                             MediaItem(
                                 media = media,

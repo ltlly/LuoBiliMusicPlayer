@@ -34,10 +34,21 @@ class AudioDownloadWorker(
         val artist = inputData.getString(KEY_ARTIST) ?: "Unknown"
 
         try {
-            // Check if file already exists in legacy public Music/BiliMusic directory
+            // Check if file already exists in Music/BiliMusic. Older releases
+            // STRIPPED FAT-forbidden chars from titles ("a/b" → "ab"), so the
+            // file on disk may not match our current full-width sanitization
+            // ("a/b" → "a／b"). Look for both forms.
             val outputFile = getOutputFile(title)
+                .takeIf { it.exists() && it.length() > 0 }
+                ?: getLegacyStrippedOutputFile(title)
+                    .takeIf { it.exists() && it.length() > 0 }
+                ?: getOutputFile(title)  // fallthrough — neither exists, will trigger download
             if (outputFile.exists() && outputFile.length() > 0) {
                 Log.d(TAG, "Reusing existing file: ${outputFile.absolutePath}")
+                // The same file may already be linked from an earlier orphan-scan
+                // import (id like "local_xxxx"). Drop those stale rows so the
+                // Library doesn't show the song twice.
+                songDao.deleteOrphanRowsForPath(outputFile.absolutePath, songId)
                 downloadDao.completeDownload(
                     songId,
                     DownloadStatus.COMPLETED,
@@ -86,6 +97,9 @@ class AudioDownloadWorker(
             // Delete temp file
             audioFile.delete()
 
+            // Drop any stale orphan-scan row that pointed to this same file path.
+            songDao.deleteOrphanRowsForPath(finalFile.absolutePath, songId)
+
             // Update download status to completed
             downloadDao.completeDownload(
                 songId,
@@ -115,7 +129,8 @@ class AudioDownloadWorker(
 
     /**
      * Get the output file path in public Music/BiliMusic directory.
-     * Uses the original title as-is without any character filtering.
+     * Sanitizes filename: replaces chars that break filesystems (/, \, :, *, ?, ", <, >, |, NUL)
+     * with '_', trims whitespace/dots, and caps length at 180 bytes to stay below FAT32/ext4 limits.
      */
     private fun getOutputFile(title: String): File {
         val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
@@ -123,7 +138,20 @@ class AudioDownloadWorker(
         if (!biliMusicDir.exists()) {
             biliMusicDir.mkdirs()
         }
-        return File(biliMusicDir, "$title.m4a")
+        val safeName = sanitizeFilename(title)
+        return File(biliMusicDir, "$safeName.m4a")
+    }
+
+    /**
+     * Legacy filename used by releases prior to the full-width-substitution fix:
+     * the FAT-forbidden chars were just removed. Used as a fallback so a file
+     * downloaded by an older version is still detected as already present.
+     */
+    private fun getLegacyStrippedOutputFile(title: String): File {
+        val musicDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+        val biliMusicDir = File(musicDir, "BiliMusic")
+        val stripped = legacyStripFilename(title)
+        return File(biliMusicDir, "$stripped.m4a")
     }
 
     /**
@@ -223,5 +251,57 @@ class AudioDownloadWorker(
 
         // Shared OkHttpClient to avoid creating one per download
         val sharedClient: OkHttpClient by lazy { OkHttpClient() }
+
+        /**
+         * Make a title safe to use as a file name on Android external storage (FAT32/exFAT).
+         *
+         * FAT-family filesystems forbid `/ \ : * ? " < > |` and control chars in filenames.
+         * Earlier releases STRIPPED these chars, which produced confusing names like
+         * "完？美？友！人！Vsinger" (missing the `/` separator before "Vsinger").
+         *
+         * We instead substitute each forbidden char with its full-width Unicode equivalent
+         * (e.g. `/` → `／`, `|` → `｜`), so the displayed title looks almost identical
+         * to the original and remains readable.
+         */
+        /**
+         * Mirror of the OLD release's title→filename function: strips
+         * `/ \ : * ? " < > |` and control chars instead of substituting them.
+         * Kept so we can recognise files downloaded by older versions.
+         */
+        fun legacyStripFilename(raw: String): String {
+            return raw
+                .replace(Regex("[\\\\/:*?\"<>|\u0000-\u001f]"), "")
+                .trim()
+                .trimEnd('.', ' ')
+                .ifBlank { "untitled" }
+        }
+
+        fun sanitizeFilename(raw: String): String {
+            val sb = StringBuilder(raw.length)
+            for (ch in raw) {
+                val replacement = when (ch) {
+                    '/'  -> '／'    // U+FF0F FULLWIDTH SOLIDUS
+                    '\\' -> '＼'    // U+FF3C FULLWIDTH REVERSE SOLIDUS
+                    ':'  -> '：'    // U+FF1A FULLWIDTH COLON
+                    '*'  -> '＊'    // U+FF0A FULLWIDTH ASTERISK
+                    '?'  -> '？'    // U+FF1F FULLWIDTH QUESTION MARK
+                    '"'  -> '＂'    // U+FF02 FULLWIDTH QUOTATION MARK
+                    '<'  -> '＜'    // U+FF1C FULLWIDTH LESS-THAN
+                    '>'  -> '＞'    // U+FF1E FULLWIDTH GREATER-THAN
+                    '|'  -> '｜'    // U+FF5C FULLWIDTH VERTICAL LINE
+                    else -> if (ch.code < 0x20) ' ' else ch    // strip control chars
+                }
+                sb.append(replacement)
+            }
+            val cleaned = sb.toString()
+                .trim()
+                .trimEnd('.', ' ')
+                .ifBlank { "untitled" }
+            // Cap UTF-8 byte length to avoid path-too-long errors (FAT32 limit ~255 bytes)
+            val maxBytes = 180
+            val bytes = cleaned.toByteArray(Charsets.UTF_8)
+            return if (bytes.size <= maxBytes) cleaned
+            else String(bytes, 0, maxBytes, Charsets.UTF_8).trimEnd('\uFFFD')
+        }
     }
 }
