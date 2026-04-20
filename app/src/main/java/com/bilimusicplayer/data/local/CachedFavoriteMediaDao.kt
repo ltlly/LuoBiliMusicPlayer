@@ -12,6 +12,13 @@ interface CachedFavoriteMediaDao {
     @Query("SELECT * FROM cached_favorite_medias WHERE folderId = :folderId ORDER BY position ASC")
     suspend fun getByFolderId(folderId: Long): List<CachedFavoriteMedia>
 
+    /**
+     * Get all cached entries across all folders. Used by the local-file scan to
+     * enrich orphan files with their original B站 metadata (cover, uploader, real bvid).
+     */
+    @Query("SELECT * FROM cached_favorite_medias")
+    suspend fun getAll(): List<CachedFavoriteMedia>
+
     @Query("SELECT COUNT(*) FROM cached_favorite_medias WHERE folderId = :folderId")
     suspend fun getCountByFolderId(folderId: Long): Int
 
