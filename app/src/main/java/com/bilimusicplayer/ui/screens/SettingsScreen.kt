@@ -2,12 +2,15 @@ package com.bilimusicplayer.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -62,7 +65,7 @@ fun SettingsScreen(navController: NavController) {
                         }
                     }
                 ) {
-                    Text("退出")
+                    Text("退出", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
@@ -112,56 +115,91 @@ fun SettingsScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .padding(horizontal = 16.dp)
         ) {
+            Spacer(modifier = Modifier.height(8.dp))
+
             // Account section
-            SettingsItem(
-                icon = Icons.Default.Person,
-                title = "账户",
-                subtitle = username?.let { "已登录: $it (UID: $userId)" } ?: "未登录"
-            ) {
-                // Show account info or login prompt
+            SettingsSectionLabel("账户")
+            SettingsGroup {
+                SettingsItem(
+                    icon = Icons.Default.Person,
+                    title = "账户",
+                    subtitle = username?.let { "已登录: $it (UID: $userId)" } ?: "未登录",
+                    showChevron = false
+                ) {
+                    // Show account info or login prompt
+                }
+                SettingsItem(
+                    icon = Icons.AutoMirrored.Filled.Logout,
+                    title = "退出登录",
+                    subtitle = "退出当前账户",
+                    isDestructive = true
+                ) {
+                    showLogoutDialog = true
+                }
             }
 
-            HorizontalDivider()
+            Spacer(modifier = Modifier.height(20.dp))
 
-            SettingsItem(
-                icon = Icons.Default.Logout,
-                title = "退出登录",
-                subtitle = "退出当前账户"
-            ) {
-                showLogoutDialog = true
+            // General section
+            SettingsSectionLabel("通用")
+            SettingsGroup {
+                SettingsItem(
+                    icon = Icons.Default.Download,
+                    title = "下载设置",
+                    subtitle = "音频质量和存储位置"
+                ) {
+                    navController.navigate("download_settings")
+                }
+                SettingsItem(
+                    icon = Icons.Default.Palette,
+                    title = "外观",
+                    subtitle = "主题和显示选项"
+                ) {
+                    navController.navigate("appearance_settings")
+                }
             }
 
-            HorizontalDivider()
+            Spacer(modifier = Modifier.height(20.dp))
 
-            SettingsItem(
-                icon = Icons.Default.Download,
-                title = "下载设置",
-                subtitle = "音频质量和存储位置"
-            ) {
-                navController.navigate("download_settings")
-            }
-
-            HorizontalDivider()
-
-            SettingsItem(
-                icon = Icons.Default.Palette,
-                title = "外观",
-                subtitle = "主题和显示选项"
-            ) {
-                navController.navigate("appearance_settings")
-            }
-
-            HorizontalDivider()
-
-            SettingsItem(
-                icon = Icons.Default.Info,
-                title = "关于",
-                subtitle = "版本 1.3.0"
-            ) {
-                showAboutDialog = true
+            // About section
+            SettingsSectionLabel("关于")
+            SettingsGroup {
+                SettingsItem(
+                    icon = Icons.Default.Info,
+                    title = "关于",
+                    subtitle = "版本 1.3.0"
+                ) {
+                    showAboutDialog = true
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun SettingsSectionLabel(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 12.dp, bottom = 6.dp)
+    )
+}
+
+/**
+ * Rounded container grouping related settings rows,
+ * Apple Settings / Apple Music style.
+ */
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    ) {
+        Column(content = content)
     }
 }
 
@@ -170,28 +208,53 @@ fun SettingsItem(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     title: String,
     subtitle: String,
+    isDestructive: Boolean = false,
+    showChevron: Boolean = true,
     onClick: () -> Unit
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
-            .padding(16.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(32.dp),
-            tint = MaterialTheme.colorScheme.primary
-        )
+        // Icon in a rounded tile
+        Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = if (isDestructive) {
+                MaterialTheme.colorScheme.errorContainer
+            } else {
+                MaterialTheme.colorScheme.primaryContainer
+            },
+            modifier = Modifier.size(38.dp)
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(20.dp),
+                    tint = if (isDestructive) {
+                        MaterialTheme.colorScheme.error
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    }
+                )
+            }
+        }
 
-        Spacer(modifier = Modifier.width(16.dp))
+        Spacer(modifier = Modifier.width(14.dp))
 
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.titleMedium
+                style = MaterialTheme.typography.titleMedium,
+                color = if (isDestructive) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                }
             )
             Text(
                 text = subtitle,
@@ -200,10 +263,12 @@ fun SettingsItem(
             )
         }
 
-        Icon(
-            imageVector = Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        if (showChevron) {
+            Icon(
+                imageVector = Icons.Default.ChevronRight,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+            )
+        }
     }
 }

@@ -3,14 +3,24 @@ package com.bilimusicplayer.service
 import android.content.ComponentName
 import android.content.Context
 import android.util.Log
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.media3.common.*
 import androidx.media3.session.*
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+
+private val Context.playbackStateDataStore: DataStore<Preferences> by preferencesDataStore(name = "playback_state")
 
 /**
  * Controller for managing music playback
+ * Handles playback state persistence and queue loading coordination
  */
 class MusicPlayerController(private val context: Context) {
 
@@ -18,8 +28,25 @@ class MusicPlayerController(private val context: Context) {
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
 
+    // Cancel previous queue-loading job to avoid duplicates
+    private var queueLoadingJob: Job? = null
+
+    // Persistence keys & constants
+    companion object {
+        private const val TAG = "MusicPlayerController"
+        private val QUEUE_JSON = stringPreferencesKey("queue_json")
+        private val CURRENT_INDEX = intPreferencesKey("current_index")
+        private val CURRENT_POSITION = longPreferencesKey("current_position")
+        private val REPEAT_MODE_KEY = intPreferencesKey("repeat_mode")
+        private val SHUFFLE_MODE_KEY = booleanPreferencesKey("shuffle_mode")
+    }
+
+    private val gson = Gson()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var saveJob: Job? = null
+
     /**
-     * Initialize media controller connection
+     * Initialize media controller connection and restore saved state
      */
     suspend fun initialize() {
         val sessionToken = SessionToken(
@@ -33,6 +60,10 @@ class MusicPlayerController(private val context: Context) {
             try {
                 mediaController = controllerFuture.get()
                 setupPlayerListener()
+                // Restore saved playback state after connection
+                scope.launch {
+                    restorePlaybackState()
+                }
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to connect MediaController", e)
             }
@@ -46,27 +77,33 @@ class MusicPlayerController(private val context: Context) {
         mediaController?.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(state: Int) {
                 updatePlaybackState()
+                scheduleSaveState()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 updatePlaybackState()
                 startProgressUpdateIfPlaying()
+                scheduleSaveState()
             }
 
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 updatePlaybackState()
+                scheduleSaveState()
             }
 
             override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
                 updatePlaybackState()
+                scheduleSaveState()
             }
 
             override fun onRepeatModeChanged(repeatMode: Int) {
                 updatePlaybackState()
+                scheduleSaveState()
             }
 
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
                 updatePlaybackState()
+                scheduleSaveState()
             }
         })
 
@@ -113,39 +150,71 @@ class MusicPlayerController(private val context: Context) {
     }
 
     /**
-     * Skip to next track
+     * Skip to next track.
+     * When repeat mode is ONE, manually advance to the next different song
+     * (ExoPlayer's seekToNext stays on the same song in REPEAT_MODE_ONE).
      */
     fun skipToNext() {
         mediaController?.let { controller ->
             val currentIndex = controller.currentMediaItemIndex
             val totalItems = controller.mediaItemCount
-            val shuffleEnabled = controller.shuffleModeEnabled
 
-            Log.d(TAG, "skipToNext - 当前索引: $currentIndex, 总数: $totalItems, 随机模式: $shuffleEnabled")
+            Log.d(TAG, "skipToNext - 当前索引: $currentIndex, 总数: $totalItems")
 
-            if (totalItems > 0) {
-                // Let ExoPlayer handle next track with repeat mode
-                controller.seekToNext()
-                // Force prepare and play to ensure smooth transition
-                if (!controller.isPlaying) {
-                    controller.prepare()
-                    controller.play()
+            if (totalItems <= 0) return@let
+
+            if (controller.repeatMode == Player.REPEAT_MODE_ONE) {
+                // In single-repeat mode, user pressing next expects to move to next song
+                val nextIndex = if (controller.shuffleModeEnabled) {
+                    // Random next: pick a random index that isn't current
+                    if (totalItems <= 1) currentIndex
+                    else (currentIndex + 1 + (Math.random() * (totalItems - 1)).toInt()) % totalItems
+                } else {
+                    (currentIndex + 1) % totalItems
                 }
-                Log.d(TAG, "skipToNext - 切换到下一首")
+                controller.seekTo(nextIndex, 0)
+            } else {
+                controller.seekToNextMediaItem()
             }
+
+            if (!controller.isPlaying) {
+                controller.prepare()
+                controller.play()
+            }
+            Log.d(TAG, "skipToNext - 切换到下一首")
         }
     }
 
     /**
-     * Skip to previous track
+     * Skip to previous track.
+     * If position > 3s, restart current song; otherwise go to previous song.
+     * When repeat mode is ONE, manually navigate to previous song.
      */
     fun skipToPrevious() {
         mediaController?.let { controller ->
             val currentIndex = controller.currentMediaItemIndex
-            Log.d(TAG, "skipToPrevious - 当前索引: $currentIndex")
+            val totalItems = controller.mediaItemCount
 
-            // Let ExoPlayer handle previous track with repeat mode
-            controller.seekToPrevious()
+            Log.d(TAG, "skipToPrevious - 当前索引: $currentIndex, 位置: ${controller.currentPosition}")
+
+            if (totalItems <= 0) return@let
+
+            // If we're past 3 seconds, restart the current song
+            if (controller.currentPosition > 3000) {
+                controller.seekTo(controller.currentMediaItemIndex, 0)
+            } else if (controller.repeatMode == Player.REPEAT_MODE_ONE) {
+                // In single-repeat mode, manually go back
+                val prevIndex = if (controller.shuffleModeEnabled) {
+                    if (totalItems <= 1) currentIndex
+                    else (currentIndex - 1 + totalItems) % totalItems
+                } else {
+                    (currentIndex - 1 + totalItems) % totalItems
+                }
+                controller.seekTo(prevIndex, 0)
+            } else {
+                controller.seekToPreviousMediaItem()
+            }
+
             if (!controller.isPlaying) {
                 controller.prepare()
                 controller.play()
@@ -161,23 +230,57 @@ class MusicPlayerController(private val context: Context) {
     }
 
     /**
-     * Set media items and play
+     * Cancel any in-progress queue loading job
+     */
+    fun cancelQueueLoading() {
+        queueLoadingJob?.cancel()
+        queueLoadingJob = null
+        Log.d(TAG, "已取消之前的队列加载任务")
+    }
+
+    /**
+     * Set the current queue loading job for cancellation tracking
+     */
+    fun setQueueLoadingJob(job: Job) {
+        queueLoadingJob?.cancel()
+        queueLoadingJob = job
+    }
+
+    /**
+     * Set media items and play.
+     * Cancels any previous queue-loading job to prevent duplicates.
      */
     fun setMediaItems(mediaItems: List<MediaItem>, startIndex: Int = 0) {
+        // Cancel previous background queue loader
+        cancelQueueLoading()
+
         mediaController?.apply {
             setMediaItems(mediaItems, startIndex, 0)
-            // Enable repeat all mode for continuous playback
-            repeatMode = Player.REPEAT_MODE_ALL
+            // Preserve current repeat mode (don't force REPEAT_MODE_ALL every time)
+            if (repeatMode == Player.REPEAT_MODE_OFF) {
+                repeatMode = Player.REPEAT_MODE_ALL
+            }
             prepare()
             play()
         }
     }
 
     /**
-     * Add media item to queue
+     * Add media item to queue (deduplicates by mediaId)
      */
     fun addMediaItem(mediaItem: MediaItem) {
-        mediaController?.addMediaItem(mediaItem)
+        val controller = mediaController ?: return
+        // Deduplicate: skip if mediaId already in queue
+        val mediaId = mediaItem.mediaId
+        if (mediaId.isNotEmpty()) {
+            for (i in 0 until controller.mediaItemCount) {
+                if (controller.getMediaItemAt(i).mediaId == mediaId) {
+                    Log.d(TAG, "跳过重复歌曲: $mediaId")
+                    return
+                }
+            }
+        }
+        controller.addMediaItem(mediaItem)
     }
 
     /**
@@ -199,9 +302,19 @@ class MusicPlayerController(private val context: Context) {
     }
 
     /**
+     * Save playback state immediately (call before release)
+     */
+    fun saveStateSync() {
+        scope.launch { savePlaybackState() }
+    }
+
+    /**
      * Release resources
      */
     fun release() {
+        saveStateSync()
+        cancelQueueLoading()
+        scope.cancel()
         mediaController?.release()
         mediaController = null
     }
@@ -314,10 +427,157 @@ class MusicPlayerController(private val context: Context) {
         }
     }
 
-    companion object {
-        private const val TAG = "MusicPlayerController"
+    // ==================== Persistence ====================
+
+    /**
+     * Schedule a debounced save (avoids saving too frequently during transitions)
+     */
+    private fun scheduleSaveState() {
+        saveJob?.cancel()
+        saveJob = scope.launch {
+            delay(2000) // debounce 2s
+            savePlaybackState()
+        }
     }
+
+    /**
+     * Persist current playback state to DataStore
+     */
+    private suspend fun savePlaybackState() {
+        val controller = mediaController ?: return
+        if (controller.mediaItemCount == 0) return
+
+        try {
+            val queueItems = mutableListOf<SavedMediaItem>()
+            for (i in 0 until controller.mediaItemCount) {
+                val item = controller.getMediaItemAt(i)
+                queueItems.add(
+                    SavedMediaItem(
+                        mediaId = item.mediaId,
+                        uri = item.localConfiguration?.uri?.toString() ?: "",
+                        title = item.mediaMetadata.title?.toString() ?: "",
+                        artist = item.mediaMetadata.artist?.toString() ?: "",
+                        artworkUri = item.mediaMetadata.artworkUri?.toString() ?: ""
+                    )
+                )
+            }
+
+            val queueJson = gson.toJson(queueItems)
+
+            context.playbackStateDataStore.edit { prefs ->
+                prefs[QUEUE_JSON] = queueJson
+                prefs[CURRENT_INDEX] = controller.currentMediaItemIndex
+                prefs[CURRENT_POSITION] = controller.currentPosition
+                prefs[REPEAT_MODE_KEY] = controller.repeatMode
+                prefs[SHUFFLE_MODE_KEY] = controller.shuffleModeEnabled
+            }
+            Log.d(TAG, "播放状态已保存: index=${controller.currentMediaItemIndex}, pos=${controller.currentPosition}, queue=${queueItems.size}")
+        } catch (e: Exception) {
+            Log.e(TAG, "保存播放状态失败", e)
+        }
+    }
+
+    /**
+     * Restore playback state from DataStore on startup
+     */
+    private suspend fun restorePlaybackState() {
+        try {
+            val prefs = context.playbackStateDataStore.data.first()
+            val queueJson = prefs[QUEUE_JSON] ?: return
+            val savedIndex = prefs[CURRENT_INDEX] ?: 0
+            val savedPosition = prefs[CURRENT_POSITION] ?: 0L
+            val savedRepeatMode = prefs[REPEAT_MODE_KEY] ?: Player.REPEAT_MODE_ALL
+            val savedShuffleMode = prefs[SHUFFLE_MODE_KEY] ?: false
+
+            val type = object : TypeToken<List<SavedMediaItem>>() {}.type
+            val savedItems: List<SavedMediaItem> = gson.fromJson(queueJson, type) ?: return
+
+            if (savedItems.isEmpty()) return
+
+            // Rebuild MediaItems — validate local files, skip expired URLs
+            val mediaItems = mutableListOf<MediaItem>()
+            val database = com.bilimusicplayer.data.local.AppDatabase.getDatabase(context)
+
+            withContext(Dispatchers.IO) {
+                for (saved in savedItems) {
+                    val uri = saved.uri
+                    // Local file: verify it still exists
+                    if (uri.startsWith("file://") || uri.startsWith("/")) {
+                        val path = if (uri.startsWith("file://")) uri.removePrefix("file://") else uri
+                        if (!java.io.File(path).exists()) continue
+                    } else if (uri.startsWith("http")) {
+                        // Online URL: check if we have a non-expired cached URL
+                        if (saved.mediaId.isNotEmpty()) {
+                            val cached = database.cachedPlaybackUrlDao().getCachedUrl(saved.mediaId)
+                            if (cached == null || cached.expiresAt < System.currentTimeMillis()) {
+                                // URL likely expired — skip (will be re-resolved if user plays)
+                                continue
+                            }
+                        }
+                    } else {
+                        continue
+                    }
+
+                    mediaItems.add(
+                        MediaItem.Builder()
+                            .setMediaId(saved.mediaId)
+                            .setUri(uri)
+                            .setMediaMetadata(
+                                MediaMetadata.Builder()
+                                    .setTitle(saved.title)
+                                    .setArtist(saved.artist)
+                                    .setArtworkUri(
+                                        if (saved.artworkUri.isNotEmpty()) android.net.Uri.parse(saved.artworkUri) else null
+                                    )
+                                    .build()
+                            )
+                            .setRequestMetadata(
+                                MediaItem.RequestMetadata.Builder()
+                                    .setMediaUri(android.net.Uri.parse(uri))
+                                    .build()
+                            )
+                            .build()
+                    )
+                }
+            }
+
+            if (mediaItems.isEmpty()) {
+                Log.d(TAG, "恢复播放状态: 无有效歌曲可恢复")
+                return
+            }
+
+            // Adjust index if some items were skipped
+            val adjustedIndex = savedIndex.coerceIn(0, mediaItems.size - 1)
+
+            withContext(Dispatchers.Main) {
+                mediaController?.apply {
+                    setMediaItems(mediaItems, adjustedIndex, savedPosition)
+                    repeatMode = savedRepeatMode
+                    shuffleModeEnabled = savedShuffleMode
+                    prepare()
+                    // Don't auto-play — user resumes manually
+                }
+            }
+
+            Log.d(TAG, "播放状态已恢复: index=$adjustedIndex, pos=$savedPosition, queue=${mediaItems.size}, repeat=$savedRepeatMode, shuffle=$savedShuffleMode")
+        } catch (e: Exception) {
+            Log.e(TAG, "恢复播放状态失败", e)
+        }
+    }
+
+
 }
+
+/**
+ * Serializable media item for persistence
+ */
+data class SavedMediaItem(
+    val mediaId: String,
+    val uri: String,
+    val title: String,
+    val artist: String,
+    val artworkUri: String
+)
 
 /**
  * Playback state data class

@@ -7,9 +7,13 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.FavoriteBorder
+import androidx.compose.material.icons.outlined.LibraryMusic
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -62,14 +66,23 @@ fun MainScreen() {
                     )
                 }
 
-                // Navigation bar (no Home tab)
+                // Navigation bar — 3 tabs: favorites, library, settings
                 if (currentRoute != Screen.Login.route) {
-                    NavigationBar {
+                    NavigationBar(
+                        tonalElevation = 0.dp
+                    ) {
+                        val favoritesSelected = currentRoute == Screen.Favorites.route
+                                || currentRoute?.startsWith("favorite_content") == true
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.Favorite, contentDescription = "收藏夹") },
+                            icon = {
+                                Icon(
+                                    if (favoritesSelected) Icons.Default.Favorite
+                                    else Icons.Outlined.FavoriteBorder,
+                                    contentDescription = "收藏夹"
+                                )
+                            },
                             label = { Text("收藏夹") },
-                            selected = currentRoute == Screen.Favorites.route
-                                    || currentRoute?.startsWith("favorite_content") == true,
+                            selected = favoritesSelected,
                             onClick = {
                                 navController.navigate(Screen.Favorites.route) {
                                     popUpTo(Screen.Favorites.route) { inclusive = true }
@@ -78,7 +91,13 @@ fun MainScreen() {
                             }
                         )
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.LibraryMusic, contentDescription = "音乐库") },
+                            icon = {
+                                Icon(
+                                    if (currentRoute == Screen.Library.route) Icons.Default.LibraryMusic
+                                    else Icons.Outlined.LibraryMusic,
+                                    contentDescription = "音乐库"
+                                )
+                            },
                             label = { Text("音乐库") },
                             selected = currentRoute == Screen.Library.route,
                             onClick = {
@@ -88,7 +107,13 @@ fun MainScreen() {
                             }
                         )
                         NavigationBarItem(
-                            icon = { Icon(Icons.Default.Settings, contentDescription = "设置") },
+                            icon = {
+                                Icon(
+                                    if (currentRoute == Screen.Settings.route) Icons.Default.Settings
+                                    else Icons.Outlined.Settings,
+                                    contentDescription = "设置"
+                                )
+                            },
                             label = { Text("设置") },
                             selected = currentRoute == Screen.Settings.route,
                             onClick = {
