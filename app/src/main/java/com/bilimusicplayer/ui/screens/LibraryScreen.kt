@@ -42,6 +42,21 @@ fun LibraryScreen(navController: NavController) {
     val scope = rememberCoroutineScope()
     val database = remember { AppDatabase.getDatabase(context) }
 
+    // Repositories for enhanced scan (sync favorites cache before matching files)
+    val biliRepository = remember {
+        com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository(
+            com.bilimusicplayer.network.RetrofitClient.biliFavoriteApi
+        )
+    }
+    val authRepository = remember {
+        com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository(
+            context = context,
+            api = com.bilimusicplayer.network.RetrofitClient.biliAuthApi,
+            cookieJar = com.bilimusicplayer.network.RetrofitClient.getCookieJar(),
+            biliApi = com.bilimusicplayer.network.RetrofitClient.biliApi
+        )
+    }
+
     var selectedTab by remember { mutableStateOf(0) }
     var downloadSubTab by remember { mutableStateOf(0) } // 0=下载中, 1=待下载, 2=已完成
     var localSongs by remember { mutableStateOf<List<Song>>(emptyList()) }
@@ -239,9 +254,18 @@ fun LibraryScreen(navController: NavController) {
     // Auto-scan local Music/BiliMusic directory on first entering the Local tab.
     // Recovers downloaded files that lost their DB entries (e.g. after a
     // destructive Room migration or app reinstall).
+    // Enhanced: syncs favorite cache from API if empty, so bvids are recovered.
     LaunchedEffect(selectedTab) {
         if (selectedTab == 0) {
-            scanAndImportOrphanFiles(database)
+            isScanning = true
+            val (imported, synced) = scanWithFavoriteSync(database, biliRepository, authRepository)
+            isScanning = false
+            if (imported > 0) {
+                snackbarHostState.showSnackbar(
+                    if (synced) "已同步收藏夹并恢复 $imported 首本地歌曲"
+                    else "已恢复 $imported 首本地歌曲"
+                )
+            }
         }
     }
 
@@ -440,11 +464,17 @@ fun LibraryScreen(navController: NavController) {
                                 onClick = {
                                     scope.launch {
                                         isScanning = true
-                                        val imported = scanAndImportOrphanFiles(database)
+                                        val (imported, synced) = scanWithFavoriteSync(
+                                            database, biliRepository, authRepository
+                                        )
                                         isScanning = false
                                         snackbarHostState.showSnackbar(
-                                            if (imported > 0) "已恢复 $imported 首本地歌曲"
-                                            else "未找到新的本地文件"
+                                            when {
+                                                synced && imported > 0 -> "已同步收藏夹并恢复 $imported 首本地歌曲"
+                                                imported > 0 -> "已恢复 $imported 首本地歌曲"
+                                                synced -> "已同步收藏夹缓存，未找到新的本地文件"
+                                                else -> "未找到新的本地文件"
+                                            }
                                         )
                                     }
                                 },
@@ -1171,3 +1201,66 @@ private suspend fun scanAndImportOrphanFiles(database: AppDatabase): Int =
             0
         }
     }
+
+/**
+ * Enhanced scan: if favorite content cache is empty, sync all favorite folders'
+ * content from Bilibili API first, then run the file matching.
+ * This ensures that after a clean install / DB wipe, local files get their real
+ * bvids back — so batch downloads from favorites skip them correctly.
+ *
+ * Returns a Pair of (imported count, whether we needed to sync from API).
+ */
+private suspend fun scanWithFavoriteSync(
+    database: AppDatabase,
+    repository: com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository,
+    authRepository: com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository
+): Pair<Int, Boolean> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+    var synced = false
+    try {
+        // Check if favorite content cache is empty
+        val cachedCount = database.cachedFavoriteMediaDao().getAll().size
+        if (cachedCount == 0) {
+            // Need to sync from API — get userId first
+            val userId = authRepository.getUserId()
+            if (userId != null) {
+                android.util.Log.d("LibraryScan", "缓存为空, 开始从B站同步收藏夹...")
+                synced = true
+
+                // Get all favorite folders
+                val foldersResponse = repository.getFavoriteFolders(userId)
+                if (foldersResponse.isSuccessful && foldersResponse.body()?.code == 0) {
+                    val folders = foldersResponse.body()?.data?.list ?: emptyList()
+                    android.util.Log.d("LibraryScan", "获取到 ${folders.size} 个收藏夹")
+
+                    val contentCacheRepo = com.bilimusicplayer.data.repository.FavoriteContentCacheRepository(database)
+
+                    for (folder in folders) {
+                        try {
+                            // Fetch ALL pages of each folder
+                            val allMedia = repository.getAllFavoriteVideos(folder.id)
+                            if (allMedia.isNotEmpty()) {
+                                contentCacheRepo.cacheMediaList(folder.id, allMedia)
+                                android.util.Log.d("LibraryScan", "  缓存收藏夹 '${folder.title}': ${allMedia.size} 首")
+                            }
+                            // Small delay to be nice to API
+                            kotlinx.coroutines.delay(300)
+                        } catch (e: Exception) {
+                            android.util.Log.e("LibraryScan", "同步收藏夹失败: ${folder.title}", e)
+                        }
+                    }
+                    android.util.Log.d("LibraryScan", "收藏夹同步完成")
+                } else {
+                    android.util.Log.e("LibraryScan", "获取收藏夹列表失败")
+                }
+            } else {
+                android.util.Log.w("LibraryScan", "未登录, 跳过收藏夹同步")
+            }
+        }
+    } catch (e: Exception) {
+        android.util.Log.e("LibraryScan", "收藏夹同步异常", e)
+    }
+
+    // Now run the normal file scan (with hopefully-populated cache)
+    val imported = scanAndImportOrphanFiles(database)
+    Pair(imported, synced)
+}
