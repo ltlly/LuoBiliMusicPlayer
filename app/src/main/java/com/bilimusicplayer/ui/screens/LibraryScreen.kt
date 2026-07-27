@@ -326,20 +326,29 @@ fun LibraryScreen(navController: NavController) {
                     }
                 }
                 1 -> {
-                    // Filter downloads based on sub-tab
-                    // Use distinctUntilChanged on status list to avoid recomposition on every progress update
+                    // Filter downloads based on sub-tab:
+                    // 0 = 活动中 (QUEUED + DOWNLOADING + CONVERTING) — all "in progress"
+                    // 1 = 已完成 (COMPLETED)
+                    // 2 = 失败/取消 (FAILED + CANCELLED + PAUSED) — actionable
                     database.downloadDao().getAllDownloads()
                         .map { downloadList ->
                             when (downloadSubTab) {
-                                0 -> downloadList.filter { it.status == DownloadStatus.DOWNLOADING || it.status == DownloadStatus.CONVERTING }
-                                1 -> downloadList.filter { it.status == DownloadStatus.QUEUED }
-                                2 -> downloadList.filter { it.status == DownloadStatus.COMPLETED }
+                                0 -> downloadList.filter {
+                                    it.status == DownloadStatus.QUEUED ||
+                                    it.status == DownloadStatus.DOWNLOADING ||
+                                    it.status == DownloadStatus.CONVERTING
+                                }
+                                1 -> downloadList.filter { it.status == DownloadStatus.COMPLETED }
+                                2 -> downloadList.filter {
+                                    it.status == DownloadStatus.FAILED ||
+                                    it.status == DownloadStatus.CANCELLED ||
+                                    it.status == DownloadStatus.PAUSED
+                                }
                                 else -> downloadList
                             }
                         }
                         .distinctUntilChanged { old, new ->
                             // Only skip update if the list of IDs+statuses+progress are identical
-                            // This prevents excessive recomposition from rapid DB progress writes
                             old.size == new.size && old.zip(new).all { (a, b) ->
                                 a.songId == b.songId && a.status == b.status &&
                                 a.progress == b.progress
@@ -604,17 +613,17 @@ fun LibraryScreen(navController: NavController) {
                     Tab(
                         selected = downloadSubTab == 0,
                         onClick = { downloadSubTab = 0 },
-                        text = { Text("下载中") }
+                        text = { Text("活动中") }
                     )
                     Tab(
                         selected = downloadSubTab == 1,
                         onClick = { downloadSubTab = 1 },
-                        text = { Text("待下载") }
+                        text = { Text("已完成") }
                     )
                     Tab(
                         selected = downloadSubTab == 2,
                         onClick = { downloadSubTab = 2 },
-                        text = { Text("已完成") }
+                        text = { Text("失败") }
                     )
                 }
             }
@@ -750,10 +759,30 @@ fun LibraryScreen(navController: NavController) {
                                                 )
                                             }
                                         },
+                                        onRetry = {
+                                            scope.launch {
+                                                // Re-enqueue the failed download
+                                                val song = com.bilimusicplayer.data.model.Song(
+                                                    id = download.songId,
+                                                    title = download.title,
+                                                    artist = download.artist,
+                                                    duration = 0,
+                                                    coverUrl = "",
+                                                    cid = 0L,
+                                                    bvid = download.songId,
+                                                    aid = 0L,
+                                                    uploaderId = 0L,
+                                                    uploaderName = download.artist,
+                                                    pubDate = 0L
+                                                )
+                                                val downloadManager = com.bilimusicplayer.service.download.DownloadManager(context)
+                                                downloadManager.startDownload(song, download.audioUrl)
+                                            }
+                                        },
                                         onDelete = {
                                             showDeleteRecordDialog = download
                                         },
-                                        showDelete = downloadSubTab == 2 // Only show delete in completed tab
+                                        showDelete = downloadSubTab == 1 || downloadSubTab == 2 // Show delete in completed and failed tabs
                                     )
                                 }
                             }
@@ -871,6 +900,7 @@ fun DownloadListItem(
     isSelected: Boolean = false,
     onClick: () -> Unit = {},
     onCancel: () -> Unit,
+    onRetry: () -> Unit = {},
     onDelete: () -> Unit = {},
     showDelete: Boolean = false
 ) {
@@ -968,6 +998,25 @@ fun DownloadListItem(
                         download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED -> {
                             IconButton(onClick = onCancel) {
                                 Icon(Icons.Default.Cancel, contentDescription = "取消")
+                            }
+                        }
+                        download.status == DownloadStatus.FAILED || download.status == DownloadStatus.CANCELLED -> {
+                            // Retry button
+                            IconButton(onClick = onRetry) {
+                                Icon(
+                                    Icons.Default.Refresh,
+                                    contentDescription = "重试",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            if (showDelete) {
+                                IconButton(onClick = onDelete) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "删除记录",
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
                         }
                         showDelete && download.status == DownloadStatus.COMPLETED -> {

@@ -57,27 +57,46 @@ fun PlayerScreen(navController: NavController) {
 
     // Check if song is downloaded or cached
     LaunchedEffect(playbackState.currentMediaItem) {
-        val mediaUri = playbackState.currentMediaItem?.requestMetadata?.mediaUri?.toString()
-        if (mediaUri != null) {
-            isDownloaded = mediaUri.startsWith("file://") || mediaUri.startsWith("/")
-            val title = playbackState.currentMediaItem?.mediaMetadata?.title?.toString()
-            if (title != null) {
-                // Single query instead of infinite Flow collect
-                val songs = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    database.songDao().getAllSongsOnce()
-                }
-                val found = songs.find { it.title == title }
-                currentSong = found
-                if (found != null) {
-                    isDownloaded = found.isDownloaded &&
-                                 found.localPath != null &&
-                                 File(found.localPath).exists()
-                }
-            }
-            isCached = !isDownloaded && mediaUri.startsWith("http")
-        } else {
+        val mediaItem = playbackState.currentMediaItem ?: run {
             isDownloaded = false
             isCached = false
+            return@LaunchedEffect
+        }
+        val mediaUri = mediaItem.requestMetadata.mediaUri?.toString() ?: ""
+        val mediaId = mediaItem.mediaId  // bvid
+
+        // Quick check by URI scheme
+        when {
+            mediaUri.startsWith("file://") || mediaUri.startsWith("/") -> {
+                isDownloaded = true
+                isCached = false
+            }
+            mediaUri.startsWith("bili://") -> {
+                // Lazy-resolve placeholder = online
+                isDownloaded = false
+                isCached = false
+            }
+            mediaUri.startsWith("http") -> {
+                isDownloaded = false
+                isCached = true
+            }
+            else -> {
+                isDownloaded = false
+                isCached = false
+            }
+        }
+
+        // Look up song by mediaId (bvid) — O(1) DB query instead of loading all songs
+        if (mediaId.isNotEmpty() && !mediaId.startsWith("local_")) {
+            val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                database.songDao().getSongById(mediaId)
+            }
+            currentSong = found
+            if (found != null && found.isDownloaded && found.localPath != null) {
+                isDownloaded = File(found.localPath).exists()
+            }
+        } else {
+            currentSong = null
         }
     }
 
