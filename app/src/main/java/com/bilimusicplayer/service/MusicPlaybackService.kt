@@ -138,6 +138,17 @@ class MusicPlaybackService : MediaSessionService() {
         return mediaSession
     }
 
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // If nothing is playing, release and stop. Otherwise keep the session alive
+        // so the media button and notification remain functional.
+        if (!player.isPlaying) {
+            player.stop()
+            player.clearMediaItems()
+            stopSelf()
+        }
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         mediaSession?.release()
         mediaSession = null
