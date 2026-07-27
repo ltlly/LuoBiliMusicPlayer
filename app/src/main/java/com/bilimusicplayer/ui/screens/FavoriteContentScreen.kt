@@ -566,7 +566,9 @@ fun FavoriteContentScreen(
                                                     totalCount = totalCount,
                                                     currentPage = currentPage,
                                                     onPlaylistReady = { playlist ->
-                                                        BiliMusicApplication.musicPlayerController.setMediaItems(playlist, 0)
+                                                        // Start from the clicked song's position in the full list
+                                                        val startIdx = mediaList.indexOfFirst { it.bvid == media.bvid }.coerceAtLeast(0)
+                                                        BiliMusicApplication.musicPlayerController.setMediaItems(playlist, startIdx)
                                                         navController.navigate("player")
                                                     },
                                                     onSongLoaded = { mediaItem ->
@@ -897,11 +899,18 @@ private fun fixImageUrl(url: String): String {
 
 /**
  * Load playlist and start playing from the clicked song.
- * Optimized to minimize API calls:
- * 1. Downloaded songs use local file path (0 API calls)
- * 2. CachedPlaybackUrl cache for recently resolved songs (0 API calls, 6h validity)
- * 3. API calls only for uncached non-downloaded songs, rate-limited by user setting
- * 4. Auto-expands to load ALL songs in the folder
+ *
+ * ** Lazy Resolution Strategy (v2) **
+ * Instead of fetching audio URLs for every song upfront (which wastes bandwidth),
+ * we build the queue using lazy placeholder URIs ("bili://bvid"). The actual
+ * streaming URL is resolved on-demand by BiliAudioResolver when ExoPlayer
+ * needs to buffer a specific song.
+ *
+ * This means:
+ * - Queue creation is nearly instant (no per-song API calls)
+ * - Only songs that actually play consume bandwidth
+ * - Downloaded songs still use local files directly
+ * - The background job now only fetches metadata for subsequent pages (not URLs)
  */
 suspend fun loadPlaylistWithCache(
     cacheRepository: com.bilimusicplayer.data.repository.PlayQueueCacheRepository,
@@ -920,11 +929,9 @@ suspend fun loadPlaylistWithCache(
 
     val context = com.bilimusicplayer.BiliMusicApplication.instance
     val database = com.bilimusicplayer.data.local.AppDatabase.getDatabase(context)
-    val cachedUrlDao = database.cachedPlaybackUrlDao()
     val songDao = database.songDao()
-    val settingsManager = com.bilimusicplayer.service.download.DownloadSettingsManager(context)
 
-    // Step 1: Batch-query all downloaded songs (0 API calls)
+    // Step 1: Batch-query downloaded songs to use local files directly
     val allBvids = mediaList.map { it.bvid }
     val downloadedSongsMap = mutableMapOf<String, com.bilimusicplayer.data.model.Song>()
     allBvids.chunked(500).forEach { chunk ->
@@ -936,111 +943,50 @@ suspend fun loadPlaylistWithCache(
     }
     Log.d("PlaylistCache", "已下载歌曲: ${downloadedSongsMap.size}/${mediaList.size}")
 
-    // Step 2: Batch-query cached playback URLs (0 API calls)
-    val cachedUrlsMap = mutableMapOf<String, com.bilimusicplayer.data.model.CachedPlaybackUrl>()
-    allBvids.chunked(500).forEach { chunk ->
-        cachedUrlDao.getCachedUrls(chunk)
-            .filter { it.expiresAt > System.currentTimeMillis() }
-            .forEach { cachedUrlsMap[it.bvid] = it }
-    }
-    Log.d("PlaylistCache", "URL缓存命中: ${cachedUrlsMap.size}/${mediaList.size}")
+    // Step 2: Build the full playlist instantly using lazy placeholders.
+    // Downloaded songs get their local file URI; everything else gets a
+    // "bili://bvid" placeholder that BiliAudioResolver resolves at play time.
+    val fullPlaylist = mutableListOf<MediaItem>()
 
-    // Step 3: Load the initial batch (clicked song + a few nearby) for immediate playback
-    val initialPlaylist = mutableListOf<MediaItem>()
-    val initialBatchSize = 3.coerceAtMost(mediaList.size - clickedIndex)
-
-    for (i in clickedIndex until (clickedIndex + initialBatchSize)) {
-        val media = mediaList[i]
-        try {
-            val mediaItem = resolveMediaItem(media, downloadedSongsMap, cachedUrlsMap, biliRepository, cachedUrlDao)
-            if (mediaItem != null) {
-                initialPlaylist.add(mediaItem)
-            }
-        } catch (e: Exception) {
-            Log.e("PlaylistCache", "初始加载失败: ${media.title}", e)
-            continue
+    for (media in mediaList) {
+        val downloaded = downloadedSongsMap[media.bvid]
+        if (downloaded != null) {
+            fullPlaylist.add(buildLocalMediaItem(downloaded))
+        } else {
+            fullPlaylist.add(
+                com.bilimusicplayer.service.BiliAudioResolver.buildLazyMediaItem(
+                    bvid = media.bvid,
+                    title = media.title,
+                    artist = media.upper.name,
+                    coverUrl = fixImageUrl(media.cover),
+                    duration = media.duration
+                )
+            )
         }
     }
 
-    if (initialPlaylist.isEmpty()) {
-        throw Exception("无法获取播放链接，请稍后重试（可能是请求过于频繁）")
+    if (fullPlaylist.isEmpty()) {
+        throw Exception("收藏夹为空")
     }
 
-    Log.d("PlaylistCache", "调用onPlaylistReady, 共${initialPlaylist.size}首")
-    onPlaylistReady(initialPlaylist)
+    Log.d("PlaylistCache", "队列已创建: ${fullPlaylist.size}首 (本地:${downloadedSongsMap.size}, 懒加载:${fullPlaylist.size - downloadedSongsMap.size}), 开始位置:$clickedIndex")
 
-    // Step 4: Auto-expand in background — load ALL remaining songs
-    val apiDelayMs = settingsManager.getApiDelayMs()
-    Log.d("PlaylistCache", "API限速: ${settingsManager.getApiRateLimit()}次/分钟, 间隔=${apiDelayMs}ms")
+    // Deliver the FULL playlist at once — ExoPlayer gets all items immediately
+    // but only buffers the current + next song (triggering lazy resolution).
+    onPlaylistReady(fullPlaylist)
 
-    val bgJob = BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
-        var loadedCount = 0
-        var apiCallCount = 0
-        var lastApiCallTime = 0L
-
-        // Helper to load one media item with rate limiting for API calls only
-        suspend fun loadWithRateLimit(media: FavoriteMedia): MediaItem? {
-            // Downloaded songs → instant, no API
-            val downloaded = downloadedSongsMap[media.bvid]
-            if (downloaded != null) {
-                return buildLocalMediaItem(downloaded)
-            }
-
-            // Cached URL → instant, no API
-            val cached = cachedUrlsMap[media.bvid]
-            if (cached != null) {
-                return buildMediaItem(cached.audioUrl, cached.title, cached.artist, fixImageUrl(media.cover), media.bvid)
-            }
-
-            // API call needed → apply rate limiting
-            val now = System.currentTimeMillis()
-            val elapsed = now - lastApiCallTime
-            if (elapsed < apiDelayMs) {
-                kotlinx.coroutines.delay(apiDelayMs - elapsed)
-            }
-            lastApiCallTime = System.currentTimeMillis()
-
-            val result = resolveMediaItemFromApi(biliRepository, cachedUrlDao, media)
-            if (result != null) apiCallCount += 2 // getVideoDetail + getPlayUrl
-            return result
-        }
-
-        // Forward: load all songs after the initial batch
-        for (i in (clickedIndex + initialBatchSize) until mediaList.size) {
-            try {
-                val mediaItem = loadWithRateLimit(mediaList[i]) ?: continue
-                withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
-                loadedCount++
-            } catch (e: Exception) {
-                Log.e("PlaylistCache", "加载失败: ${mediaList[i].title}", e)
-            }
-        }
-
-        // Backward: load songs before the clicked position
-        for (i in 0 until clickedIndex) {
-            try {
-                val mediaItem = loadWithRateLimit(mediaList[i]) ?: continue
-                withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
-                loadedCount++
-            } catch (e: Exception) {
-                Log.e("PlaylistCache", "加载失败: ${mediaList[i].title}", e)
-            }
-        }
-
-        // Load songs from subsequent pages if the folder has more than what's loaded
-        if (mediaList.size < totalCount) {
+    // Step 3: If the folder has more pages than what's loaded, fetch their
+    // metadata in the background and append lazy items to the queue.
+    if (mediaList.size < totalCount) {
+        val bgJob = BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
             var nextPage = currentPage + 1
             var remainingToLoad = totalCount - mediaList.size
+            var loadedCount = 0
 
             while (remainingToLoad > 0) {
                 try {
-                    // Rate limit the page fetch too
-                    val now = System.currentTimeMillis()
-                    val elapsed = now - lastApiCallTime
-                    if (elapsed < apiDelayMs) {
-                        kotlinx.coroutines.delay(apiDelayMs - elapsed)
-                    }
-                    lastApiCallTime = System.currentTimeMillis()
+                    // Small delay between page fetches
+                    kotlinx.coroutines.delay(500)
 
                     val pageResponse = biliRepository.getFavoriteResources(
                         mediaId = folderId, pageNumber = nextPage, pageSize = 20
@@ -1049,13 +995,20 @@ suspend fun loadPlaylistWithCache(
                     if (pageResponse.isSuccessful && pageResponse.body()?.code == 0) {
                         val nextPageMedias = pageResponse.body()?.data?.medias ?: emptyList()
                         for (nextMedia in nextPageMedias) {
-                            try {
-                                val mediaItem = loadWithRateLimit(nextMedia) ?: continue
-                                withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
-                                loadedCount++
-                            } catch (e: Exception) {
-                                continue
+                            val downloaded = downloadedSongsMap[nextMedia.bvid]
+                            val mediaItem = if (downloaded != null) {
+                                buildLocalMediaItem(downloaded)
+                            } else {
+                                com.bilimusicplayer.service.BiliAudioResolver.buildLazyMediaItem(
+                                    bvid = nextMedia.bvid,
+                                    title = nextMedia.title,
+                                    artist = nextMedia.upper.name,
+                                    coverUrl = fixImageUrl(nextMedia.cover),
+                                    duration = nextMedia.duration
+                                )
                             }
+                            withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
+                            loadedCount++
                         }
                         remainingToLoad -= nextPageMedias.size
                         nextPage++
@@ -1067,13 +1020,13 @@ suspend fun loadPlaylistWithCache(
                     break
                 }
             }
+
+            Log.d("PlaylistCache", "后续页加载完成: +${loadedCount}首 (0 音频URL请求)")
         }
 
-        Log.d("PlaylistCache", "播放列表加载完成: 共${loadedCount}首, API请求${apiCallCount}次")
+        // Register the background job so it gets cancelled on next play action
+        BiliMusicApplication.musicPlayerController.setQueueLoadingJob(bgJob)
     }
-
-    // Register the background job so it gets cancelled on next play action
-    BiliMusicApplication.musicPlayerController.setQueueLoadingJob(bgJob)
 }
 
 /**
