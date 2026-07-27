@@ -505,12 +505,35 @@ class MusicPlayerController(private val context: Context) {
                     if (uri.startsWith("file://") || uri.startsWith("/")) {
                         val path = if (uri.startsWith("file://")) uri.removePrefix("file://") else uri
                         if (!java.io.File(path).exists()) continue
+                    } else if (uri.startsWith("bili://")) {
+                        // Lazy-resolve placeholder — always valid, resolved at play time
                     } else if (uri.startsWith("http")) {
                         // Online URL: check if we have a non-expired cached URL
                         if (saved.mediaId.isNotEmpty()) {
                             val cached = database.cachedPlaybackUrlDao().getCachedUrl(saved.mediaId)
                             if (cached == null || cached.expiresAt < System.currentTimeMillis()) {
-                                // URL likely expired — skip (will be re-resolved if user plays)
+                                // URL expired — convert to lazy placeholder for on-demand resolution
+                                val lazyUri = "bili://${saved.mediaId}"
+                                mediaItems.add(
+                                    MediaItem.Builder()
+                                        .setMediaId(saved.mediaId)
+                                        .setUri(lazyUri)
+                                        .setMediaMetadata(
+                                            MediaMetadata.Builder()
+                                                .setTitle(saved.title)
+                                                .setArtist(saved.artist)
+                                                .setArtworkUri(
+                                                    if (saved.artworkUri.isNotEmpty()) android.net.Uri.parse(saved.artworkUri) else null
+                                                )
+                                                .build()
+                                        )
+                                        .setRequestMetadata(
+                                            MediaItem.RequestMetadata.Builder()
+                                                .setMediaUri(android.net.Uri.parse(lazyUri))
+                                                .build()
+                                        )
+                                        .build()
+                                )
                                 continue
                             }
                         }

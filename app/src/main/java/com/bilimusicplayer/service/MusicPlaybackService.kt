@@ -71,9 +71,16 @@ class MusicPlaybackService : MediaSessionService() {
             .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 
         // Create data source factory that supports both HTTP and local files with cache
-        val dataSourceFactory = DefaultDataSource.Factory(this, cacheDataSourceFactory)
+        val baseDataSourceFactory = DefaultDataSource.Factory(this, cacheDataSourceFactory)
 
-        // Initialize ExoPlayer with cached data source
+        // Wrap with BiliAudioResolver: intercepts "bili://bvid" placeholder URIs
+        // and lazily resolves them to real audio URLs only when playback is needed.
+        // This eliminates upfront API calls for the entire queue.
+        val dataSourceFactory = BiliAudioResolver.createResolvingDataSourceFactory(
+            this, baseDataSourceFactory
+        )
+
+        // Initialize ExoPlayer with lazy-resolving data source
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(this).setDataSourceFactory(dataSourceFactory))
             .setAudioAttributes(
