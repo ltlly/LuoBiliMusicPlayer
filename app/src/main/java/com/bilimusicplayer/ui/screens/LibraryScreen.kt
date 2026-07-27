@@ -251,20 +251,63 @@ fun LibraryScreen(navController: NavController) {
         searchQuery = ""
     }
 
+    // --- Storage permission for reading Music/BiliMusic (Android 13+) ---
+    val storagePermission = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        android.Manifest.permission.READ_MEDIA_AUDIO
+    } else {
+        android.Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+    var hasStoragePermission by remember {
+        mutableStateOf(
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, storagePermission
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+    }
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        hasStoragePermission = granted
+        if (granted && selectedTab == 0) {
+            // Permission just granted — trigger scan
+            scope.launch {
+                isScanning = true
+                val (imported, synced) = scanWithFavoriteSync(database, biliRepository, authRepository)
+                isScanning = false
+                snackbarHostState.showSnackbar(
+                    when {
+                        synced && imported > 0 -> "已同步收藏夹并恢复 $imported 首本地歌曲"
+                        imported > 0 -> "已恢复 $imported 首本地歌曲"
+                        synced -> "已同步收藏夹缓存"
+                        else -> "未找到新的本地文件"
+                    }
+                )
+            }
+        } else if (!granted) {
+            scope.launch {
+                snackbarHostState.showSnackbar("需要存储权限才能扫描本地音乐文件")
+            }
+        }
+    }
+
     // Auto-scan local Music/BiliMusic directory on first entering the Local tab.
     // Recovers downloaded files that lost their DB entries (e.g. after a
     // destructive Room migration or app reinstall).
     // Enhanced: syncs favorite cache from API if empty, so bvids are recovered.
     LaunchedEffect(selectedTab) {
         if (selectedTab == 0) {
-            isScanning = true
-            val (imported, synced) = scanWithFavoriteSync(database, biliRepository, authRepository)
-            isScanning = false
-            if (imported > 0) {
-                snackbarHostState.showSnackbar(
-                    if (synced) "已同步收藏夹并恢复 $imported 首本地歌曲"
-                    else "已恢复 $imported 首本地歌曲"
-                )
+            if (!hasStoragePermission) {
+                permissionLauncher.launch(storagePermission)
+            } else {
+                isScanning = true
+                val (imported, synced) = scanWithFavoriteSync(database, biliRepository, authRepository)
+                isScanning = false
+                if (imported > 0) {
+                    snackbarHostState.showSnackbar(
+                        if (synced) "已同步收藏夹并恢复 $imported 首本地歌曲"
+                        else "已恢复 $imported 首本地歌曲"
+                    )
+                }
             }
         }
     }
@@ -458,24 +501,29 @@ fun LibraryScreen(navController: NavController) {
                             Icon(Icons.Default.Delete, "删除", tint = MaterialTheme.colorScheme.error)
                         }
                     } else {
-                        // Rescan local files (only on Local tab)
+                        // Rescan local files (only on Local tab) — force full sync
                         if (selectedTab == 0) {
                             IconButton(
                                 onClick = {
-                                    scope.launch {
-                                        isScanning = true
-                                        val (imported, synced) = scanWithFavoriteSync(
-                                            database, biliRepository, authRepository
-                                        )
-                                        isScanning = false
-                                        snackbarHostState.showSnackbar(
-                                            when {
-                                                synced && imported > 0 -> "已同步收藏夹并恢复 $imported 首本地歌曲"
-                                                imported > 0 -> "已恢复 $imported 首本地歌曲"
-                                                synced -> "已同步收藏夹缓存，未找到新的本地文件"
-                                                else -> "未找到新的本地文件"
-                                            }
-                                        )
+                                    if (!hasStoragePermission) {
+                                        permissionLauncher.launch(storagePermission)
+                                    } else {
+                                        scope.launch {
+                                            isScanning = true
+                                            val (imported, synced) = scanWithFavoriteSync(
+                                                database, biliRepository, authRepository,
+                                                forceSync = true
+                                            )
+                                            isScanning = false
+                                            snackbarHostState.showSnackbar(
+                                                when {
+                                                    synced && imported > 0 -> "已同步收藏夹并恢复 $imported 首本地歌曲"
+                                                    imported > 0 -> "已恢复 $imported 首本地歌曲"
+                                                    synced -> "已同步收藏夹缓存，未找到新的本地文件"
+                                                    else -> "未找到新的本地文件"
+                                                }
+                                            )
+                                        }
                                     }
                                 },
                                 enabled = !isScanning
@@ -1203,27 +1251,33 @@ private suspend fun scanAndImportOrphanFiles(database: AppDatabase): Int =
     }
 
 /**
- * Enhanced scan: if favorite content cache is empty, sync all favorite folders'
- * content from Bilibili API first, then run the file matching.
- * This ensures that after a clean install / DB wipe, local files get their real
- * bvids back — so batch downloads from favorites skip them correctly.
+ * Enhanced scan: syncs favorite content from Bilibili API to fill the
+ * `cached_favorite_medias` table, then matches local files against the cache.
  *
- * Returns a Pair of (imported count, whether we needed to sync from API).
+ * @param forceSync If true, always pull fresh data from API (used for manual scan button).
+ *                  If false, only sync when cache is insufficient to cover local files.
+ *
+ * Returns a Pair of (imported/upgraded count, whether API sync was performed).
  */
 private suspend fun scanWithFavoriteSync(
     database: AppDatabase,
     repository: com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository,
-    authRepository: com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository
+    authRepository: com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository,
+    forceSync: Boolean = false
 ): Pair<Int, Boolean> = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
     var synced = false
     try {
-        // Check if favorite content cache is empty
+        // Determine if we need to sync: either forced, or cache is too small
+        // compared to the number of unmatched local_* placeholder songs
         val cachedCount = database.cachedFavoriteMediaDao().getAll().size
-        if (cachedCount == 0) {
+        val unsyncedCount = database.songDao().countUnsyncedLocalSongs()
+        val needsSync = forceSync || cachedCount == 0 || unsyncedCount > 10
+
+        if (needsSync) {
             // Need to sync from API — get userId first
             val userId = authRepository.getUserId()
             if (userId != null) {
-                android.util.Log.d("LibraryScan", "缓存为空, 开始从B站同步收藏夹...")
+                android.util.Log.d("LibraryScan", "开始从B站同步收藏夹 (force=$forceSync, cached=$cachedCount, unsynced=$unsyncedCount)...")
                 synced = true
 
                 // Get all favorite folders
