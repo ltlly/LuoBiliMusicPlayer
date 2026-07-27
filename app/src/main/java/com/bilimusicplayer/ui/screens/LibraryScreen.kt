@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.TextFieldDefaults
@@ -373,7 +374,7 @@ fun LibraryScreen(navController: NavController) {
                             isSearchActive = false
                             searchQuery = ""
                         }) {
-                            Icon(Icons.Default.ArrowBack, "关闭搜索")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭搜索")
                         }
                     } else if (isSelectionMode) {
                         IconButton(onClick = {
@@ -615,6 +616,7 @@ fun LibraryScreen(navController: NavController) {
                                                     }
 
                                                     MediaItem.Builder()
+                                                        .setMediaId(s.bvid)
                                                         .setUri(uri)
                                                         .setMediaMetadata(
                                                             MediaMetadata.Builder()

@@ -1,21 +1,20 @@
 package com.bilimusicplayer.ui.screens
 
-import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -52,6 +51,10 @@ fun PlayerScreen(navController: NavController) {
     var isDownloaded by remember { mutableStateOf(false) }
     var isCached by remember { mutableStateOf(false) }
 
+    // Queue position (e.g. "3/15") — recomputed whenever playback state changes
+    val queueIndex = remember(playbackState) { playerController.getCurrentMediaItemIndex() }
+    val queueSize = remember(playbackState) { playerController.getMediaItemCount() }
+
     // Check if song is downloaded or cached
     LaunchedEffect(playbackState.currentMediaItem) {
         val mediaUri = playbackState.currentMediaItem?.requestMetadata?.mediaUri?.toString()
@@ -87,25 +90,55 @@ fun PlayerScreen(navController: NavController) {
         }
     }
 
-    // Modern gradient background
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-                        MaterialTheme.colorScheme.background,
-                        MaterialTheme.colorScheme.background
-                    )
-                )
+    val artworkUri = playbackState.currentMediaItem?.mediaMetadata?.artworkUri
+
+    // Immersive background: cover art blurred into a full-screen backdrop,
+    // tinted with a scrim so foreground content stays legible.
+    // (Modifier.blur is a graceful no-op below API 31.)
+    Box(modifier = Modifier.fillMaxSize()) {
+        if (artworkUri != null) {
+            AsyncImage(
+                model = artworkUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .blur(80.dp)
             )
-    ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.82f),
+                                MaterialTheme.colorScheme.background
+                            )
+                        )
+                    )
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
+                                MaterialTheme.colorScheme.background,
+                                MaterialTheme.colorScheme.background
+                            )
+                        )
+                    )
+            )
+        }
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(horizontal = 24.dp),
+                .padding(horizontal = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             // Top bar
@@ -127,60 +160,78 @@ fun PlayerScreen(navController: NavController) {
                     )
                 }
 
-                Text(
-                    text = "正在播放",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        text = "正在播放",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (queueSize > 0) {
+                        Text(
+                            text = "${queueIndex + 1}/$queueSize",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
 
                 IconButton(
                     onClick = { showPlayQueue = true }
                 ) {
                     Icon(
-                        imageVector = Icons.Default.QueueMusic,
+                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
                         contentDescription = "播放队列",
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
 
-            // Large album cover with shadow
+            // Large album cover with generous 32dp corners and soft shadow
             Card(
                 modifier = Modifier
-                    .size(320.dp)
+                    .fillMaxWidth(0.86f)
+                    .aspectRatio(1f)
                     .shadow(
-                        elevation = 24.dp,
-                        shape = RoundedCornerShape(24.dp),
-                        spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                        elevation = 32.dp,
+                        shape = RoundedCornerShape(32.dp),
+                        spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                        ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                     ),
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(32.dp),
                 elevation = CardDefaults.cardElevation(0.dp)
             ) {
                 Box(
                     modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (playbackState.currentMediaItem?.mediaMetadata?.artworkUri != null) {
+                    if (artworkUri != null) {
                         AsyncImage(
-                            model = playbackState.currentMediaItem?.mediaMetadata?.artworkUri,
+                            model = artworkUri,
                             contentDescription = "封面",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
                     } else {
-                        Icon(
-                            imageVector = Icons.Default.MusicNote,
-                            contentDescription = null,
-                            modifier = Modifier.size(120.dp),
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.MusicNote,
+                                contentDescription = null,
+                                modifier = Modifier.size(120.dp),
+                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                            )
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(48.dp))
+            Spacer(modifier = Modifier.height(36.dp))
 
             // Song info
             Column(
@@ -189,15 +240,13 @@ fun PlayerScreen(navController: NavController) {
             ) {
                 Text(
                     text = playbackState.currentMediaItem?.mediaMetadata?.title?.toString() ?: "未播放",
-                    style = MaterialTheme.typography.headlineMedium.copy(
-                        fontWeight = FontWeight.Bold
-                    ),
+                    style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onBackground,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(6.dp))
                 Text(
                     text = playbackState.currentMediaItem?.mediaMetadata?.artist?.toString() ?: "",
                     style = MaterialTheme.typography.bodyLarge,
@@ -206,60 +255,42 @@ fun PlayerScreen(navController: NavController) {
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Spacer(modifier = Modifier.height(12.dp))
 
-                // Download/Cache status with modern design
-                Row(
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (isDownloaded) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.padding(horizontal = 4.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CloudDone,
-                                    contentDescription = "已下载",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "本地播放",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                // Download/Cache status chip
+                if (isDownloaded || isCached) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isDownloaded) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.secondaryContainer
                         }
-                    } else if (isCached) {
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                            modifier = Modifier.padding(horizontal = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.CloudQueue,
-                                    contentDescription = "可能已缓存",
-                                    tint = MaterialTheme.colorScheme.secondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = "在线播放",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.secondary
-                                )
-                            }
+                            Icon(
+                                imageVector = if (isDownloaded) Icons.Default.CloudDone else Icons.Default.CloudQueue,
+                                contentDescription = null,
+                                tint = if (isDownloaded) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.secondary
+                                },
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = if (isDownloaded) "本地播放" else "在线播放",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isDownloaded) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.secondary
+                                }
+                            )
                         }
                     }
                 }
@@ -267,7 +298,7 @@ fun PlayerScreen(navController: NavController) {
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Progress bar with modern style
+            // Slim progress slider — thin 3dp track, compact 12dp thumb
             Column(modifier = Modifier.fillMaxWidth()) {
                 val progress = if (duration > 0) {
                     currentPosition.toFloat() / duration.toFloat()
@@ -281,23 +312,45 @@ fun PlayerScreen(navController: NavController) {
                         currentPosition = newPosition
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = MaterialTheme.colorScheme.primary,
-                        inactiveTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                    ),
                     thumb = {
                         Box(
                             modifier = Modifier
-                                .size(14.dp)
+                                .size(12.dp)
                                 .clip(CircleShape)
                                 .background(MaterialTheme.colorScheme.primary)
                         )
+                    },
+                    track = { sliderState ->
+                        val range = sliderState.valueRange.endInclusive - sliderState.valueRange.start
+                        val fraction = if (range > 0f) {
+                            ((sliderState.value - sliderState.valueRange.start) / range).coerceIn(0f, 1f)
+                        } else 0f
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(3.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant)
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(fraction)
+                                    .height(3.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary)
+                            )
+                        }
                     }
                 )
 
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .offset(y = (-6).dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
@@ -313,13 +366,11 @@ fun PlayerScreen(navController: NavController) {
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Playback controls with modern design
+            // Playback controls — dominant play/pause, quieter skip buttons
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -332,7 +383,7 @@ fun PlayerScreen(navController: NavController) {
                     Icon(
                         Icons.Default.Shuffle,
                         contentDescription = "随机播放",
-                        modifier = Modifier.size(26.dp),
+                        modifier = Modifier.size(24.dp),
                         tint = if (playbackState.shuffleMode) {
                             MaterialTheme.colorScheme.primary
                         } else {
@@ -348,23 +399,12 @@ fun PlayerScreen(navController: NavController) {
                     Icon(
                         Icons.Default.SkipPrevious,
                         contentDescription = "上一首",
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(36.dp),
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
 
-                // Main play/pause button with pulsing animation
-                val infiniteTransition = rememberInfiniteTransition(label = "pulse")
-                val scale by infiniteTransition.animateFloat(
-                    initialValue = 1f,
-                    targetValue = if (playbackState.isPlaying) 1.05f else 1f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(1000, easing = FastOutSlowInEasing),
-                        repeatMode = RepeatMode.Reverse
-                    ),
-                    label = "scale"
-                )
-
+                // Main play/pause button — static, no pulse animation
                 FilledIconButton(
                     onClick = {
                         if (playbackState.isPlaying) {
@@ -373,12 +413,8 @@ fun PlayerScreen(navController: NavController) {
                             playerController.play()
                         }
                     },
-                    modifier = Modifier
-                        .size(72.dp)
-                        .graphicsLayer {
-                            scaleX = scale
-                            scaleY = scale
-                        },
+                    modifier = Modifier.size(80.dp),
+                    shape = CircleShape,
                     colors = IconButtonDefaults.filledIconButtonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary
@@ -387,7 +423,7 @@ fun PlayerScreen(navController: NavController) {
                     Icon(
                         if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(44.dp)
                     )
                 }
 
@@ -398,7 +434,7 @@ fun PlayerScreen(navController: NavController) {
                     Icon(
                         Icons.Default.SkipNext,
                         contentDescription = "下一首",
-                        modifier = Modifier.size(44.dp),
+                        modifier = Modifier.size(36.dp),
                         tint = MaterialTheme.colorScheme.onBackground
                     )
                 }
@@ -420,7 +456,7 @@ fun PlayerScreen(navController: NavController) {
                             else -> Icons.Default.Repeat
                         },
                         contentDescription = "循环播放",
-                        modifier = Modifier.size(26.dp),
+                        modifier = Modifier.size(24.dp),
                         tint = if (playbackState.repeatMode != Player.REPEAT_MODE_OFF) {
                             MaterialTheme.colorScheme.primary
                         } else {
@@ -430,7 +466,7 @@ fun PlayerScreen(navController: NavController) {
                 }
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(24.dp))
         }
     }
 

@@ -6,13 +6,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.*
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -276,7 +280,7 @@ fun FavoriteContentScreen(
                             isSearchActive = false
                             searchQuery = ""
                         }) {
-                            Icon(Icons.Default.ArrowBack, "关闭搜索")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭搜索")
                         }
                     } else if (isSelectionMode) {
                         IconButton(onClick = {
@@ -287,7 +291,7 @@ fun FavoriteContentScreen(
                         }
                     } else {
                         IconButton(onClick = { navController.popBackStack() }) {
-                            Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                         }
                     }
                 },
@@ -628,7 +632,9 @@ fun MediaItem(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
             .clickable(enabled = isSelectionMode, onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
         tonalElevation = 1.dp,
         color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     ) {
@@ -658,8 +664,10 @@ fun MediaItem(
                     .scale(Scale.FIT)
                     .build(),
                 contentDescription = "封面",
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(60.dp, 45.dp)
+                    .clip(RoundedCornerShape(8.dp))
             )
 
             Spacer(modifier = Modifier.width(8.dp))
@@ -965,7 +973,7 @@ suspend fun loadPlaylistWithCache(
     val apiDelayMs = settingsManager.getApiDelayMs()
     Log.d("PlaylistCache", "API限速: ${settingsManager.getApiRateLimit()}次/分钟, 间隔=${apiDelayMs}ms")
 
-    BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
+    val bgJob = BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
         var loadedCount = 0
         var apiCallCount = 0
         var lastApiCallTime = 0L
@@ -981,7 +989,7 @@ suspend fun loadPlaylistWithCache(
             // Cached URL → instant, no API
             val cached = cachedUrlsMap[media.bvid]
             if (cached != null) {
-                return buildMediaItem(cached.audioUrl, cached.title, cached.artist, fixImageUrl(media.cover))
+                return buildMediaItem(cached.audioUrl, cached.title, cached.artist, fixImageUrl(media.cover), media.bvid)
             }
 
             // API call needed → apply rate limiting
@@ -1063,6 +1071,9 @@ suspend fun loadPlaylistWithCache(
 
         Log.d("PlaylistCache", "播放列表加载完成: 共${loadedCount}首, API请求${apiCallCount}次")
     }
+
+    // Register the background job so it gets cancelled on next play action
+    BiliMusicApplication.musicPlayerController.setQueueLoadingJob(bgJob)
 }
 
 /**
@@ -1089,7 +1100,7 @@ private suspend fun resolveMediaItem(
     val cached = cachedUrlsMap[media.bvid]
     if (cached != null) {
         Log.d("PlaylistCache", "URL缓存: ${media.title}")
-        return buildMediaItem(cached.audioUrl, cached.title, cached.artist, fixImageUrl(media.cover))
+        return buildMediaItem(cached.audioUrl, cached.title, cached.artist, fixImageUrl(media.cover), media.bvid)
     }
 
     // Priority 3: API call
@@ -1132,7 +1143,7 @@ private suspend fun resolveMediaItemFromApi(
         )
     } catch (_: Exception) {}
 
-    return buildMediaItem(audioUrl, media.title, media.upper.name, fixImageUrl(media.cover))
+    return buildMediaItem(audioUrl, media.title, media.upper.name, fixImageUrl(media.cover), media.bvid)
 }
 
 /**
@@ -1141,6 +1152,7 @@ private suspend fun resolveMediaItemFromApi(
 private fun buildLocalMediaItem(song: com.bilimusicplayer.data.model.Song): MediaItem {
     val uri = android.net.Uri.fromFile(java.io.File(song.localPath!!))
     return MediaItem.Builder()
+        .setMediaId(song.bvid)
         .setUri(uri)
         .setMediaMetadata(
             MediaMetadata.Builder()
@@ -1157,8 +1169,9 @@ private fun buildLocalMediaItem(song: com.bilimusicplayer.data.model.Song): Medi
         .build()
 }
 
-private fun buildMediaItem(audioUrl: String, title: String, artist: String, coverUrl: String): MediaItem {
+private fun buildMediaItem(audioUrl: String, title: String, artist: String, coverUrl: String, bvid: String = ""): MediaItem {
     return MediaItem.Builder()
+        .setMediaId(bvid)
         .setUri(audioUrl)
         .setMediaMetadata(
             MediaMetadata.Builder()

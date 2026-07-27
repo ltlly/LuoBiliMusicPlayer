@@ -1,16 +1,20 @@
 package com.bilimusicplayer.ui.components
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
@@ -102,7 +106,7 @@ fun PlayQueueSheet(
                     )
                     if (queueSize > 0) {
                         Text(
-                            text = "$queueSize 首歌曲",
+                            text = "${currentIndex + 1}/$queueSize 首歌曲",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -173,13 +177,6 @@ fun PlayQueueSheet(
                                 showDeleteDialog = true
                             }
                         )
-
-                        if (index < queueItems.size - 1) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(horizontal = 8.dp),
-                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                            )
-                        }
                     }
 
                     // Bottom spacer
@@ -208,10 +205,11 @@ private fun QueueItem(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(12.dp))
             .clickable(onClick = onClick),
-        tonalElevation = if (isCurrent) 2.dp else 0.dp,
         color = if (isCurrent) {
-            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
         } else {
             MaterialTheme.colorScheme.surface
         }
@@ -219,24 +217,54 @@ private fun QueueItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 8.dp, horizontal = 8.dp),
+                .height(IntrinsicSize.Min),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Index number
-            Text(
-                text = index.toString(),
-                style = MaterialTheme.typography.bodyMedium,
-                color = if (isCurrent) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurfaceVariant
-                },
-                modifier = Modifier.width(32.dp)
+            // Colored accent bar marking the currently playing track
+            Box(
+                modifier = Modifier
+                    .width(3.dp)
+                    .fillMaxHeight()
+                    .background(
+                        if (isCurrent) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0f)
+                        }
+                    )
             )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Index number or playing indicator
+            Box(
+                modifier = Modifier.width(28.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isPlaying) {
+                    Icon(
+                        imageVector = Icons.Default.GraphicEq,
+                        contentDescription = "正在播放",
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                } else {
+                    Text(
+                        text = index.toString(),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (isCurrent) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        }
+                    )
+                }
+            }
 
             // Album art
             Card(
-                modifier = Modifier.size(48.dp)
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(8.dp)
             ) {
                 if (artworkUri != null) {
                     AsyncImage(
@@ -247,13 +275,16 @@ private fun QueueItem(
                     )
                 } else {
                     Box(
-                        modifier = Modifier.fillMaxSize(),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = Icons.Default.MusicNote,
                             contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }
@@ -263,11 +294,15 @@ private fun QueueItem(
 
             // Song info
             Column(
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(vertical = 8.dp)
             ) {
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal
+                    ),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     color = if (isCurrent) {
@@ -285,27 +320,30 @@ private fun QueueItem(
                 )
             }
 
-            // Playing indicator or delete button
-            if (isPlaying) {
-                Icon(
-                    imageVector = Icons.Default.GraphicEq,
-                    contentDescription = "正在播放",
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(24.dp)
-                )
-            } else {
+            // Delete button (hidden for the currently playing track)
+            if (!isCurrent) {
                 IconButton(
                     onClick = onDelete,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "删除",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
+
+            // Drag handle affordance for manual reordering
+            Icon(
+                imageVector = Icons.Default.DragHandle,
+                contentDescription = "拖拽排序",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .padding(end = 12.dp)
+                    .size(20.dp)
+            )
         }
     }
 }
