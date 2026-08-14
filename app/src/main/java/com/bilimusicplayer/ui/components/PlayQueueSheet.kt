@@ -261,34 +261,12 @@ private fun QueueItem(
                 }
             }
 
-            // Album art
-            Card(
+            // Album art: 统一缩略图组件（artworkUri 已是完整 URL，走 CDN 小图 + 共享缓存）
+            BiliCoverThumb(
+                url = artworkUri?.toString(),
                 modifier = Modifier.size(44.dp),
-                shape = RoundedCornerShape(8.dp)
-            ) {
-                if (artworkUri != null) {
-                    AsyncImage(
-                        model = artworkUri,
-                        contentDescription = "封面",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MusicNote,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(22.dp)
-                        )
-                    }
-                }
-            }
+                cornerRadius = 8.dp
+            )
 
             Spacer(modifier = Modifier.width(12.dp))
 

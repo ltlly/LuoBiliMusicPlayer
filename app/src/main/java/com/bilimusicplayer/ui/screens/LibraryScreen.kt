@@ -27,6 +27,7 @@ import com.bilimusicplayer.data.local.AppDatabase
 import com.bilimusicplayer.data.model.Download
 import com.bilimusicplayer.data.model.DownloadStatus
 import com.bilimusicplayer.data.model.Song
+import com.bilimusicplayer.ui.components.BiliCoverThumb
 import com.bilimusicplayer.ui.components.SongListItemSkeleton
 import com.bilimusicplayer.ui.components.DownloadListItemSkeleton
 import kotlinx.coroutines.Dispatchers
@@ -833,18 +834,12 @@ fun SongListItem(
                 Spacer(modifier = Modifier.width(8.dp))
             }
 
-            // Cover with rounded corners
-            Card(
+            // Cover: 统一缩略图组件（共享缓存 + CDN 小图）
+            BiliCoverThumb(
+                url = song.coverUrl,
                 modifier = Modifier.size(56.dp),
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                AsyncImage(
-                    model = song.coverUrl,
-                    contentDescription = "封面",
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
+                cornerRadius = 12.dp
+            )
 
             Spacer(modifier = Modifier.width(16.dp))
 
