@@ -34,6 +34,8 @@ import com.bilimusicplayer.BiliMusicApplication
 import com.bilimusicplayer.network.RetrofitClient
 import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
 import com.bilimusicplayer.network.bilibili.favorite.FavoriteMedia
+import com.bilimusicplayer.network.bilibili.favorite.artistMid
+import com.bilimusicplayer.network.bilibili.favorite.artistName
 import com.bilimusicplayer.service.download.DownloadManager
 import com.bilimusicplayer.data.model.Song
 import com.bilimusicplayer.data.model.DownloadStatus
@@ -43,6 +45,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import android.util.Log
+
+/** loadMore 触发最小间隔（毫秒），防止滚动时密集请求B站API */
+private const val LOAD_MORE_MIN_INTERVAL_MS = 1000L
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -90,13 +95,21 @@ fun FavoriteContentScreen(
     var isSelectionMode by remember { mutableStateOf(false) }
     var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
 
+    // 上次触发 loadMore 的时间戳（节流用）
+    var lastLoadMoreAt by remember { mutableStateOf(0L) }
+
     // Search state
     var searchQuery by remember { mutableStateOf("") }
     var isSearchActive by remember { mutableStateOf(false) }
     var isSearching by remember { mutableStateOf(false) }
+    // 上次已执行搜索的关键词，避免重复请求
+    var lastSearchKeyword by remember { mutableStateOf<String?>(null) }
+    // 当前搜索结果是否来自本地缓存（网络失败时的兜底）
+    var isLocalSearchResult by remember { mutableStateOf(false) }
 
     // Function to load data from API (with optional search)
-    suspend fun loadDataFromApi(page: Int = 1, keyword: String? = null, append: Boolean = false) {
+    // Returns true when the API call succeeded (code == 0)
+    suspend fun loadDataFromApi(page: Int = 1, keyword: String? = null, append: Boolean = false): Boolean {
         try {
             Log.d("FavoriteContent", "loadDataFromApi: page=$page, keyword=$keyword, append=$append")
             val response = repository.getFavoriteResources(
@@ -110,6 +123,7 @@ fun FavoriteContentScreen(
                 val data = response.body()?.data
                 val newMedias = data?.medias ?: emptyList()
                 Log.d("FavoriteContent", "获取到 ${newMedias.size} 条数据, totalCount=${data?.info?.mediaCount}")
+                errorMessage = null
                 mediaList = if (append) {
                     // Deduplicate by bvid to prevent LazyColumn "key already used" crash
                     // (B站 API can return overlapping items across pages if the folder
@@ -137,12 +151,15 @@ fun FavoriteContentScreen(
                 val errorMsg = "加载失败: code=${response.body()?.code}, ${response.body()?.message ?: "未知错误"}"
                 errorMessage = errorMsg
                 Log.e("FavoriteContent", errorMsg)
+                return false
             }
         } catch (e: Exception) {
             val errorMsg = e.message ?: "未知错误"
             errorMessage = errorMsg
             Log.e("FavoriteContent", "loadDataFromApi异常", e)
+            return false
         }
+        return true
     }
 
     // Save as last opened folder for next launch
@@ -219,27 +236,72 @@ fun FavoriteContentScreen(
     // Perform search when search query changes
     LaunchedEffect(searchQuery, isSearchActive) {
         if (isSearchActive) {
-            // Add debounce for better UX
-            kotlinx.coroutines.delay(300)
+            // Debounce for better UX (restarted on each keystroke, cancelling the previous)
+            kotlinx.coroutines.delay(400)
+            val keyword = if (searchQuery.isBlank()) null else searchQuery.trim()
+            // Skip duplicate requests for the same keyword
+            if (keyword == lastSearchKeyword && mediaList.isNotEmpty()) return@LaunchedEffect
+            lastSearchKeyword = keyword
             isSearching = true
+            errorMessage = null
+            isLocalSearchResult = false
             currentPage = 1
             hasMore = true
-            val keyword = if (searchQuery.isBlank()) null else searchQuery
             Log.d("FavoriteContent", "执行搜索: keyword=$keyword, folderId=$folderId")
-            loadDataFromApi(page = 1, keyword = keyword)
-            isSearching = false
+            try {
+                val ok = loadDataFromApi(page = 1, keyword = keyword)
+                if (!ok) {
+                    // 网络失败：用本地收藏夹缓存兜底，保证搜索永远有结果
+                    if (keyword != null) {
+                        val cached = withContext(Dispatchers.IO) {
+                            contentCacheRepository.getCachedMediaList(folderId)
+                        }.orEmpty()
+                        val matched = cached.filter { m ->
+                            m.title.contains(keyword, ignoreCase = true) ||
+                                m.upper?.name?.contains(keyword, ignoreCase = true) == true
+                        }.distinctBy { it.bvid }
+                        Log.d("FavoriteContent", "搜索API失败，本地缓存兜底: ${matched.size} 条")
+                        if (matched.isNotEmpty()) {
+                            mediaList = matched
+                            totalCount = matched.size
+                            hasMore = false
+                            errorMessage = null
+                            isLocalSearchResult = true
+                        }
+                    }
+                }
+            } finally {
+                isSearching = false
+            }
+        } else if (lastSearchKeyword != null) {
+            // 关闭搜索：立即用本地缓存恢复完整列表，不发网络请求
+            lastSearchKeyword = null
+            isLocalSearchResult = false
+            val cached = withContext(Dispatchers.IO) {
+                contentCacheRepository.getCachedMediaList(folderId)
+            }
+            if (!cached.isNullOrEmpty()) {
+                mediaList = cached.distinctBy { it.bvid }
+                if (mediaList.size > totalCount) totalCount = mediaList.size
+                hasMore = mediaList.size < totalCount
+            }
         }
     }
 
     // Function to load more
+    // 节流：两次加载至少间隔 [LOAD_MORE_MIN_INTERVAL_MS]，防止滚动时密集触发请求
     fun loadMore() {
         if (isLoadingMore || !hasMore || isLoading || isSearching) return
+        val now = System.currentTimeMillis()
+        if (now - lastLoadMoreAt < LOAD_MORE_MIN_INTERVAL_MS) return
+        lastLoadMoreAt = now
 
         scope.launch {
             isLoadingMore = true
             try {
                 val nextPage = currentPage + 1
-                val keyword = if (isSearchActive && searchQuery.isNotBlank()) searchQuery else null
+                // 搜索模式分页必须与触发搜索的关键词一致（searchQuery 此刻可能已被用户改动）
+                val keyword = if (isSearchActive) lastSearchKeyword else null
                 loadDataFromApi(page = nextPage, keyword = keyword, append = true)
                 currentPage = nextPage
             } catch (e: Exception) {
@@ -496,7 +558,13 @@ fun FavoriteContentScreen(
                         item {
                             Text(
                                 text = if (searchQuery.isNotEmpty()) {
-                                    "找到 ${mediaList.size} 个结果"
+                                    // 显示总匹配数（来自API），而不是已加载条数，
+                                    // 否则每加载一页数字都会增长（20→40→60…）
+                                    when {
+                                        isLocalSearchResult -> "找到 ${mediaList.size} 个结果（本地缓存）"
+                                        mediaList.size < totalCount -> "找到 $totalCount 个结果（已加载 ${mediaList.size}）"
+                                        else -> "找到 $totalCount 个结果"
+                                    }
                                 } else {
                                     "共 $totalCount 个视频"
                                 },
@@ -689,7 +757,7 @@ fun MediaItem(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = media.upper.name,
+                        text = media.artistName,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -802,15 +870,15 @@ private suspend fun batchDownloadMedia(
                 val song = Song(
                     id = media.bvid,
                     title = media.title,
-                    artist = media.upper.name,
+                    artist = media.artistName,
                     duration = media.duration,
                     coverUrl = fixImageUrl(media.cover),
                     audioUrl = cached.audioUrl,
                     cid = cached.cid,
                     bvid = media.bvid,
                     aid = media.id,
-                    uploaderId = media.upper.mid,
-                    uploaderName = media.upper.name,
+                    uploaderId = media.artistMid,
+                    uploaderName = media.artistName,
                     pubDate = media.pubtime
                 )
                 database.songDao().insertSong(song)
@@ -844,7 +912,7 @@ private suspend fun batchDownloadMedia(
                                 cachedUrlDao.insertCachedUrl(
                                     com.bilimusicplayer.data.model.CachedPlaybackUrl(
                                         bvid = media.bvid, cid = cid, audioUrl = audioUrl,
-                                        title = media.title, artist = media.upper.name,
+                                        title = media.title, artist = media.artistName,
                                         coverUrl = fixImageUrl(media.cover), duration = media.duration
                                     )
                                 )
@@ -853,15 +921,15 @@ private suspend fun batchDownloadMedia(
                             val song = Song(
                                 id = media.bvid,
                                 title = media.title,
-                                artist = media.upper.name,
+                                artist = media.artistName,
                                 duration = media.duration,
                                 coverUrl = fixImageUrl(media.cover),
                                 audioUrl = audioUrl,
                                 cid = cid,
                                 bvid = media.bvid,
                                 aid = media.id,
-                                uploaderId = media.upper.mid,
-                                uploaderName = media.upper.name,
+                                uploaderId = media.artistMid,
+                                uploaderName = media.artistName,
                                 pubDate = media.pubtime
                             )
                             database.songDao().insertSong(song)
@@ -957,7 +1025,7 @@ suspend fun loadPlaylistWithCache(
                 com.bilimusicplayer.service.BiliAudioResolver.buildLazyMediaItem(
                     bvid = media.bvid,
                     title = media.title,
-                    artist = media.upper.name,
+                    artist = media.artistName,
                     coverUrl = fixImageUrl(media.cover),
                     duration = media.duration
                 )
@@ -1002,7 +1070,7 @@ suspend fun loadPlaylistWithCache(
                                 com.bilimusicplayer.service.BiliAudioResolver.buildLazyMediaItem(
                                     bvid = nextMedia.bvid,
                                     title = nextMedia.title,
-                                    artist = nextMedia.upper.name,
+                                    artist = nextMedia.artistName,
                                     coverUrl = fixImageUrl(nextMedia.cover),
                                     duration = nextMedia.duration
                                 )
@@ -1090,13 +1158,13 @@ private suspend fun resolveMediaItemFromApi(
         cachedUrlDao.insertCachedUrl(
             com.bilimusicplayer.data.model.CachedPlaybackUrl(
                 bvid = media.bvid, cid = cid, audioUrl = audioUrl,
-                title = media.title, artist = media.upper.name,
+                title = media.title, artist = media.artistName,
                 coverUrl = fixImageUrl(media.cover), duration = media.duration
             )
         )
     } catch (_: Exception) {}
 
-    return buildMediaItem(audioUrl, media.title, media.upper.name, fixImageUrl(media.cover), media.bvid)
+    return buildMediaItem(audioUrl, media.title, media.artistName, fixImageUrl(media.cover), media.bvid)
 }
 
 /**

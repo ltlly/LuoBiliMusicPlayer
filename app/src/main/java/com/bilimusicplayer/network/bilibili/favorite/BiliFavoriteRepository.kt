@@ -1,6 +1,8 @@
 package com.bilimusicplayer.network.bilibili.favorite
 
 import android.util.Log
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import retrofit2.Response
 
 /**
@@ -9,6 +11,21 @@ import retrofit2.Response
 class BiliFavoriteRepository(
     private val api: BiliFavoriteApi
 ) {
+    // —— 请求限流：保证对B站API的请求间隔不小于 [MIN_REQUEST_INTERVAL_MS]，
+    // 避免连续快速请求触发风控（412/限流）。所有请求串行经过同一把锁。
+    private val rateLimitMutex = Mutex()
+    private var lastRequestAt = 0L
+
+    private suspend fun <T> throttle(block: suspend () -> T): T {
+        rateLimitMutex.withLock {
+            val elapsed = System.currentTimeMillis() - lastRequestAt
+            val wait = MIN_REQUEST_INTERVAL_MS - elapsed
+            if (wait > 0) kotlinx.coroutines.delay(wait)
+            lastRequestAt = System.currentTimeMillis()
+        }
+        // 锁只管间隔，不串行化整个网络请求
+        return block()
+    }
 
     /**
      * Initialize WBI keys from navigation API
@@ -84,7 +101,7 @@ class BiliFavoriteRepository(
 
         Log.d(TAG, "签名后参数: $signedParams")
 
-        return api.getFavoriteResources(signedParams)
+        return throttle { api.getFavoriteResources(signedParams) }
     }
 
     /**
@@ -104,7 +121,7 @@ class BiliFavoriteRepository(
 
         val signedParams = WbiSignature.signParams(params)
 
-        return api.getVideoDetail(signedParams)
+        return throttle { api.getVideoDetail(signedParams) }
     }
 
     /**
@@ -137,7 +154,7 @@ class BiliFavoriteRepository(
         // Sign the parameters with WBI (without URL encoding)
         val signedParams = WbiSignature.signParams(params)
 
-        return api.getPlayUrl(signedParams)
+        return throttle { api.getPlayUrl(signedParams) }
     }
 
     /**
@@ -205,5 +222,7 @@ class BiliFavoriteRepository(
 
     companion object {
         private const val TAG = "BiliFavoriteRepository"
+        // 对B站API的最小请求间隔（毫秒）。B站风控阈值未知，500ms 保守值。
+        private const val MIN_REQUEST_INTERVAL_MS = 500L
     }
 }

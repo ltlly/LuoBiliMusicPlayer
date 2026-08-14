@@ -12,8 +12,8 @@ android {
         applicationId = "com.bilimusicplayer"
         minSdk = 26
         targetSdk = 34
-        versionCode = 6
-        versionName = "1.4.0"
+        versionCode = 7
+        versionName = "1.4.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -21,9 +21,24 @@ android {
         }
     }
 
+    signingConfigs {
+        // 项目内固定签名：debug/release 一律使用同一把钥匙，
+        // 保证任何机器、任何一次构建都能覆盖安装（不会因 debug.keystore 丢失而被迫卸载）
+        create("fixed") {
+            storeFile = rootProject.file("keystore/bilimusic-release.keystore")
+            storePassword = "bilimusic2026"
+            keyAlias = "bilimusic"
+            keyPassword = "bilimusic2026"
+        }
+    }
+
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("fixed")
+        }
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("fixed")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"

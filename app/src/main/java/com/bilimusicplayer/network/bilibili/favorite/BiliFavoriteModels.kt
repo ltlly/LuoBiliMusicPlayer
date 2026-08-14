@@ -83,18 +83,32 @@ data class FavoriteMedia(
     val title: String,
     val cover: String,
     val bvid: String,
-    val upper: Upper,
+    // B站对已注销/删除的UP主会返回 null，Gson 会绕过 Kotlin 非空检查，
+    // 因此这里必须声明为可空，否则渲染列表时会 NPE 崩溃
+    val upper: Upper? = null,
     val duration: Int,
     val intro: String,
     val ctime: Long,
     val pubtime: Long
 )
 
+/** 安全获取UP主名，为空时返回占位文本 */
+val FavoriteMedia.artistName: String
+    get() = upper?.name?.takeIf { it.isNotBlank() } ?: "未知UP主"
+
+/** 安全获取UP主 mid */
+val FavoriteMedia.artistMid: Long
+    get() = upper?.mid ?: 0L
+
 data class Upper(
-    val mid: Long,
-    val name: String,
-    val face: String
-)
+    val mid: Long? = null,
+    val name: String? = null,
+    val face: String? = null
+) {
+    companion object {
+        fun from(mid: Long?, name: String?, face: String?) = Upper(mid, name, face)
+    }
+}
 
 /**
  * Video detail response
