@@ -91,35 +91,12 @@ fun MiniPlayer(
                         .padding(horizontal = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Album art — 44dp with 12dp corners
-                    Card(
+                    // Album art — 44dp, 统一缩略图组件
+                    BiliCoverThumb(
+                        url = playbackState.currentMediaItem?.mediaMetadata?.artworkUri?.toString(),
                         modifier = Modifier.size(44.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        elevation = CardDefaults.cardElevation(1.dp)
-                    ) {
-                        if (playbackState.currentMediaItem?.mediaMetadata?.artworkUri != null) {
-                            AsyncImage(
-                                model = playbackState.currentMediaItem?.mediaMetadata?.artworkUri,
-                                contentDescription = "封面",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        } else {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.MusicNote,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                    }
+                        cornerRadius = 12.dp
+                    )
 
                     Spacer(modifier = Modifier.width(12.dp))
 

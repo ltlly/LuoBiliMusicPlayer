@@ -24,6 +24,7 @@ import coil.compose.AsyncImage
 import androidx.compose.ui.layout.ContentScale
 import com.bilimusicplayer.BiliMusicApplication
 import androidx.media3.common.Player
+import com.bilimusicplayer.ui.components.BiliCoverLarge
 import com.bilimusicplayer.ui.components.PlayQueueSheet
 import kotlinx.coroutines.launch
 import androidx.compose.ui.platform.LocalContext
@@ -116,10 +117,10 @@ fun PlayerScreen(navController: NavController) {
     // (Modifier.blur is a graceful no-op below API 31.)
     Box(modifier = Modifier.fillMaxSize()) {
         if (artworkUri != null) {
-            AsyncImage(
-                model = artworkUri,
+            // 背景用 960px 缩略图（模糊后无人能分辨，1MB原图 → ~75KB）
+            BiliCoverLarge(
+                url = artworkUri.toString(),
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
                     .blur(80.dp)
@@ -231,33 +232,11 @@ fun PlayerScreen(navController: NavController) {
                         shape = RoundedCornerShape(32.dp),
                         elevation = CardDefaults.cardElevation(0.dp)
                     ) {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (artworkUri != null) {
-                                AsyncImage(
-                                    model = artworkUri,
-                                    contentDescription = "封面",
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(MaterialTheme.colorScheme.surfaceVariant),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.MusicNote,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(coverSide * 0.3f),
-                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                                    )
-                                }
-                            }
-                        }
+                        // 大封面：960px CDN 缩略图（与模糊背景共享同一份缓存）
+                        BiliCoverLarge(
+                            url = artworkUri?.toString(),
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
                 }
             }

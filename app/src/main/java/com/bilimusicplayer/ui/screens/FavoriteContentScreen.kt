@@ -37,6 +37,7 @@ import com.bilimusicplayer.network.bilibili.favorite.FavoriteMedia
 import com.bilimusicplayer.network.bilibili.favorite.artistMid
 import com.bilimusicplayer.network.bilibili.favorite.artistName
 import com.bilimusicplayer.service.download.DownloadManager
+import com.bilimusicplayer.ui.components.BiliCoverThumb
 import com.bilimusicplayer.data.model.Song
 import com.bilimusicplayer.data.model.DownloadStatus
 import com.bilimusicplayer.data.local.AppDatabase
@@ -722,22 +723,11 @@ fun MediaItem(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
             }
-            // Cover image - optimized for smooth scrolling
-            val context = LocalContext.current
-            AsyncImage(
-                model = ImageRequest.Builder(context)
-                    .data(fixImageUrl(media.cover))
-                    .crossfade(false) // Disable crossfade for better performance
-                    .memoryCachePolicy(CachePolicy.ENABLED)
-                    .diskCachePolicy(CachePolicy.ENABLED)
-                    .size(120, 90) // Fixed size in pixels for better performance
-                    .scale(Scale.FIT)
-                    .build(),
-                contentDescription = "封面",
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .size(60.dp, 45.dp)
-                    .clip(RoundedCornerShape(8.dp))
+            // Cover: 统一缩略图组件（B站CDN小图 + 全局共享缓存，滑动不再逐张下载原图）
+            BiliCoverThumb(
+                url = media.cover,
+                modifier = Modifier.size(60.dp, 45.dp),
+                cornerRadius = 8.dp
             )
 
             Spacer(modifier = Modifier.width(8.dp))
