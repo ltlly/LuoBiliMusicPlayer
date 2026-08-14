@@ -8,6 +8,8 @@ import com.bilimusicplayer.data.model.PlaylistSongCrossRef
 import com.bilimusicplayer.data.model.Song
 import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
 import com.bilimusicplayer.network.bilibili.favorite.FavoriteMedia
+import com.bilimusicplayer.network.bilibili.favorite.artistMid
+import com.bilimusicplayer.network.bilibili.favorite.artistName
 
 /**
  * Repository for managing play queue cache
@@ -182,15 +184,15 @@ class PlayQueueCacheRepository(
         return Song(
             id = media.bvid,
             title = media.title,
-            artist = media.upper.name,
+            artist = media.artistName,
             duration = media.duration,
             coverUrl = coverUrl,
             audioUrl = audioUrl,
             cid = cid,
             bvid = media.bvid,
             aid = media.id,
-            uploaderId = media.upper.mid,
-            uploaderName = media.upper.name,
+            uploaderId = media.artistMid,
+            uploaderName = media.artistName,
             pubDate = media.pubtime
         )
     }

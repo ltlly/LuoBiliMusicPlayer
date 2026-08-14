@@ -157,6 +157,7 @@ fun PlayerScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
+                .navigationBarsPadding()
                 .padding(horizontal = 28.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -205,52 +206,63 @@ fun PlayerScreen(navController: NavController) {
                 }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
-            // Large album cover with generous 32dp corners and soft shadow
-            Card(
+            // 封面区域 — 动态尺寸：边长 = min(宽度 × 0.86, 本区域剩余高度)。
+            // 在接近 4:3 的屏幕（如折叠屏展开态）上，高度预算不足时封面自动缩小，
+            // 保证下方歌曲信息、进度条和播放/上一首/下一首/随机按钮始终可见可点。
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth(0.86f)
-                    .aspectRatio(1f)
-                    .shadow(
-                        elevation = 32.dp,
-                        shape = RoundedCornerShape(32.dp),
-                        spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                        ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                    ),
-                shape = RoundedCornerShape(32.dp),
-                elevation = CardDefaults.cardElevation(0.dp)
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (artworkUri != null) {
-                        AsyncImage(
-                            model = artworkUri,
-                            contentDescription = "封面",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
+                BoxWithConstraints {
+                    val coverSide = minOf(maxWidth * 0.86f, maxHeight)
+                    Card(
+                        modifier = Modifier
+                            .size(coverSide)
+                            .shadow(
+                                elevation = 32.dp,
+                                shape = RoundedCornerShape(32.dp),
+                                spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
+                                ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                            ),
+                        shape = RoundedCornerShape(32.dp),
+                        elevation = CardDefaults.cardElevation(0.dp)
+                    ) {
                         Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                            modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.MusicNote,
-                                contentDescription = null,
-                                modifier = Modifier.size(120.dp),
-                                tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
-                            )
+                            if (artworkUri != null) {
+                                AsyncImage(
+                                    model = artworkUri,
+                                    contentDescription = "封面",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.MusicNote,
+                                        contentDescription = null,
+                                        modifier = Modifier.size(coverSide * 0.3f),
+                                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(36.dp))
+            Spacer(modifier = Modifier.height(12.dp))
 
             // Song info
             Column(
@@ -315,7 +327,7 @@ fun PlayerScreen(navController: NavController) {
                 }
             }
 
-            Spacer(modifier = Modifier.weight(1f))
+            Spacer(modifier = Modifier.height(16.dp))
 
             // Slim progress slider — thin 3dp track, compact 12dp thumb
             Column(modifier = Modifier.fillMaxWidth()) {
