@@ -36,7 +36,7 @@ class PersistentCookieJar(context: Context) : CookieJar {
             // Add new cookies
             existing.addAll(newCookies)
 
-            Log.d(TAG, "Saved ${newCookies.size} cookies for $key: ${newCookies.map { "${it.name}=${it.value} (domain=${it.domain}, hostOnly=${it.hostOnly})" }}")
+            Log.d(TAG, "Saved ${newCookies.size} cookies for $key")
 
             // Save to SharedPreferences
             save(key, existing)

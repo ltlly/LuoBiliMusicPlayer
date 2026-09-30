@@ -28,6 +28,11 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    override fun onStop() {
+        BiliMusicApplication.musicPlayerController.saveStateSync()
+        super.onStop()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -53,84 +58,80 @@ fun MainScreen() {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
+    val showNavigation = currentRoute != Screen.Login.route && currentRoute != Screen.Player.route
+    val destinations = remember {
+        listOf(
+            Triple(Screen.Favorites.route, "收藏夹", Icons.Outlined.FavoriteBorder),
+            Triple(Screen.Library.route, "音乐库", Icons.Outlined.LibraryMusic),
+            Triple(Screen.Settings.route, "设置", Icons.Outlined.Settings)
+        )
+    }
+    val activity = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    LaunchedEffect(currentRoute) {
+        if (currentRoute != null && currentRoute != Screen.Login.route && activity?.intent?.getBooleanExtra("open_quality_upgrade", false) == true) {
+            activity.intent.removeExtra("open_quality_upgrade")
+            navController.navigate("quality_upgrade") { launchSingleTop = true }
+        }
+    }
+    fun selected(route: String) = currentRoute == route ||
+        (route == Screen.Favorites.route && currentRoute?.startsWith("favorite_content") == true) ||
+        (route == Screen.Settings.route && (currentRoute?.endsWith("_settings") == true || currentRoute == "quality_upgrade"))
+    fun navigate(route: String) {
+        navController.navigate(route) {
+            popUpTo(Screen.Favorites.route) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
 
-    Scaffold(
-        bottomBar = {
-            Column {
-                // Mini player (shown on all screens except login and player)
-                if (currentRoute != Screen.Login.route && currentRoute != Screen.Player.route) {
-                    MiniPlayer(
-                        onExpand = {
-                            navController.navigate(Screen.Player.route)
-                        }
-                    )
-                }
-
-                // Navigation bar — 3 tabs: favorites, library, settings
-                if (currentRoute != Screen.Login.route) {
-                    NavigationBar(
-                        tonalElevation = 0.dp
-                    ) {
-                        val favoritesSelected = currentRoute == Screen.Favorites.route
-                                || currentRoute?.startsWith("favorite_content") == true
-                        NavigationBarItem(
-                            icon = {
-                                Icon(
-                                    if (favoritesSelected) Icons.Default.Favorite
-                                    else Icons.Outlined.FavoriteBorder,
-                                    contentDescription = "收藏夹"
-                                )
-                            },
-                            label = { Text("收藏夹") },
-                            selected = favoritesSelected,
-                            onClick = {
-                                navController.navigate(Screen.Favorites.route) {
-                                    popUpTo(Screen.Favorites.route) { inclusive = true }
-                                    launchSingleTop = true
-                                }
-                            }
-                        )
-                        NavigationBarItem(
-                            icon = {
-                                Icon(
-                                    if (currentRoute == Screen.Library.route) Icons.Default.LibraryMusic
-                                    else Icons.Outlined.LibraryMusic,
-                                    contentDescription = "音乐库"
-                                )
-                            },
-                            label = { Text("音乐库") },
-                            selected = currentRoute == Screen.Library.route,
-                            onClick = {
-                                navController.navigate(Screen.Library.route) {
-                                    launchSingleTop = true
-                                }
-                            }
-                        )
-                        NavigationBarItem(
-                            icon = {
-                                Icon(
-                                    if (currentRoute == Screen.Settings.route) Icons.Default.Settings
-                                    else Icons.Outlined.Settings,
-                                    contentDescription = "设置"
-                                )
-                            },
-                            label = { Text("设置") },
-                            selected = currentRoute == Screen.Settings.route,
-                            onClick = {
-                                navController.navigate(Screen.Settings.route) {
-                                    launchSingleTop = true
-                                }
-                            }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val useRail = maxWidth >= 600.dp
+        Row(Modifier.fillMaxSize()) {
+            androidx.compose.animation.AnimatedVisibility(
+                visible = useRail && showNavigation,
+                enter = androidx.compose.animation.expandHorizontally() + androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.shrinkHorizontally() + androidx.compose.animation.fadeOut()
+            ) {
+                NavigationRail(modifier = Modifier.fillMaxHeight(), containerColor = MaterialTheme.colorScheme.surface) {
+                    Spacer(Modifier.weight(1f))
+                    destinations.forEach { (route, label, icon) ->
+                        NavigationRailItem(
+                            selected = selected(route), onClick = { navigate(route) },
+                            icon = { Icon(icon, contentDescription = label) },
+                            label = { Text(label) }, modifier = Modifier.padding(vertical = 8.dp)
                         )
                     }
+                    Spacer(Modifier.weight(1f))
                 }
             }
+            Scaffold(
+                modifier = Modifier.weight(1f),
+                contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                bottomBar = {
+                    if (showNavigation) {
+                        Column {
+                            MiniPlayer(onExpand = { navController.navigate(Screen.Player.route) { launchSingleTop = true } })
+                            if (!useRail) {
+                                NavigationBar(tonalElevation = 0.dp) {
+                                    destinations.forEach { (route, label, icon) ->
+                                        NavigationBarItem(
+                                            selected = selected(route), onClick = { navigate(route) },
+                                            icon = { Icon(icon, contentDescription = label) },
+                                            label = { Text(label) }
+                                        )
+                                    }
+                                }
+                            } else {
+                                Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
+                            }
+                        }
+                    }
+                }
+            ) { padding ->
+                // Keep this NavHost in one composition position across folding and resizing.
+                NavigationGraph(navController, Modifier.padding(padding))
+            }
         }
-    ) { paddingValues ->
-        NavigationGraph(
-            navController = navController,
-            modifier = Modifier.padding(paddingValues)
-        )
     }
 }
 
@@ -144,13 +145,17 @@ fun NavigationGraph(
     NavHost(
         navController = navController,
         startDestination = Screen.Login.route,
-        modifier = modifier
+        modifier = modifier,
+        enterTransition = { androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)) },
+        exitTransition = { androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(140)) },
+        popEnterTransition = { androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(180)) },
+        popExitTransition = { androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(140)) }
     ) {
         composable(Screen.Login.route) {
             LoginScreen(
                 onLoginSuccess = {
                     // Navigate to last opened folder or favorites list
-                    scope.launch {
+                    scope.launch(kotlinx.coroutines.Dispatchers.Main.immediate) {
                         val lastFolder = BiliMusicApplication.instance.getLastFolder()
                         if (lastFolder != null) {
                             val (folderId, folderTitle) = lastFolder
@@ -187,6 +192,7 @@ fun NavigationGraph(
         composable("download_settings") {
             DownloadSettingsScreen(navController)
         }
+        composable("quality_upgrade") { QualityUpgradeScreen(navController) }
         composable("appearance_settings") {
             AppearanceSettingsScreen(navController)
         }

@@ -61,7 +61,9 @@ data class LoginStatusData(
     val isLogin: Boolean,
     val uname: String? = null,
     val mid: Long? = null,
-    val face: String? = null
+    val face: String? = null,
+    val vipStatus: Int = 0,
+    val vipType: Int = 0
 )
 
 /**

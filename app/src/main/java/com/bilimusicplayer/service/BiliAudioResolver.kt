@@ -159,8 +159,9 @@ object BiliAudioResolver {
             return null
         }
         val audioUrl = repository.selectBestAudioStream(
-            playUrlResponse.body()?.data?.dash?.audio
-        )?.baseUrl ?: return null
+            playUrlResponse.body()?.data?.dash,
+            allowDolby = com.bilimusicplayer.service.AudioPlaybackCapabilities.supportsDolby
+        )?.let { com.bilimusicplayer.network.bilibili.favorite.AudioQuality.urls(it).firstOrNull() } ?: return null
 
         // Cache for next time
         try {

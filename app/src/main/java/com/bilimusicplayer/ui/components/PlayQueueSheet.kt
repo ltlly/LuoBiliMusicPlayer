@@ -10,8 +10,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import kotlinx.coroutines.delay
 import androidx.compose.ui.text.font.FontWeight
@@ -30,68 +33,31 @@ fun PlayQueueSheet(
     sheetState: SheetState,
     onDismiss: () -> Unit
 ) {
-    val playerController = BiliMusicApplication.musicPlayerController
-    val playbackState by playerController.playbackState.collectAsState()
-
-    // Force refresh queue items periodically to show newly loaded songs
-    var refreshTrigger by remember { mutableStateOf(0) }
-
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(3000) // Refresh every 3 seconds (battery friendly)
-            refreshTrigger++
-        }
-    }
-
-    // Get all media items in queue - update when playback state changes or refresh trigger fires
-    val queueItems = remember(playbackState, refreshTrigger) {
-        playerController.getAllMediaItems()
-    }
-    // Reactive currentIndex — updates with playbackState and refreshTrigger
-    val currentIndex = remember(playbackState, refreshTrigger) {
-        playerController.getCurrentMediaItemIndex()
-    }
-    val queueSize = queueItems.size
-
-    var showDeleteDialog by remember { mutableStateOf(false) }
-    var itemToDelete by remember { mutableStateOf<Int?>(null) }
-
-    // Delete confirmation dialog
-    if (showDeleteDialog && itemToDelete != null) {
-        AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
-            title = { Text("删除歌曲") },
-            text = { Text("确定要从播放队列中删除这首歌曲吗？") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        itemToDelete?.let { playerController.removeMediaItem(it) }
-                        showDeleteDialog = false
-                        itemToDelete = null
-                    }
-                ) {
-                    Text("删除")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showDeleteDialog = false
-                    itemToDelete = null
-                }) {
-                    Text("取消")
-                }
-            }
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        PlayQueueContent(
+            modifier = Modifier.fillMaxWidth().heightIn(max = androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp * 0.8f),
+            onClose = onDismiss,
+            queueTag = "play_queue_sheet"
         )
     }
+}
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState
-    ) {
+/** Shared by the phone sheet and the persistent queue on wide player layouts. */
+@Composable
+fun PlayQueueContent(modifier: Modifier = Modifier, onClose: (() -> Unit)? = null, queueTag: String = "play_queue_inline") {
+    val playerController = BiliMusicApplication.musicPlayerController
+    val playbackState by playerController.playbackState.collectAsStateWithLifecycle()
+
+    val queueItems by playerController.queue.collectAsStateWithLifecycle()
+    val currentIndex = remember(playbackState, queueItems) { playerController.getCurrentMediaItemIndex() }
+    val queueSize = queueItems.size
+
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = currentIndex.coerceAtLeast(0))
+    LaunchedEffect(currentIndex) {
+        if (currentIndex in queueItems.indices && !listState.isScrollInProgress) listState.animateScrollToItem(currentIndex)
+    }
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp)
+            modifier = modifier.padding(horizontal = 16.dp)
         ) {
             // Header
             Row(
@@ -128,8 +94,10 @@ fun PlayQueueSheet(
                             }
                         )
                     }
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "关闭")
+                    if (onClose != null) {
+                        IconButton(onClick = onClose) {
+                            Icon(Icons.Default.Close, contentDescription = "关闭")
+                        }
                     }
                 }
             }
@@ -152,7 +120,9 @@ fun PlayQueueSheet(
                 }
             } else {
                 LazyColumn(
+                    state = listState,
                     modifier = Modifier
+                        .testTag(queueTag)
                         .fillMaxWidth()
                         .weight(1f, fill = false)
                 ) {
@@ -173,8 +143,7 @@ fun PlayQueueSheet(
                                 playerController.skipToMediaItem(index)
                             },
                             onDelete = {
-                                itemToDelete = index
-                                showDeleteDialog = true
+                                playerController.removeMediaItem(index)
                             }
                         )
                     }
@@ -188,7 +157,6 @@ fun PlayQueueSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
         }
-    }
 }
 
 @Composable
@@ -217,14 +185,14 @@ private fun QueueItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min),
+                .heightIn(min = 56.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // Colored accent bar marking the currently playing track
             Box(
                 modifier = Modifier
                     .width(3.dp)
-                    .fillMaxHeight()
+                    .height(40.dp)
                     .background(
                         if (isCurrent) {
                             MaterialTheme.colorScheme.primary
@@ -313,15 +281,7 @@ private fun QueueItem(
                 }
             }
 
-            // Drag handle affordance for manual reordering
-            Icon(
-                imageVector = Icons.Default.DragHandle,
-                contentDescription = "拖拽排序",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier
-                    .padding(end = 12.dp)
-                    .size(20.dp)
-            )
+            Spacer(Modifier.width(8.dp))
         }
     }
 }

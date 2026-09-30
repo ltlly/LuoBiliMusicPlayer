@@ -1,9 +1,15 @@
 package com.bilimusicplayer.ui.screens
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.*
@@ -11,493 +17,200 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.navigation.NavController
-import coil.compose.AsyncImage
-import androidx.compose.ui.layout.ContentScale
-import com.bilimusicplayer.BiliMusicApplication
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.media3.common.Player
-import com.bilimusicplayer.ui.components.BiliCoverLarge
-import com.bilimusicplayer.ui.components.PlayQueueSheet
-import kotlinx.coroutines.launch
-import androidx.compose.ui.platform.LocalContext
+import androidx.navigation.NavController
+import com.bilimusicplayer.BiliMusicApplication
 import com.bilimusicplayer.data.local.AppDatabase
-import com.bilimusicplayer.data.model.Song
+import com.bilimusicplayer.service.PlaybackState
+import com.bilimusicplayer.service.download.DownloadedAudioInfo
+import com.bilimusicplayer.ui.components.*
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(navController: NavController) {
     val context = LocalContext.current
-    val database = remember { AppDatabase.getDatabase(context) }
-    val playerController = BiliMusicApplication.musicPlayerController
-    val playbackState by playerController.playbackState.collectAsState()
-    val scope = rememberCoroutineScope()
+    val player = BiliMusicApplication.musicPlayerController
+    val state by player.playbackState.collectAsStateWithLifecycle()
+    val queue by player.queue.collectAsStateWithLifecycle()
+    val foldingFeature = rememberFoldingFeature()
     val sheetState = rememberModalBottomSheetState()
-    var showPlayQueue by remember { mutableStateOf(false) }
+    var showQueue by remember { mutableStateOf(false) }
+    var sourceLabel by remember { mutableStateOf("在线播放") }
+    var localAudioPath by remember { mutableStateOf<String?>(null) }
+    val qualityInfo = remember(context) { DownloadedAudioInfo(context) }
+    val qualityLabel by remember(localAudioPath) { qualityInfo.observeLabel(localAudioPath) }.collectAsStateWithLifecycle(initialValue = null)
+    val artworkUrl = state.currentMediaItem?.mediaMetadata?.artworkUri?.toString()
 
-    // Track current position for smooth progress updates
-    var currentPosition by remember { mutableStateOf(0L) }
-    var duration by remember { mutableStateOf(0L) }
-
-    // Track download/cache status
-    var currentSong by remember { mutableStateOf<Song?>(null) }
-    var isDownloaded by remember { mutableStateOf(false) }
-    var isCached by remember { mutableStateOf(false) }
-
-    // Queue position (e.g. "3/15") — recomputed whenever playback state changes
-    val queueIndex = remember(playbackState) { playerController.getCurrentMediaItemIndex() }
-    val queueSize = remember(playbackState) { playerController.getMediaItemCount() }
-
-    // Check if song is downloaded or cached
-    LaunchedEffect(playbackState.currentMediaItem) {
-        val mediaItem = playbackState.currentMediaItem ?: run {
-            isDownloaded = false
-            isCached = false
-            return@LaunchedEffect
+    LaunchedEffect(state.currentMediaItem?.mediaId, state.currentMediaItem?.localConfiguration?.uri) {
+        val media = state.currentMediaItem
+        val path = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val uri = media?.localConfiguration?.uri
+            val direct = uri?.takeIf { it.scheme == "file" }?.path
+            if (direct != null && File(direct).exists()) direct
+            else media?.mediaId?.let { AppDatabase.getDatabase(context).songDao().getSongById(it) }
+                ?.takeIf { it.isDownloaded }?.localPath?.takeIf { File(it).exists() }
         }
-        val mediaUri = mediaItem.requestMetadata.mediaUri?.toString() ?: ""
-        val mediaId = mediaItem.mediaId  // bvid
-
-        // Quick check by URI scheme
-        when {
-            mediaUri.startsWith("file://") || mediaUri.startsWith("/") -> {
-                isDownloaded = true
-                isCached = false
-            }
-            mediaUri.startsWith("bili://") -> {
-                // Lazy-resolve placeholder = online
-                isDownloaded = false
-                isCached = false
-            }
-            mediaUri.startsWith("http") -> {
-                isDownloaded = false
-                isCached = true
-            }
-            else -> {
-                isDownloaded = false
-                isCached = false
-            }
-        }
-
-        // Look up song by mediaId (bvid) — O(1) DB query instead of loading all songs
-        if (mediaId.isNotEmpty() && !mediaId.startsWith("local_")) {
-            val found = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                database.songDao().getSongById(mediaId)
-            }
-            currentSong = found
-            if (found != null && found.isDownloaded && found.localPath != null) {
-                isDownloaded = File(found.localPath).exists()
-            }
-        } else {
-            currentSong = null
-        }
+        sourceLabel = if (path == null) "在线播放" else "本地播放"
+        localAudioPath = path
     }
 
-    // Update progress periodically (skip frequent polling when paused)
-    LaunchedEffect(playbackState.isPlaying, playbackState.currentMediaItem) {
-        while (true) {
-            currentPosition = playerController.getCurrentPosition()
-            duration = playerController.getDuration()
-            kotlinx.coroutines.delay(if (playbackState.isPlaying) 100 else 500)
-        }
-    }
-
-    val artworkUri = playbackState.currentMediaItem?.mediaMetadata?.artworkUri
-
-    // Immersive background: cover art blurred into a full-screen backdrop,
-    // tinted with a scrim so foreground content stays legible.
-    // (Modifier.blur is a graceful no-op below API 31.)
-    Box(modifier = Modifier.fillMaxSize()) {
-        if (artworkUri != null) {
-            // 背景用 960px 缩略图（模糊后无人能分辨，1MB原图 → ~75KB）
-            BiliCoverLarge(
-                url = artworkUri.toString(),
-                contentDescription = null,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .blur(80.dp)
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
-                                MaterialTheme.colorScheme.background.copy(alpha = 0.82f),
-                                MaterialTheme.colorScheme.background
-                            )
-                        )
-                    )
-            )
-        } else {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-                                MaterialTheme.colorScheme.background,
-                                MaterialTheme.colorScheme.background
-                            )
-                        )
-                    )
-            )
-        }
-
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .padding(horizontal = 28.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            // Top bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(
-                    onClick = { navController.navigateUp() }
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.KeyboardArrowDown,
-                        contentDescription = "返回",
-                        tint = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.size(32.dp)
-                    )
+    // A simple gradient replaces two full-screen bitmaps and a live 80dp blur layer.
+    val backdrop by animateColorAsState(MaterialTheme.colorScheme.primaryContainer, tween(220), label = "backdrop")
+    BoxWithConstraints(
+        Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(
+            backdrop.copy(alpha = 0.65f), MaterialTheme.colorScheme.background,
+            MaterialTheme.colorScheme.background
+        ))).statusBarsPadding().navigationBarsPadding()
+    ) {
+        val wide = maxWidth >= 600.dp && maxHeight >= 560.dp && foldingFeature == null
+        Column(Modifier.fillMaxSize().padding(horizontal = if (maxWidth >= 600.dp) 24.dp else 20.dp)) {
+            Row(Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = { navController.navigateUp() }) {
+                    Icon(Icons.Default.KeyboardArrowDown, "收起播放器", Modifier.size(30.dp))
                 }
-
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text("正在播放", style = MaterialTheme.typography.labelLarge)
                     Text(
-                        text = "正在播放",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        if (queue.isEmpty()) "选择一首喜欢的音乐" else "${player.getCurrentMediaItemIndex() + 1} / ${queue.size}",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (queueSize > 0) {
-                        Text(
-                            text = "${queueIndex + 1}/$queueSize",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                    }
                 }
-
-                IconButton(
-                    onClick = { showPlayQueue = true }
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.QueueMusic,
-                        contentDescription = "播放队列",
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
+                IconButton(onClick = { showQueue = true }) {
+                    Icon(Icons.AutoMirrored.Filled.QueueMusic, "播放队列")
                 }
             }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // 封面区域 — 动态尺寸：边长 = min(宽度 × 0.86, 本区域剩余高度)。
-            // 在接近 4:3 的屏幕（如折叠屏展开态）上，高度预算不足时封面自动缩小，
-            // 保证下方歌曲信息、进度条和播放/上一首/下一首/随机按钮始终可见可点。
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-                contentAlignment = Alignment.Center
-            ) {
-                BoxWithConstraints {
-                    val coverSide = minOf(maxWidth * 0.86f, maxHeight)
-                    Card(
-                        modifier = Modifier
-                            .size(coverSide)
-                            .shadow(
-                                elevation = 32.dp,
-                                shape = RoundedCornerShape(32.dp),
-                                spotColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.35f),
-                                ambientColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                            ),
-                        shape = RoundedCornerShape(32.dp),
-                        elevation = CardDefaults.cardElevation(0.dp)
+            FoldAwarePlayerLayout(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                foldingFeature = foldingFeature,
+                artwork = {
+                    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        val side = minOf(maxWidth * 0.92f, maxHeight * 0.92f, 440.dp)
+                        Surface(
+                            Modifier.size(side), shape = RoundedCornerShape(28.dp),
+                            shadowElevation = 10.dp, color = MaterialTheme.colorScheme.surfaceVariant
+                        ) { BiliCoverLarge(artworkUrl, Modifier.fillMaxSize()) }
+                    }
+                },
+                controls = {
+                    val controlScroll = rememberScrollState()
+                    Column(
+                        Modifier.widthIn(max = 480.dp).fillMaxSize()
+                            .then(if (wide) Modifier else Modifier.verticalScroll(controlScroll))
+                            .padding(vertical = 12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
                     ) {
-                        // 大封面：960px CDN 缩略图（与模糊背景共享同一份缓存）
-                        BiliCoverLarge(
-                            url = artworkUri?.toString(),
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(12.dp))
-
-            // Song info
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text(
-                    text = playbackState.currentMediaItem?.mediaMetadata?.title?.toString() ?: "未播放",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    textAlign = TextAlign.Center,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(
-                    text = playbackState.currentMediaItem?.mediaMetadata?.artist?.toString() ?: "",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                // Download/Cache status chip
-                if (isDownloaded || isCached) {
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isDownloaded) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.secondaryContainer
-                        }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                imageVector = if (isDownloaded) Icons.Default.CloudDone else Icons.Default.CloudQueue,
-                                contentDescription = null,
-                                tint = if (isDownloaded) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.secondary
-                                },
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = if (isDownloaded) "本地播放" else "在线播放",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = if (isDownloaded) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.secondary
-                                }
-                            )
+                        PlayerDetails(state, sourceLabel, qualityLabel)
+                        Spacer(Modifier.height(12.dp))
+                        PlayerSeekBar(state)
+                        Spacer(Modifier.height(8.dp))
+                        PlayerTransport(state)
+                        if (wide) {
+                            Spacer(Modifier.height(16.dp))
+                            Surface(
+                                Modifier.fillMaxWidth().weight(1f),
+                                shape = RoundedCornerShape(24.dp),
+                                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f)
+                            ) { PlayQueueContent(Modifier.fillMaxSize().padding(top = 12.dp)) }
                         }
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Slim progress slider — thin 3dp track, compact 12dp thumb
-            Column(modifier = Modifier.fillMaxWidth()) {
-                val progress = if (duration > 0) {
-                    currentPosition.toFloat() / duration.toFloat()
-                } else 0f
-
-                Slider(
-                    value = progress.coerceIn(0f, 1f),
-                    onValueChange = { newValue ->
-                        val newPosition = (newValue * duration).toLong()
-                        playerController.seekTo(newPosition)
-                        currentPosition = newPosition
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    thumb = {
-                        Box(
-                            modifier = Modifier
-                                .size(12.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                    },
-                    track = { sliderState ->
-                        val range = sliderState.valueRange.endInclusive - sliderState.valueRange.start
-                        val fraction = if (range > 0f) {
-                            ((sliderState.value - sliderState.valueRange.start) / range).coerceIn(0f, 1f)
-                        } else 0f
-                        Box(
-                            modifier = Modifier.fillMaxWidth(),
-                            contentAlignment = Alignment.CenterStart
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(3.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                            )
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth(fraction)
-                                    .height(3.dp)
-                                    .clip(CircleShape)
-                                    .background(MaterialTheme.colorScheme.primary)
-                            )
-                        }
-                    }
-                )
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .offset(y = (-6).dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        formatTime(currentPosition),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Text(
-                        formatTime(duration),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Playback controls — dominant play/pause, quieter skip buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceEvenly,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Shuffle button
-                IconButton(
-                    onClick = {
-                        playerController.setShuffleMode(!playbackState.shuffleMode)
-                    }
-                ) {
-                    Icon(
-                        Icons.Default.Shuffle,
-                        contentDescription = "随机播放",
-                        modifier = Modifier.size(24.dp),
-                        tint = if (playbackState.shuffleMode) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                }
-
-                // Previous button
-                IconButton(
-                    onClick = { playerController.skipToPrevious() }
-                ) {
-                    Icon(
-                        Icons.Default.SkipPrevious,
-                        contentDescription = "上一首",
-                        modifier = Modifier.size(36.dp),
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-
-                // Main play/pause button — static, no pulse animation
-                FilledIconButton(
-                    onClick = {
-                        if (playbackState.isPlaying) {
-                            playerController.pause()
-                        } else {
-                            playerController.play()
-                        }
-                    },
-                    modifier = Modifier.size(80.dp),
-                    shape = CircleShape,
-                    colors = IconButtonDefaults.filledIconButtonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                ) {
-                    Icon(
-                        if (playbackState.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                        contentDescription = if (playbackState.isPlaying) "暂停" else "播放",
-                        modifier = Modifier.size(44.dp)
-                    )
-                }
-
-                // Next button
-                IconButton(
-                    onClick = { playerController.skipToNext() }
-                ) {
-                    Icon(
-                        Icons.Default.SkipNext,
-                        contentDescription = "下一首",
-                        modifier = Modifier.size(36.dp),
-                        tint = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-
-                // Repeat button
-                IconButton(
-                    onClick = {
-                        val newMode = when (playbackState.repeatMode) {
-                            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
-                            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
-                            else -> Player.REPEAT_MODE_OFF
-                        }
-                        playerController.setRepeatMode(newMode)
-                    }
-                ) {
-                    Icon(
-                        when (playbackState.repeatMode) {
-                            Player.REPEAT_MODE_ONE -> Icons.Default.RepeatOne
-                            else -> Icons.Default.Repeat
-                        },
-                        contentDescription = "循环播放",
-                        modifier = Modifier.size(24.dp),
-                        tint = if (playbackState.repeatMode != Player.REPEAT_MODE_OFF) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(24.dp))
+            )
         }
     }
+    if (showQueue) PlayQueueSheet(sheetState, onDismiss = { showQueue = false })
+}
 
-    // Play queue bottom sheet
-    if (showPlayQueue) {
-        PlayQueueSheet(
-            sheetState = sheetState,
-            onDismiss = {
-                scope.launch {
-                    sheetState.hide()
-                    showPlayQueue = false
-                }
-            }
+@Composable
+private fun PlayerDetails(state: PlaybackState, source: String, quality: String?) {
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            state.currentMediaItem?.mediaMetadata?.title?.toString() ?: "未播放",
+            style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.SemiBold,
+            textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis
         )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            state.currentMediaItem?.mediaMetadata?.artist?.toString().orEmpty(),
+            style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center, maxLines = 1, overflow = TextOverflow.Ellipsis
+        )
+        Spacer(Modifier.height(12.dp))
+        Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)) {
+            Text(
+                listOfNotNull(source, quality).joinToString(" · "),
+                Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer
+            )
+        }
+        state.errorMessage?.let {
+            Text(it, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+/** Progress recomposes this small subtree; seeking happens once when the finger lifts. */
+@Composable
+private fun PlayerSeekBar(state: PlaybackState) {
+    val progress by rememberPlaybackProgress(state)
+    val player = BiliMusicApplication.musicPlayerController
+    PlaybackSeekBar(progress.position, progress.duration, state.isPlaying, state.currentMediaItem?.mediaId, player::seekTo)
+}
+
+@Composable
+private fun PlayerTransport(state: PlaybackState) {
+    val player = BiliMusicApplication.musicPlayerController
+    val haptic = LocalHapticFeedback.current
+    fun click(action: () -> Unit) { haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove); action() }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = { click { player.setShuffleMode(!state.shuffleMode) } }) {
+            Icon(Icons.Default.Shuffle, if (state.shuffleMode) "关闭随机播放" else "开启随机播放",
+                tint = if (state.shuffleMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        IconButton(onClick = { click { player.skipToPrevious() } }) {
+            Icon(Icons.Default.SkipPrevious, "上一首", Modifier.size(32.dp))
+        }
+        FilledIconButton(
+            onClick = { click { if (state.isPlaying) player.pause() else player.play() } },
+            modifier = Modifier.size(72.dp), shape = CircleShape
+        ) {
+            if (state.playbackState == Player.STATE_BUFFERING) {
+                CircularProgressIndicator(Modifier.size(28.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
+            } else {
+                Icon(if (state.isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    if (state.isPlaying) "暂停" else "播放", Modifier.size(38.dp))
+            }
+        }
+        IconButton(onClick = { click { player.skipToNext() } }) {
+            Icon(Icons.Default.SkipNext, "下一首", Modifier.size(32.dp))
+        }
+        IconButton(onClick = { click {
+            player.setRepeatMode(when (state.repeatMode) {
+                Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                else -> Player.REPEAT_MODE_OFF
+            })
+        } }) {
+            Icon(if (state.repeatMode == Player.REPEAT_MODE_ONE) Icons.Default.RepeatOne else Icons.Default.Repeat,
+                when (state.repeatMode) { Player.REPEAT_MODE_ONE -> "单曲循环"; Player.REPEAT_MODE_ALL -> "列表循环"; else -> "循环已关闭" },
+                tint = if (state.repeatMode != Player.REPEAT_MODE_OFF) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
 private fun formatTime(millis: Long): String {
-    if (millis <= 0) return "0:00"
-    val seconds = (millis / 1000).toInt()
-    val minutes = seconds / 60
-    val remainingSeconds = seconds % 60
-    return String.format("%d:%02d", minutes, remainingSeconds)
+    val seconds = millis.coerceAtLeast(0) / 1000
+    return "%d:%02d".format(seconds / 60, seconds % 60)
 }

@@ -59,14 +59,13 @@ fun FavoriteContentScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var playRequestJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     val repository = remember {
         BiliFavoriteRepository(RetrofitClient.biliFavoriteApi)
     }
 
-    val downloadManager = remember {
-        DownloadManager(context)
-    }
+    val downloadManager = BiliMusicApplication.instance.downloadManager
 
     val database = remember {
         AppDatabase.getDatabase(context)
@@ -404,7 +403,7 @@ fun FavoriteContentScreen(
 
                                 // Launch in application scope so it survives navigation
                                 BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
-                                    batchDownloadMedia(selectedMedia, database, repository, downloadManager)
+                                    batchDownloadMedia(selectedMedia, database, downloadManager)
                                     withContext(Dispatchers.Main) {
                                         isBatchDownloading = false
                                     }
@@ -432,7 +431,7 @@ fun FavoriteContentScreen(
 
                             // Launch in application scope so it survives navigation
                             BiliMusicApplication.instance.applicationScope.launch(Dispatchers.IO) {
-                                batchDownloadMedia(allMedia, database, repository, downloadManager)
+                                batchDownloadMedia(allMedia, database, downloadManager)
                                 withContext(Dispatchers.Main) {
                                     isBatchDownloading = false
                                 }
@@ -594,7 +593,8 @@ fun FavoriteContentScreen(
                                     }
                                 },
                                 onPlayClick = {
-                                    scope.launch {
+                                    playRequestJob?.cancel()
+                                    playRequestJob = scope.launch {
                                         try {
                                             playingBvid = media.bvid
                                             isPlaying = true
@@ -618,10 +618,12 @@ fun FavoriteContentScreen(
                                                     resolveMediaItem(media, downloadedSongsMap, cachedUrlsMap, repository, database.cachedPlaybackUrlDao())
                                                 } ?: throw Exception("无法获取播放链接")
 
-                                                playerController.addMediaItem(mediaItem)
-                                                val newIndex = playerController.getMediaItemCount() - 1
-                                                playerController.skipToMediaItem(newIndex)
-                                                navController.navigate("player")
+                                                val existingIndex = playerController.queue.value.indexOfFirst { it.mediaId == media.bvid }
+                                                if (existingIndex >= 0) playerController.skipToMediaItem(existingIndex)
+                                                else {
+                                                    playerController.addMediaItem(mediaItem)
+                                                    playerController.skipToMediaItem(playerController.getMediaItemCount() - 1)
+                                                }
                                             } else {
                                                 // Normal mode: load full playlist from folder
                                                 loadPlaylistWithCache(
@@ -638,18 +640,22 @@ fun FavoriteContentScreen(
                                                         // Start from the clicked song's position in the full list
                                                         val startIdx = mediaList.indexOfFirst { it.bvid == media.bvid }.coerceAtLeast(0)
                                                         BiliMusicApplication.musicPlayerController.setMediaItems(playlist, startIdx)
-                                                        navController.navigate("player")
-                                                    },
+                                                            },
                                                     onSongLoaded = { mediaItem ->
                                                         BiliMusicApplication.musicPlayerController.addMediaItem(mediaItem)
                                                     }
                                                 )
                                             }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            throw e
                                         } catch (e: Exception) {
                                             Log.e("FavoriteContent", "播放失败", e)
                                             playingBvid = null
                                             isPlaying = false
                                             snackbarHostState.showSnackbar("播放失败: ${e.message ?: "未知错误"}")
+                                        } finally {
+                                            playingBvid = null
+                                            isPlaying = false
                                         }
                                     }
                                 }
@@ -704,7 +710,7 @@ fun MediaItem(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            .clickable(enabled = isSelectionMode, onClick = onClick),
+            .clickable(onClick = { if (isSelectionMode) onClick() else onPlayClick() }),
         shape = RoundedCornerShape(12.dp),
         tonalElevation = 1.dp,
         color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
@@ -774,7 +780,7 @@ fun MediaItem(
                 ) {
                     IconButton(
                         onClick = onPlayClick,
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(48.dp),
                         enabled = !isPlaying
                     ) {
                         if (isPlaying) {
@@ -807,7 +813,6 @@ fun MediaItem(
 private suspend fun batchDownloadMedia(
     mediaList: List<FavoriteMedia>,
     database: AppDatabase,
-    repository: BiliFavoriteRepository,
     downloadManager: DownloadManager
 ) {
     val allBvids = mediaList.map { it.bvid }
@@ -831,111 +836,32 @@ private suspend fun batchDownloadMedia(
 
     Log.d("BatchDownload", "总计: ${mediaList.size}, 跳过: $skippedCount (已下载: ${downloadedIds.size}, 队列中: ${activeDownloadIds.size}), 待处理: ${toDownload.size}")
 
-    // Step 2: Check CachedPlaybackUrl for recently resolved audio URLs (avoid API calls)
-    val cachedUrlDao = database.cachedPlaybackUrlDao()
-    val allToDownloadBvids = toDownload.map { it.bvid }
-    val cachedUrls = mutableMapOf<String, com.bilimusicplayer.data.model.CachedPlaybackUrl>()
-    allToDownloadBvids.chunked(500).forEach { chunk ->
-        cachedUrlDao.getCachedUrls(chunk)
-            .filter { it.expiresAt > System.currentTimeMillis() }
-            .forEach { cachedUrls[it.bvid] = it }
-    }
-    Log.d("BatchDownload", "播放URL缓存命中: ${cachedUrls.size}/${toDownload.size}")
-
-    // Get rate limit delay from settings
-    val settingsManager = com.bilimusicplayer.service.download.DownloadSettingsManager(
-        com.bilimusicplayer.BiliMusicApplication.instance
-    )
-    val apiDelayMs = settingsManager.getApiDelayMs()
-    Log.d("BatchDownload", "API限速间隔: ${apiDelayMs}ms")
-    var lastApiCallTime = 0L
-
-    // Step 3: Sequential processing with rate limiting
+    // Only queue metadata here. The worker resolves with the current login Cookie
+    // when its turn starts, so neither old AAC caches nor expired URLs control quality.
     for (media in toDownload) {
         try {
-            // Check if we have a cached audio URL
-            val cached = cachedUrls[media.bvid]
-            if (cached != null) {
-                // Use cached URL — 0 API calls
-                val song = Song(
-                    id = media.bvid,
-                    title = media.title,
-                    artist = media.artistName,
-                    duration = media.duration,
-                    coverUrl = fixImageUrl(media.cover),
-                    audioUrl = cached.audioUrl,
-                    cid = cached.cid,
-                    bvid = media.bvid,
-                    aid = media.id,
-                    uploaderId = media.artistMid,
-                    uploaderName = media.artistName,
-                    pubDate = media.pubtime
-                )
-                database.songDao().insertSong(song)
-                downloadManager.startDownload(song, cached.audioUrl)
-                successCount++
-                // No delay needed for cache hits
-                continue
-            }
-
-            // Cache miss — call API with rate limiting
-            val now = System.currentTimeMillis()
-            val elapsed = now - lastApiCallTime
-            if (elapsed < apiDelayMs) {
-                kotlinx.coroutines.delay(apiDelayMs - elapsed)
-            }
-            lastApiCallTime = System.currentTimeMillis()
-
-            val detailResponse = repository.getVideoDetail(media.bvid)
-            if (detailResponse.isSuccessful && detailResponse.body()?.code == 0) {
-                val cid = detailResponse.body()?.data?.cid
-                if (cid != null) {
-                    // Small delay between the two API calls
-                    kotlinx.coroutines.delay(200)
-
-                    val playUrlResponse = repository.getPlayUrl(cid, media.bvid)
-                    if (playUrlResponse.isSuccessful && playUrlResponse.body()?.code == 0) {
-                        val audioUrl = repository.selectBestAudioStream(playUrlResponse.body()?.data?.dash?.audio)?.baseUrl
-                        if (audioUrl != null) {
-                            // Cache the URL for future use
-                            try {
-                                cachedUrlDao.insertCachedUrl(
-                                    com.bilimusicplayer.data.model.CachedPlaybackUrl(
-                                        bvid = media.bvid, cid = cid, audioUrl = audioUrl,
-                                        title = media.title, artist = media.artistName,
-                                        coverUrl = fixImageUrl(media.cover), duration = media.duration
-                                    )
-                                )
-                            } catch (_: Exception) {}
-
-                            val song = Song(
-                                id = media.bvid,
-                                title = media.title,
-                                artist = media.artistName,
-                                duration = media.duration,
-                                coverUrl = fixImageUrl(media.cover),
-                                audioUrl = audioUrl,
-                                cid = cid,
-                                bvid = media.bvid,
-                                aid = media.id,
-                                uploaderId = media.artistMid,
-                                uploaderName = media.artistName,
-                                pubDate = media.pubtime
-                            )
-                            database.songDao().insertSong(song)
-                            downloadManager.startDownload(song, audioUrl)
-                            successCount++
-                        } else failCount++
-                    } else failCount++
-                } else failCount++
-            } else failCount++
+            val song = Song(
+                id = media.bvid,
+                title = media.title,
+                artist = media.artistName,
+                duration = media.duration,
+                coverUrl = fixImageUrl(media.cover),
+                cid = 0L,
+                bvid = media.bvid,
+                aid = media.id,
+                uploaderId = media.artistMid,
+                uploaderName = media.artistName,
+                pubDate = media.pubtime
+            )
+            database.songDao().insertSongIfNotExists(song)
+            downloadManager.startDownload(song, "")
+            successCount++
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.e("BatchDownload", "下载失败: ${media.title}", e)
+            Log.e("BatchDownload", "入队失败: ${media.title}", e)
             failCount++
         }
-
-        // Rate limiting is handled before API calls above
-        // No additional delay needed for cache hits
     }
 
     Log.d("BatchDownload", "批量下载入队完成：成功=$successCount, 失败=$failCount, 跳过=$skippedCount")
@@ -992,12 +918,13 @@ suspend fun loadPlaylistWithCache(
     // Step 1: Batch-query downloaded songs to use local files directly
     val allBvids = mediaList.map { it.bvid }
     val downloadedSongsMap = mutableMapOf<String, com.bilimusicplayer.data.model.Song>()
-    allBvids.chunked(500).forEach { chunk ->
+    withContext(Dispatchers.IO) { allBvids.chunked(500).forEach { chunk ->
         songDao.getDownloadedSongsByIds(chunk).forEach { song ->
             if (song.localPath != null && java.io.File(song.localPath).exists()) {
                 downloadedSongsMap[song.bvid] = song
             }
         }
+    }
     }
     Log.d("PlaylistCache", "已下载歌曲: ${downloadedSongsMap.size}/${mediaList.size}")
 
@@ -1006,7 +933,7 @@ suspend fun loadPlaylistWithCache(
     // "bili://bvid" placeholder that BiliAudioResolver resolves at play time.
     val fullPlaylist = mutableListOf<MediaItem>()
 
-    for (media in mediaList) {
+    withContext(Dispatchers.Default) { for (media in mediaList) {
         val downloaded = downloadedSongsMap[media.bvid]
         if (downloaded != null) {
             fullPlaylist.add(buildLocalMediaItem(downloaded))
@@ -1021,6 +948,8 @@ suspend fun loadPlaylistWithCache(
                 )
             )
         }
+    }
+
     }
 
     if (fullPlaylist.isEmpty()) {
@@ -1140,8 +1069,9 @@ private suspend fun resolveMediaItemFromApi(
         return null
     }
     val audioUrl = biliRepository.selectBestAudioStream(
-        playUrlResponse.body()?.data?.dash?.audio
-    )?.baseUrl ?: return null
+        playUrlResponse.body()?.data?.dash,
+        allowDolby = com.bilimusicplayer.service.AudioPlaybackCapabilities.supportsDolby
+    )?.let { com.bilimusicplayer.network.bilibili.favorite.AudioQuality.urls(it).firstOrNull() } ?: return null
 
     // Cache the result
     try {

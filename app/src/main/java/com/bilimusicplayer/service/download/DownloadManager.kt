@@ -99,7 +99,7 @@ class DownloadManager(private val context: Context) {
     /**
      * Actually enqueue a WorkManager worker
      */
-    private fun enqueueWorker(songId: String, audioUrl: String, title: String, artist: String) {
+    private suspend fun enqueueWorker(songId: String, audioUrl: String, title: String, artist: String) {
         val workData = workDataOf(
             AudioDownloadWorker.KEY_SONG_ID to songId,
             AudioDownloadWorker.KEY_AUDIO_URL to audioUrl,
@@ -108,7 +108,7 @@ class DownloadManager(private val context: Context) {
         )
 
         val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .setRequiredNetworkType(if (settingsManager.getWifiOnly()) NetworkType.UNMETERED else NetworkType.CONNECTED)
             .build()
 
         val downloadRequest = OneTimeWorkRequestBuilder<AudioDownloadWorker>()

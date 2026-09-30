@@ -28,6 +28,7 @@ private val Context.appPrefsDataStore: DataStore<Preferences> by preferencesData
 class BiliMusicApplication : Application(), ImageLoaderFactory {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    val downloadManager by lazy { com.bilimusicplayer.service.download.DownloadManager(this) }
 
     companion object {
         lateinit var instance: BiliMusicApplication
@@ -43,8 +44,8 @@ class BiliMusicApplication : Application(), ImageLoaderFactory {
 
     /**
      * 全局 Coil ImageLoader：封面加载统一配置。
-     * - 磁盘缓存 256MB（默认只有 2% 磁盘且上限 250MB，这里显式固定）
-     * - 内存缓存 20%
+     * - 磁盘缓存 128MB（默认只有 2% 磁盘且上限 250MB，这里显式固定）
+     * - 内存缓存固定上限 32MB
      * - 图片请求并发限制 8（OkHttp dispatcher），避免快速滑动时瞬时打满 B站 CDN 连接
      */
     override fun newImageLoader(): ImageLoader {
@@ -61,13 +62,13 @@ class BiliMusicApplication : Application(), ImageLoaderFactory {
             .okHttpClient(okHttp)
             .memoryCache {
                 MemoryCache.Builder(this)
-                    .maxSizePercent(0.20)
+                    .maxSizeBytes(32 * 1024 * 1024)
                     .build()
             }
             .diskCache {
                 DiskCache.Builder()
                     .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(256L * 1024 * 1024)
+                    .maxSizeBytes(128L * 1024 * 1024)
                     .build()
             }
             .crossfade(false)

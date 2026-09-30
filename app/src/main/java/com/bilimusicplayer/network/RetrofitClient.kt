@@ -37,12 +37,14 @@ object RetrofitClient {
     private const val PASSPORT_BASE_URL = "https://passport.bilibili.com/"
 
     private lateinit var cookieJar: PersistentCookieJar
+    private lateinit var requestGate: BiliRequestGate
 
     /**
      * Initialize with application context
      */
     fun init(context: Context) {
         cookieJar = PersistentCookieJar(context)
+        requestGate = BiliRequestGate(context)
     }
 
     /**
@@ -63,6 +65,7 @@ object RetrofitClient {
         OkHttpClient.Builder()
             .dns(IPv6FirstDns())
             .cookieJar(cookieJar)
+            .addInterceptor(requestGate)
             .addInterceptor(loggingInterceptor)
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
@@ -85,6 +88,7 @@ object RetrofitClient {
         Retrofit.Builder()
             .baseUrl(BASE_URL)
             .client(okHttpClient)
+            .validateEagerly(true)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
     }
@@ -96,6 +100,7 @@ object RetrofitClient {
         Retrofit.Builder()
             .baseUrl(PASSPORT_BASE_URL)
             .client(okHttpClient)
+            .validateEagerly(true)
             .addConverterFactory(GsonConverterFactory.create())
             .build()
     }
