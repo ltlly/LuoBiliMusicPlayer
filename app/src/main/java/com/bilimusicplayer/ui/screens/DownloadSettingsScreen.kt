@@ -1,6 +1,11 @@
 package com.bilimusicplayer.ui.screens
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import coil.imageLoader
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -16,7 +21,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.roundToInt
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, coil.annotation.ExperimentalCoilApi::class)
 @Composable
 fun DownloadSettingsScreen(navController: NavController) {
     val context = LocalContext.current
@@ -24,6 +29,7 @@ fun DownloadSettingsScreen(navController: NavController) {
 
     val downloadSettingsManager = remember { DownloadSettingsManager(context) }
 
+    val wifiOnly by downloadSettingsManager.wifiOnly.collectAsState(initial = false)
     // Calculate cache size
     var cacheSize by remember { mutableStateOf("计算中...") }
     var showClearCacheDialog by remember { mutableStateOf(false) }
@@ -36,6 +42,7 @@ fun DownloadSettingsScreen(navController: NavController) {
     val displayValue = sliderValue?.roundToInt() ?: maxConcurrentDownloads
 
     // API rate limit setting
+    val apiRateLimitEnabled by downloadSettingsManager.apiRateLimitEnabled.collectAsState(initial = false)
     val apiRateLimit by downloadSettingsManager.apiRateLimit.collectAsState(
         initial = DownloadSettingsManager.DEFAULT_API_RATE_LIMIT
     )
@@ -44,8 +51,7 @@ fun DownloadSettingsScreen(navController: NavController) {
 
     LaunchedEffect(Unit) {
         scope.launch {
-            val exoplayerCache = File(context.cacheDir, "exoplayer_cache")
-            val size = calculateFolderSize(exoplayerCache)
+            val size = withContext(Dispatchers.IO) { com.bilimusicplayer.service.MusicPlaybackService.cacheBytes(context) + (context.imageLoader.diskCache?.size ?: 0L) }
             cacheSize = formatFileSize(size)
         }
     }
@@ -55,13 +61,16 @@ fun DownloadSettingsScreen(navController: NavController) {
         AlertDialog(
             onDismissRequest = { showClearCacheDialog = false },
             title = { Text("清除缓存") },
-            text = { Text("确定要清除所有缓存吗？这将删除已缓存的音频文件。") },
+            text = { Text("确定要清除所有缓存吗？这将清除播放和封面缓存，已下载歌曲、登录信息和音质升级记录会保留。") },
             confirmButton = {
                 TextButton(
                     onClick = {
                         scope.launch {
-                            val exoplayerCache = File(context.cacheDir, "exoplayer_cache")
-                            exoplayerCache.deleteRecursively()
+                                            withContext(Dispatchers.IO) {
+                                com.bilimusicplayer.service.MusicPlaybackService.clearPlaybackCache(context)
+                                context.imageLoader.diskCache?.clear()
+                                context.imageLoader.memoryCache?.clear()
+                            }
                             cacheSize = "0 B"
                             showClearCacheDialog = false
                         }
@@ -94,7 +103,16 @@ fun DownloadSettingsScreen(navController: NavController) {
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
+                .verticalScroll(rememberScrollState())
         ) {
+            SettingsActionItem(Icons.Default.HighQuality, "升级已有歌曲", "逐首检查并升级，失败保留原文件", "查看") { navController.navigate("quality_upgrade") }
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("仅在 Wi-Fi 等非计费网络下载", style = MaterialTheme.typography.titleMedium)
+                    Text("新任务生效；升级任务暂停后继续可应用新设置", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = wifiOnly, onCheckedChange = { scope.launch { downloadSettingsManager.setWifiOnly(it) } })
+            }
             // Download path
             SettingsSection(title = "存储位置")
 
@@ -146,7 +164,7 @@ fun DownloadSettingsScreen(navController: NavController) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "最大并发线程数",
+                            text = "同时下载数量",
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
@@ -198,6 +216,16 @@ fun DownloadSettingsScreen(navController: NavController) {
             // API rate limit setting
             SettingsSection(title = "API限速")
 
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("限制请求频率", style = MaterialTheme.typography.titleMedium)
+                    Text(if (apiRateLimitEnabled) "按下方频率处理请求" else "连续处理请求；遇到风控自动冷却", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = apiRateLimitEnabled, onCheckedChange = {
+                    scope.launch { downloadSettingsManager.setApiRateLimitEnabled(it) }
+                })
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -224,7 +252,7 @@ fun DownloadSettingsScreen(navController: NavController) {
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(
-                            text = "$rateLimitDisplayValue 次/分",
+                            text = if (apiRateLimitEnabled) "$rateLimitDisplayValue 次/分" else "限速已关闭",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.primary
                         )
@@ -238,6 +266,7 @@ fun DownloadSettingsScreen(navController: NavController) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Slider(
                         value = rateLimitSliderValue ?: apiRateLimit.toFloat(),
+                        enabled = apiRateLimitEnabled,
                         onValueChange = { rateLimitSliderValue = it },
                         onValueChangeFinished = {
                             rateLimitSliderValue?.let { value ->
@@ -275,7 +304,7 @@ fun DownloadSettingsScreen(navController: NavController) {
             SettingsInfoItem(
                 icon = Icons.Default.MusicNote,
                 title = "下载质量",
-                subtitle = "自动选择最高可用音质 (最高192K Hi-Res)"
+                subtitle = "默认最高可用：Hi-Res 无损 → 杜比 → AAC"
             )
 
             Spacer(modifier = Modifier.height(16.dp))
@@ -307,7 +336,7 @@ fun DownloadSettingsScreen(navController: NavController) {
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
-                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 自动选择最高可用音质，大会员可获得Hi-Res无损音质\n• 实际音质取决于视频源和账户等级\n• 并发线程数建议设为2-4，过高可能触发B站风控\n• API限速控制请求频率，已下载和已缓存的歌曲不消耗额度",
+                        "• 缓存用于加速在线播放，自动管理\n• 下载的文件保存在音乐文件夹中\n• 开始下载时使用当前登录账号重新获取音轨\n• 优先 Hi-Res 无损，其次杜比，最后最高普通 AAC\n• 保存原始音轨，不转 MP3；192 kbps AAC 不等于 Hi-Res\n• 已有歌曲可通过音质升级逐首检查\n• 实际音质取决于视频源和账户等级\n• API请求限速默认关闭，可随时启用\n• API请求依次处理；遇到风控自动冷却",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
@@ -404,20 +433,6 @@ fun SettingsActionItem(
             Text(actionText)
         }
     }
-}
-
-private fun calculateFolderSize(folder: File): Long {
-    var size = 0L
-    if (folder.exists() && folder.isDirectory) {
-        folder.listFiles()?.forEach { file ->
-            size += if (file.isDirectory) {
-                calculateFolderSize(file)
-            } else {
-                file.length()
-            }
-        }
-    }
-    return size
 }
 
 private fun formatFileSize(size: Long): String {

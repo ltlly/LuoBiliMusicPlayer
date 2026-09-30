@@ -1,6 +1,8 @@
 package com.bilimusicplayer.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -33,6 +35,9 @@ fun SettingsScreen(navController: NavController) {
         )
     }
 
+    val version = remember { context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: "" }
+    var showAccount by remember { mutableStateOf(false) }
+    var accountStatus by remember { mutableStateOf("") }
     var username by remember { mutableStateOf<String?>(null) }
     var userId by remember { mutableStateOf<Long?>(null) }
     var showLogoutDialog by remember { mutableStateOf(false) }
@@ -46,6 +51,10 @@ fun SettingsScreen(navController: NavController) {
         }
     }
 
+    if (showAccount) {
+        AlertDialog(onDismissRequest = { showAccount = false }, title = { Text("账号信息") },
+            text = { Text(accountStatus) }, confirmButton = { TextButton(onClick = { showAccount = false }) { Text("关闭") } })
+    }
     // Logout confirmation dialog
     if (showLogoutDialog) {
         AlertDialog(
@@ -85,15 +94,11 @@ fun SettingsScreen(navController: NavController) {
                 Column {
                     Text("B站音乐播放器", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("版本: 1.3.0", style = MaterialTheme.typography.bodyMedium)
+                    Text("版本: $version", style = MaterialTheme.typography.bodyMedium)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("一款与哔哩哔哩收藏夹同步的音乐播放器", style = MaterialTheme.typography.bodySmall)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text("技术栈:", style = MaterialTheme.typography.bodySmall)
-                    Text("• Kotlin + Jetpack Compose", style = MaterialTheme.typography.bodySmall)
-                    Text("• Media3 ExoPlayer", style = MaterialTheme.typography.bodySmall)
-                    Text("• Room Database", style = MaterialTheme.typography.bodySmall)
-                    Text("• Material 3 Design", style = MaterialTheme.typography.bodySmall)
+                    Text("支持收藏夹同步、原始音轨下载、折叠屏布局和已有歌曲音质升级。", style = MaterialTheme.typography.bodySmall)
                 }
             },
             confirmButton = {
@@ -116,6 +121,7 @@ fun SettingsScreen(navController: NavController) {
                 .fillMaxSize()
                 .padding(paddingValues)
                 .padding(horizontal = 16.dp)
+                .verticalScroll(rememberScrollState())
         ) {
             Spacer(modifier = Modifier.height(8.dp))
 
@@ -126,9 +132,21 @@ fun SettingsScreen(navController: NavController) {
                     icon = Icons.Default.Person,
                     title = "账户",
                     subtitle = username?.let { "已登录: $it (UID: $userId)" } ?: "未登录",
-                    showChevron = false
+                    showChevron = true
                 ) {
-                    // Show account info or login prompt
+                    showAccount = true
+                    accountStatus = "正在检查登录状态…"
+                    scope.launch {
+                        accountStatus = try {
+                            val response = RetrofitClient.biliApi.getLoginStatus()
+                            val data = response.body()?.data
+                            if (response.isSuccessful && response.body()?.code == 0 && data?.isLogin == true) {
+                                "${data.uname}\nUID：${data.mid}\n" +
+                                    (if (data.vipStatus == 1) "大会员有效" else "当前无有效大会员") +
+                                    "\nCookie 登录有效。最高音质仍取决于具体视频提供的音轨。"
+                            } else "登录已失效，请退出后重新扫码；本地歌曲会保留。"
+                        } catch (e: Exception) { "暂时无法检查：${e.message}" }
+                    }
                 }
                 SettingsItem(
                     icon = Icons.AutoMirrored.Filled.Logout,
@@ -142,6 +160,10 @@ fun SettingsScreen(navController: NavController) {
 
             Spacer(modifier = Modifier.height(20.dp))
 
+            SettingsGroup {
+                SettingsItem(Icons.Default.HighQuality, "升级已有歌曲音质", "检查最高可用音轨，可暂停和继续") { navController.navigate("quality_upgrade") }
+            }
+            Spacer(Modifier.height(20.dp))
             // General section
             SettingsSectionLabel("通用")
             SettingsGroup {
@@ -169,7 +191,7 @@ fun SettingsScreen(navController: NavController) {
                 SettingsItem(
                     icon = Icons.Default.Info,
                     title = "关于",
-                    subtitle = "版本 1.3.0"
+                    subtitle = "版本 $version"
                 ) {
                     showAboutDialog = true
                 }

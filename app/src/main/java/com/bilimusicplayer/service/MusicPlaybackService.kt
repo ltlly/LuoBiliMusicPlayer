@@ -35,6 +35,11 @@ class MusicPlaybackService : MediaSessionService() {
 
         // SimpleCache must be a singleton — creating two instances for the same dir crashes
         private var simpleCache: SimpleCache? = null
+        fun cacheBytes(context: android.content.Context): Long = getCache(context).cacheSpace
+        fun clearPlaybackCache(context: android.content.Context) {
+            val cache = getCache(context)
+            cache.keys.toList().forEach { cache.removeResource(it) }
+        }
         private fun getCache(context: android.content.Context): SimpleCache {
             return simpleCache ?: synchronized(this) {
                 simpleCache ?: run {

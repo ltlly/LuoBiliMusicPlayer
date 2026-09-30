@@ -13,8 +13,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -36,19 +38,9 @@ fun MiniPlayer(
     modifier: Modifier = Modifier
 ) {
     val playerController = BiliMusicApplication.musicPlayerController
-    val playbackState by playerController.playbackState.collectAsState()
+    val playbackState by playerController.playbackState.collectAsStateWithLifecycle()
 
-    // Progress polling (UI-only; same cadence strategy as the full player)
-    var currentPosition by remember { mutableStateOf(0L) }
-    var duration by remember { mutableStateOf(0L) }
-
-    LaunchedEffect(playbackState.isPlaying, playbackState.currentMediaItem) {
-        while (true) {
-            currentPosition = playerController.getCurrentPosition()
-            duration = playerController.getDuration()
-            kotlinx.coroutines.delay(if (playbackState.isPlaying) 200 else 800)
-        }
-    }
+    val progress = rememberPlaybackProgress(playbackState)
 
     // Show mini player only when there's a current media item
     AnimatedVisibility(
@@ -61,6 +53,7 @@ fun MiniPlayer(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 6.dp)
+                .testTag("mini_player")
                 .clickable(onClick = onExpand),
             shape = RoundedCornerShape(16.dp),
             elevation = CardDefaults.cardElevation(
@@ -72,11 +65,8 @@ fun MiniPlayer(
         ) {
             Column(modifier = Modifier.fillMaxWidth()) {
                 // Slim 2dp progress bar across the top
-                val progress = if (duration > 0) {
-                    (currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                } else 0f
                 LinearProgressIndicator(
-                    progress = { progress },
+                    progress = { progress.value.fraction },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(2.dp),
@@ -127,10 +117,11 @@ fun MiniPlayer(
 
                     Spacer(modifier = Modifier.width(4.dp))
 
-                    // Skip to previous
+                    // Leave the previous control in the full player on narrow cover screens.
+                    if (androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp >= 400) {
                     IconButton(
                         onClick = { playerController.skipToPrevious() },
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipPrevious,
@@ -140,6 +131,7 @@ fun MiniPlayer(
                         )
                     }
 
+                    }
                     // Play/Pause — the one prominent control
                     FilledIconButton(
                         onClick = {
@@ -149,7 +141,7 @@ fun MiniPlayer(
                                 playerController.play()
                             }
                         },
-                        modifier = Modifier.size(40.dp),
+                        modifier = Modifier.size(48.dp),
                         colors = IconButtonDefaults.filledIconButtonColors(
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = MaterialTheme.colorScheme.onPrimary
@@ -165,7 +157,7 @@ fun MiniPlayer(
                     // Skip to next
                     IconButton(
                         onClick = { playerController.skipToNext() },
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(48.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.SkipNext,

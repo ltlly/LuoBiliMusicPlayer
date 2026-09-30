@@ -19,6 +19,12 @@ interface SongDao {
     @Query("SELECT * FROM songs WHERE isDownloaded = 1 ORDER BY addedDate DESC")
     fun getDownloadedSongs(): Flow<List<Song>>
 
+    @Query("UPDATE songs SET bvid = :bvid, cid = :cid WHERE id = :songId")
+    suspend fun updateSource(songId: String, bvid: String, cid: Long)
+
+    @Query("UPDATE songs SET cid = :cid WHERE id = :songId")
+    suspend fun updateCid(songId: String, cid: Long)
+
     @Query("SELECT * FROM songs WHERE id = :songId")
     suspend fun getSongById(songId: String): Song?
 
@@ -79,14 +85,14 @@ interface SongDao {
     suspend fun deleteOrphanRowsForPath(path: String, keepId: String)
 
     /** Count of placeholder rows (id like 'local_*') — orphan files we couldn't match to B站 cache. */
-    @Query("SELECT COUNT(*) FROM songs WHERE id LIKE 'local_%'")
+    @Query("SELECT COUNT(*) FROM songs WHERE id LIKE 'local_%' AND bvid NOT LIKE 'BV%'")
     suspend fun countUnsyncedLocalSongs(): Int
 
     /** Get all placeholder rows so we can also delete the underlying files. */
-    @Query("SELECT * FROM songs WHERE id LIKE 'local_%'")
+    @Query("SELECT * FROM songs WHERE id LIKE 'local_%' AND bvid NOT LIKE 'BV%'")
     suspend fun getUnsyncedLocalSongs(): List<Song>
 
     /** Bulk delete all placeholder rows. Files must be deleted separately. */
-    @Query("DELETE FROM songs WHERE id LIKE 'local_%'")
+    @Query("DELETE FROM songs WHERE id LIKE 'local_%' AND bvid NOT LIKE 'BV%'")
     suspend fun deleteAllUnsyncedLocalSongs(): Int
 }

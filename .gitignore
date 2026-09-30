@@ -79,3 +79,6 @@ lint/tmp/
 
 # macOS
 .DS_Store
+
+# Private device backups (database and login cookies)
+backup/device-private/

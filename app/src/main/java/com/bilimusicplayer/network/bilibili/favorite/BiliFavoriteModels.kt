@@ -174,14 +174,23 @@ data class DashUrl(
 data class DashInfo(
     val duration: Long,
     val video: List<DashStream>?,
-    val audio: List<DashStream>?
+    val audio: List<DashStream>?,
+    val flac: FlacAudio? = null,
+    val dolby: DolbyAudio? = null
 )
+
+data class FlacAudio(val display: Boolean = false, val audio: DashStream? = null)
+
+data class DolbyAudio(val type: Int = 0, val audio: List<DashStream>? = null)
 
 data class DashStream(
     val id: Int,
+    @SerializedName(value = "baseUrl", alternate = ["base_url"])
     val baseUrl: String,
+    @SerializedName(value = "backupUrl", alternate = ["backup_url"])
     val backupUrl: List<String>?,
     val bandwidth: Int,
+    @SerializedName(value = "mimeType", alternate = ["mime_type"])
     val mimeType: String,
     val codecs: String,
     @SerializedName("SegmentBase")

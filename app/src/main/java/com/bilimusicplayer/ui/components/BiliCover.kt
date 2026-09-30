@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,7 +86,7 @@ fun BiliCoverThumb(
     ) {
         if (!url.isNullOrBlank()) {
             AsyncImage(
-                model = ImageRequest.Builder(context)
+                model = remember(context, url) { ImageRequest.Builder(context)
                     .data(listCoverUrl(url))
                     .memoryCachePolicy(CachePolicy.ENABLED)
                     .diskCachePolicy(CachePolicy.ENABLED)
@@ -93,7 +94,7 @@ fun BiliCoverThumb(
                     .size(LIST_COVER_PX)               // 固定 size：统一缓存 key
                     .precision(Precision.INEXACT)      // 允许大图缓存命中小图需求
                     .scale(Scale.FIT)
-                    .build(),
+                    .build() },
                 contentDescription = contentDescription,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize()
@@ -128,15 +129,15 @@ fun BiliCoverLarge(
     val context = LocalContext.current
     if (!url.isNullOrBlank()) {
         AsyncImage(
-            model = ImageRequest.Builder(context)
+            model = remember(context, url) { ImageRequest.Builder(context)
                 .data(playerCoverUrl(url))
                 .memoryCachePolicy(CachePolicy.ENABLED)
                 .diskCachePolicy(CachePolicy.ENABLED)
-                .crossfade(false)
+                .crossfade(180)
                 .size(PLAYER_COVER_PX)
                 .precision(Precision.INEXACT)
                 .scale(Scale.FIT)
-                .build(),
+                .build() },
             contentDescription = contentDescription,
             contentScale = ContentScale.Crop,
             modifier = modifier

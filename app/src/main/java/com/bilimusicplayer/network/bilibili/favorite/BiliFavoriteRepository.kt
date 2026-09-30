@@ -11,46 +11,45 @@ import retrofit2.Response
 class BiliFavoriteRepository(
     private val api: BiliFavoriteApi
 ) {
-    // —— 请求限流：保证对B站API的请求间隔不小于 [MIN_REQUEST_INTERVAL_MS]，
-    // 避免连续快速请求触发风控（412/限流）。所有请求串行经过同一把锁。
-    private val rateLimitMutex = Mutex()
-    private var lastRequestAt = 0L
-
-    private suspend fun <T> throttle(block: suspend () -> T): T {
-        rateLimitMutex.withLock {
-            val elapsed = System.currentTimeMillis() - lastRequestAt
-            val wait = MIN_REQUEST_INTERVAL_MS - elapsed
-            if (wait > 0) kotlinx.coroutines.delay(wait)
-            lastRequestAt = System.currentTimeMillis()
-        }
-        // 锁只管间隔，不串行化整个网络请求
-        return block()
-    }
+    // Every API, including navigation and playback, passes RetrofitClient's global gate.
+    private suspend fun <T> throttle(block: suspend () -> T): T = block()
 
     /**
      * Initialize WBI keys from navigation API
      */
-    suspend fun initWbiKeys(): Boolean {
-        return try {
-            val response = api.getNavInfo()
-            if (response.isSuccessful && response.body()?.code == 0) {
-                val wbiImg = response.body()?.data?.wbiImg
-                if (wbiImg != null) {
-                    val keys = WbiSignature.extractKeys(wbiImg.imgUrl, wbiImg.subUrl)
-                    WbiSignature.updateKeys(keys.imgKey, keys.subKey)
-                    Log.d(TAG, "WBI keys initialized successfully")
-                    true
-                } else {
-                    Log.e(TAG, "WBI image data not found in nav response")
-                    false
-                }
-            } else {
-                Log.e(TAG, "Failed to get nav info: ${response.code()}")
-                false
+    suspend fun initWbiKeys(): Boolean = wbiInitMutex.withLock {
+        if (WbiSignature.isInitialized()) return@withLock true
+        try {
+            val response = throttle { api.getNavInfo() }
+            val body = response.body()
+            if (!response.isSuccessful || body?.code != 0) {
+                throw WbiInitializationException("签名初始化失败（HTTP ${response.code()}，接口 ${body?.code ?: "无响应"}），本次未修改歌曲")
             }
+            val wbiImg = body.data?.wbiImg
+                ?: throw WbiInitializationException("签名服务未返回密钥，本次未修改歌曲")
+            val keys = WbiSignature.extractKeys(wbiImg.imgUrl, wbiImg.subUrl)
+            if (keys.imgKey.isBlank() || keys.subKey.isBlank()) {
+                throw WbiInitializationException("签名服务返回了无效密钥，本次未修改歌曲")
+            }
+            WbiSignature.updateKeys(keys.imgKey, keys.subKey)
+            Log.d(TAG, "WBI keys initialized successfully")
+            true
+        } catch (e: com.bilimusicplayer.network.BiliRateLimitedException) {
+            throw e
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: WbiInitializationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error initializing WBI keys", e)
-            false
+            val reason = when (e) {
+                is java.net.UnknownHostException -> "无法解析签名服务器地址，请检查网络"
+                is java.net.SocketTimeoutException -> "签名服务器响应超时，请稍后重试"
+                is java.net.ConnectException -> "无法连接签名服务器，请检查网络"
+                is java.io.IOException -> "签名请求未完成，请稍后重试"
+                else -> "签名接口解析失败，请更新应用后重试"
+            }
+            throw WbiInitializationException(reason, e)
         }
     }
 
@@ -146,7 +145,7 @@ class BiliFavoriteRepository(
             "cid" to cid.toString(),
             "bvid" to bvid,
             "qn" to quality.toString(),
-            "fnval" to "16",  // Get DASH format
+            "fnval" to AudioQuality.DASH_FLAGS.toString(),
             "fnver" to "0",
             "fourk" to "1"
         )
@@ -155,6 +154,20 @@ class BiliFavoriteRepository(
         val signedParams = WbiSignature.signParams(params)
 
         return throttle { api.getPlayUrl(signedParams) }
+    }
+
+    /** Reuse a CID normally; refresh it once only when an old identifier is rejected. */
+    suspend fun getPlayUrlWithFreshCidFallback(cid: Long, bvid: String, allowRefresh: Boolean): ResolvedPlayback {
+        val response = getPlayUrl(cid, bvid)
+        if (allowRefresh && response.isSuccessful && response.body()?.code in listOf(-400, -404)) {
+            val detail = getVideoDetail(bvid)
+            val freshCid = detail.body()?.data?.cid
+            if (detail.isSuccessful && detail.body()?.code == 0 && freshCid != null && freshCid > 0 && freshCid != cid) {
+                Log.i(TAG, "Cached CID changed; refreshing playback for $bvid")
+                return ResolvedPlayback(freshCid, getPlayUrl(freshCid, bvid))
+            }
+        }
+        return ResolvedPlayback(cid, response)
     }
 
     /**
@@ -197,32 +210,21 @@ class BiliFavoriteRepository(
     }
 
     /**
-     * Select the best quality audio stream from available audio streams
-     * Prioritizes by audio quality ID (higher is better)
-     * @param audioStreams List of available audio streams
-     * @return Best quality audio stream or null if list is empty
+     * Hi-Res and Dolby are separate DASH fields; ordinary AAC is the fallback.
      */
-    fun selectBestAudioStream(audioStreams: List<DashStream>?): DashStream? {
-        if (audioStreams.isNullOrEmpty()) {
-            Log.w(TAG, "No audio streams available")
-            return null
+    fun selectBestAudioStream(dash: DashInfo?, allowDolby: Boolean = true): DashStream? {
+        return AudioQuality.select(dash, allowDolby)?.also {
+            Log.d(TAG, "Selected audio: ${AudioQuality.label(it)}, ID=${it.id}")
         }
-
-        // Sort by audio quality ID (higher ID = better quality)
-        // Audio quality IDs: 30216 (64K), 30232 (132K), 30280 (192K Hi-Res), etc.
-        val bestStream = audioStreams.maxByOrNull { it.id }
-
-        if (bestStream != null) {
-            Log.d(TAG, "Selected audio quality: ID=${bestStream.id}, bandwidth=${bestStream.bandwidth}, codecs=${bestStream.codecs}")
-            Log.d(TAG, "Available audio streams: ${audioStreams.map { "ID=${it.id}(${it.bandwidth}bps)" }.joinToString(", ")}")
-        }
-
-        return bestStream
     }
 
     companion object {
         private const val TAG = "BiliFavoriteRepository"
-        // 对B站API的最小请求间隔（毫秒）。B站风控阈值未知，500ms 保守值。
-        private const val MIN_REQUEST_INTERVAL_MS = 500L
+        private val wbiInitMutex = Mutex()
     }
 }
+
+/** A shared initialization failure must never mark every song as unavailable. */
+class WbiInitializationException(message: String, cause: Throwable? = null) : java.io.IOException(message, cause)
+
+data class ResolvedPlayback(val cid: Long, val response: Response<PlayUrlResponse>)

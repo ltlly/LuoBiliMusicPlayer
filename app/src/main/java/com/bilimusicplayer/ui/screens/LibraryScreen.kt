@@ -41,6 +41,7 @@ import kotlinx.coroutines.withContext
 fun LibraryScreen(navController: NavController) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var playRequestJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     val database = remember { AppDatabase.getDatabase(context) }
 
     // Repositories for enhanced scan (sync favorites cache before matching files)
@@ -320,8 +321,8 @@ fun LibraryScreen(navController: NavController) {
                 0 -> {
                     // Show all downloaded songs whose local file still exists on disk
                     database.songDao().getDownloadedSongs().collect { songs ->
-                        localSongs = songs.filter { song ->
-                            song.localPath?.let { java.io.File(it).exists() } == true
+                        localSongs = withContext(Dispatchers.IO) {
+                            songs.filter { song -> song.localPath?.let { java.io.File(it).exists() } == true }
                         }
                         isLoading = false
                     }
@@ -681,7 +682,7 @@ fun LibraryScreen(navController: NavController) {
                     ) {
                         when (selectedTab) {
                             0 -> {
-                                items(filteredSongs) { song ->
+                                items(filteredSongs, key = { it.id }, contentType = { "song" }) { song ->
                                     SongListItem(
                                         song = song,
                                         isSelectionMode = isSelectionMode,
@@ -694,9 +695,11 @@ fun LibraryScreen(navController: NavController) {
                                                     selectedSongs + song.id
                                                 }
                                             } else {
-                                                scope.launch {
+                                                playRequestJob?.cancel()
+                                                playRequestJob = scope.launch {
                                                 // Create MediaItems for all songs in the library
-                                                val allMediaItems = filteredSongs.map { s ->
+                                                val queueSongs = filteredSongs
+                                                val allMediaItems = withContext(Dispatchers.IO) { queueSongs.map { s ->
                                                     val uri = if (s.localPath != null && java.io.File(s.localPath).exists()) {
                                                         android.net.Uri.fromFile(java.io.File(s.localPath))
                                                     } else {
@@ -721,13 +724,13 @@ fun LibraryScreen(navController: NavController) {
                                                         .build()
                                                 }
 
+                                                }
                                                 // Find the index of the clicked song
-                                                val startIndex = filteredSongs.indexOf(song)
+                                                val startIndex = queueSongs.indexOf(song)
                                                 android.util.Log.d("LibraryScreen", "播放列表: ${allMediaItems.size}首歌, 从第${startIndex + 1}首开始")
 
                                                     // Set all songs as playlist, start from clicked song
                                                     BiliMusicApplication.musicPlayerController.setMediaItems(allMediaItems, startIndex)
-                                                    navController.navigate("player")
                                                 }
                                             }
                                         },
@@ -738,7 +741,7 @@ fun LibraryScreen(navController: NavController) {
                                 }
                             }
                             1 -> {
-                                items(filteredDownloads) { download ->
+                                items(filteredDownloads, key = { it.songId }, contentType = { "download" }) { download ->
                                     DownloadListItem(
                                         download = download,
                                         isSelectionMode = isSelectionMode,
@@ -776,7 +779,7 @@ fun LibraryScreen(navController: NavController) {
                                                     uploaderName = download.artist,
                                                     pubDate = 0L
                                                 )
-                                                val downloadManager = com.bilimusicplayer.service.download.DownloadManager(context)
+                                                val downloadManager = BiliMusicApplication.instance.downloadManager
                                                 downloadManager.startDownload(song, download.audioUrl)
                                             }
                                         },
@@ -803,6 +806,11 @@ fun SongListItem(
     onClick: () -> Unit,
     onDelete: () -> Unit
 ) {
+    val qualityContext = LocalContext.current
+    val qualityInfo = remember(qualityContext) {
+        com.bilimusicplayer.service.download.DownloadedAudioInfo(qualityContext)
+    }
+    val audioQuality by remember(song.localPath) { qualityInfo.observeLabel(song.localPath) }.collectAsState(initial = null)
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -810,7 +818,7 @@ fun SongListItem(
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(
-            defaultElevation = if (isSelected) 4.dp else 1.dp
+            defaultElevation = 0.dp
         ),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected)
@@ -861,6 +869,15 @@ fun SongListItem(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
+                audioQuality?.let { label ->
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
 
             // Downloaded icon and delete button (hidden in selection mode)
@@ -906,7 +923,7 @@ fun DownloadListItem(
             .clickable(enabled = isSelectionMode, onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         elevation = CardDefaults.cardElevation(
-            defaultElevation = if (isSelected) 4.dp else 1.dp
+            defaultElevation = 0.dp
         ),
         colors = CardDefaults.cardColors(
             containerColor = if (isSelected)
@@ -976,7 +993,7 @@ fun DownloadListItem(
                         text = when (download.status) {
                             DownloadStatus.QUEUED -> "等待中..."
                             DownloadStatus.DOWNLOADING -> "下载中 ${download.progress}%"
-                            DownloadStatus.CONVERTING -> "转换中..."
+                            DownloadStatus.CONVERTING -> "保存原始音轨..."
                             DownloadStatus.COMPLETED -> "已完成"
                             DownloadStatus.FAILED -> "失败: ${download.errorMessage ?: "未知错误"}"
                             DownloadStatus.PAUSED -> "已暂停"
@@ -1180,7 +1197,7 @@ private suspend fun scanAndImportOrphanFiles(database: AppDatabase): Int =
             if (!biliDir.exists() || !biliDir.isDirectory) return@withContext 0
 
             val files = biliDir.listFiles { f ->
-                f.isFile && f.length() > 0 && f.name.endsWith(".m4a", ignoreCase = true)
+                f.isFile && !f.isHidden && f.length() > 0 && f.name.endsWith(".m4a", ignoreCase = true)
             }?.toList() ?: return@withContext 0
 
             if (files.isEmpty()) return@withContext 0

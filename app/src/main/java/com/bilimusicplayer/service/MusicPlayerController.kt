@@ -27,6 +27,10 @@ class MusicPlayerController(private val context: Context) {
     private var mediaController: MediaController? = null
     private val _playbackState = MutableStateFlow(PlaybackState())
     val playbackState: StateFlow<PlaybackState> = _playbackState.asStateFlow()
+    private val _queue = MutableStateFlow<List<MediaItem>>(emptyList())
+    val queue: StateFlow<List<MediaItem>> = _queue.asStateFlow()
+    private var serializedQueue: List<MediaItem>? = null
+    private var serializedQueueJson: String? = null
 
     // Cancel previous queue-loading job to avoid duplicates
     private var queueLoadingJob: Job? = null
@@ -75,6 +79,22 @@ class MusicPlayerController(private val context: Context) {
      */
     private fun setupPlayerListener() {
         mediaController?.addListener(object : Player.Listener {
+            override fun onTimelineChanged(timeline: Timeline, reason: Int) {
+                val controller = mediaController ?: return
+                _queue.value = List(controller.mediaItemCount) { controller.getMediaItemAt(it) }
+                updatePlaybackState()
+                scheduleSaveState()
+            }
+
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                updatePlaybackState()
+                scheduleSaveState()
+            }
+
+            override fun onPlayerError(error: PlaybackException) {
+                updatePlaybackState()
+            }
+
             override fun onPlaybackStateChanged(state: Int) {
                 updatePlaybackState()
                 scheduleSaveState()
@@ -131,7 +151,8 @@ class MusicPlayerController(private val context: Context) {
             duration = controller.duration,
             repeatMode = controller.repeatMode,
             shuffleMode = controller.shuffleModeEnabled,
-            playbackState = controller.playbackState
+            playbackState = controller.playbackState,
+            errorMessage = controller.playerError?.let { "播放失败，请重试或切换下一首" }
         )
     }
 
@@ -139,7 +160,10 @@ class MusicPlayerController(private val context: Context) {
      * Play or resume playback
      */
     fun play() {
-        mediaController?.play()
+        mediaController?.let {
+            if (it.playbackState == Player.STATE_IDLE || it.playerError != null) it.prepare()
+            it.play()
+        }
     }
 
     /**
@@ -226,7 +250,31 @@ class MusicPlayerController(private val context: Context) {
      * Seek to position
      */
     fun seekTo(positionMs: Long) {
-        mediaController?.seekTo(positionMs)
+        mediaController?.let { controller ->
+            val duration = controller.duration
+            val target = if (duration > 0) positionMs.coerceIn(0, duration) else positionMs.coerceAtLeast(0)
+            controller.seekTo(target)
+            // Show the masked seek immediately, including when playback is paused.
+            _playbackState.value = _playbackState.value.copy(currentPosition = target)
+        }
+    }
+
+    /** Close the active file before an in-place quality replacement; preserve position. */
+    fun suspendLocalFileUpdate(path: String): Pair<Long, Boolean>? {
+        val controller = mediaController ?: return null
+        if (controller.currentMediaItem?.localConfiguration?.uri?.path != path) return null
+        val resume = controller.currentPosition to controller.playWhenReady
+        controller.pause()
+        controller.stop()
+        return resume
+    }
+
+    fun resumeLocalFileUpdate(path: String, snapshot: Pair<Long, Boolean>?) {
+        val controller = mediaController ?: return
+        if (snapshot == null || controller.currentMediaItem?.localConfiguration?.uri?.path != path) return
+        controller.seekTo(snapshot.first)
+        controller.prepare()
+        if (snapshot.second) controller.play()
     }
 
     /**
@@ -358,12 +406,7 @@ class MusicPlayerController(private val context: Context) {
      * Get all media items in the queue
      */
     fun getAllMediaItems(): List<MediaItem> {
-        val controller = mediaController ?: return emptyList()
-        val items = mutableListOf<MediaItem>()
-        for (i in 0 until controller.mediaItemCount) {
-            items.add(controller.getMediaItemAt(i))
-        }
-        return items
+        return _queue.value
     }
 
     /**
@@ -445,33 +488,36 @@ class MusicPlayerController(private val context: Context) {
      */
     private suspend fun savePlaybackState() {
         val controller = mediaController ?: return
-        if (controller.mediaItemCount == 0) return
-
+        val queueSnapshot = _queue.value
+        val index = controller.currentMediaItemIndex
+        val position = controller.currentPosition
+        val repeat = controller.repeatMode
+        val shuffle = controller.shuffleModeEnabled
         try {
-            val queueItems = mutableListOf<SavedMediaItem>()
-            for (i in 0 until controller.mediaItemCount) {
-                val item = controller.getMediaItemAt(i)
-                queueItems.add(
-                    SavedMediaItem(
-                        mediaId = item.mediaId,
-                        uri = item.localConfiguration?.uri?.toString() ?: "",
-                        title = item.mediaMetadata.title?.toString() ?: "",
-                        artist = item.mediaMetadata.artist?.toString() ?: "",
-                        artworkUri = item.mediaMetadata.artworkUri?.toString() ?: ""
-                    )
-                )
+            val queueJson = if (queueSnapshot === serializedQueue && serializedQueueJson != null) {
+                serializedQueueJson!!
+            } else {
+                withContext(Dispatchers.Default) {
+                    gson.toJson(queueSnapshot.map { item ->
+                        SavedMediaItem(
+                            mediaId = item.mediaId,
+                            uri = item.localConfiguration?.uri?.toString() ?: "",
+                            title = item.mediaMetadata.title?.toString() ?: "",
+                            artist = item.mediaMetadata.artist?.toString() ?: "",
+                            artworkUri = item.mediaMetadata.artworkUri?.toString() ?: ""
+                        )
+                    })
+                }.also { serializedQueue = queueSnapshot; serializedQueueJson = it }
             }
-
-            val queueJson = gson.toJson(queueItems)
 
             context.playbackStateDataStore.edit { prefs ->
                 prefs[QUEUE_JSON] = queueJson
-                prefs[CURRENT_INDEX] = controller.currentMediaItemIndex
-                prefs[CURRENT_POSITION] = controller.currentPosition
-                prefs[REPEAT_MODE_KEY] = controller.repeatMode
-                prefs[SHUFFLE_MODE_KEY] = controller.shuffleModeEnabled
+                prefs[CURRENT_INDEX] = index
+                prefs[CURRENT_POSITION] = position
+                prefs[REPEAT_MODE_KEY] = repeat
+                prefs[SHUFFLE_MODE_KEY] = shuffle
             }
-            Log.d(TAG, "播放状态已保存: index=${controller.currentMediaItemIndex}, pos=${controller.currentPosition}, queue=${queueItems.size}")
+            Log.d(TAG, "播放状态已保存: index=${controller.currentMediaItemIndex}, pos=${controller.currentPosition}, queue=${queueSnapshot.size}")
         } catch (e: Exception) {
             Log.e(TAG, "保存播放状态失败", e)
         }
@@ -490,7 +536,9 @@ class MusicPlayerController(private val context: Context) {
             val savedShuffleMode = prefs[SHUFFLE_MODE_KEY] ?: false
 
             val type = object : TypeToken<List<SavedMediaItem>>() {}.type
-            val savedItems: List<SavedMediaItem> = gson.fromJson(queueJson, type) ?: return
+            val savedItems: List<SavedMediaItem> = withContext(Dispatchers.Default) {
+                gson.fromJson<List<SavedMediaItem>>(queueJson, type)
+            } ?: return
 
             if (savedItems.isEmpty()) return
 
@@ -503,7 +551,7 @@ class MusicPlayerController(private val context: Context) {
                     val uri = saved.uri
                     // Local file: verify it still exists
                     if (uri.startsWith("file://") || uri.startsWith("/")) {
-                        val path = if (uri.startsWith("file://")) uri.removePrefix("file://") else uri
+                        val path = if (uri.startsWith("file://")) android.net.Uri.parse(uri).path ?: "" else uri
                         if (!java.io.File(path).exists()) continue
                     } else if (uri.startsWith("bili://")) {
                         // Lazy-resolve placeholder — always valid, resolved at play time
@@ -612,5 +660,6 @@ data class PlaybackState(
     val duration: Long = 0,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val shuffleMode: Boolean = false,
-    val playbackState: Int = Player.STATE_IDLE
+    val playbackState: Int = Player.STATE_IDLE,
+    val errorMessage: String? = null
 )
