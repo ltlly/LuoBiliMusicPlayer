@@ -5,6 +5,7 @@ import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkHorizontally
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -46,7 +47,13 @@ fun App(
     CompositionLocalProvider(LocalAppContainer provides container) {
         BiliMusicPlayerTheme(darkTheme = darkTheme) {
             Column(Modifier.fillMaxSize()) {
-                windowChrome?.invoke()
+                windowChrome?.let { chrome ->
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.background),
+                    ) { chrome() }
+                }
                 Box(Modifier.weight(1f)) { MainScreen() }
             }
         }
