@@ -32,7 +32,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
 @Composable
-fun App(container: AppContainer) {
+fun App(
+    container: AppContainer,
+    windowChrome: (@Composable () -> Unit)? = null,
+) {
     val themeMode by container.storage.themeMode.collectAsState()
     val darkTheme = when (themeMode) {
         ThemeMode.SYSTEM -> isSystemInDarkTheme()
@@ -42,7 +45,10 @@ fun App(container: AppContainer) {
 
     CompositionLocalProvider(LocalAppContainer provides container) {
         BiliMusicPlayerTheme(darkTheme = darkTheme) {
-            MainScreen()
+            Column(Modifier.fillMaxSize()) {
+                windowChrome?.invoke()
+                Box(Modifier.weight(1f)) { MainScreen() }
+            }
         }
     }
 }
