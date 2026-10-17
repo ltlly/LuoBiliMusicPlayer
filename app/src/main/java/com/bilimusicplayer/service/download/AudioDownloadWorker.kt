@@ -35,7 +35,7 @@ class AudioDownloadWorker(
     params: WorkerParameters
 ) : CoroutineWorker(context, params) {
 
-    private val database = AppDatabase.getDatabase(context)
+    private val database = AppDatabase.getDatabase()
     private val downloadDao = database.downloadDao()
     private val songDao = database.songDao()
 

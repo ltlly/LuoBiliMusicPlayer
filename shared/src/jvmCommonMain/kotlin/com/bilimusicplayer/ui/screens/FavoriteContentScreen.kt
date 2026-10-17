@@ -1,0 +1,1103 @@
+package com.bilimusicplayer.ui.screens
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.*
+import androidx.compose.material3.TextFieldDefaults
+import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import com.bilimusicplayer.core.LocalAppContainer
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.navigation.NavController
+import com.bilimusicplayer.network.RetrofitClient
+import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository
+import com.bilimusicplayer.network.bilibili.favorite.FavoriteMedia
+import com.bilimusicplayer.network.bilibili.favorite.artistMid
+import com.bilimusicplayer.network.bilibili.favorite.artistName
+import com.bilimusicplayer.download.DownloadService
+import com.bilimusicplayer.player.Track
+import com.bilimusicplayer.ui.components.BiliCoverThumb
+import com.bilimusicplayer.data.model.Song
+import com.bilimusicplayer.data.model.DownloadStatus
+import com.bilimusicplayer.data.local.AppDatabase
+import com.bilimusicplayer.data.repository.FavoriteContentCacheRepository
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import com.bilimusicplayer.core.Log
+
+/** loadMore 触发最小间隔（毫秒），防止滚动时密集请求B站API */
+private const val LOAD_MORE_MIN_INTERVAL_MS = 1000L
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun FavoriteContentScreen(
+    navController: NavController,
+    folderId: Long,
+    folderTitle: String
+) {
+    val container = LocalAppContainer.current
+    val player = container.player
+    val scope = rememberCoroutineScope()
+    var playRequestJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
+    val repository = remember {
+        BiliFavoriteRepository(RetrofitClient.biliFavoriteApi)
+    }
+
+    val downloadManager = container.downloads
+
+    val database = remember { AppDatabase.getDatabase() }
+
+    val cacheRepository = remember {
+        com.bilimusicplayer.data.repository.PlayQueueCacheRepository(database, repository)
+    }
+
+    val contentCacheRepository = remember {
+        FavoriteContentCacheRepository(database)
+    }
+
+    var mediaList by remember { mutableStateOf<List<FavoriteMedia>>(emptyList()) }
+    var isLoading by remember { mutableStateOf(true) }
+    var isLoadingMore by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var currentPage by remember { mutableStateOf(1) }
+    var hasMore by remember { mutableStateOf(true) }
+    var totalCount by remember { mutableStateOf(0) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var playingBvid by remember { mutableStateOf<String?>(null) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    var isBatchDownloading by remember { mutableStateOf(false) }
+
+    // Multi-selection state
+    var isSelectionMode by remember { mutableStateOf(false) }
+    var selectedMediaIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    // 上次触发 loadMore 的时间戳（节流用）
+    var lastLoadMoreAt by remember { mutableStateOf(0L) }
+
+    // Search state
+    var searchQuery by remember { mutableStateOf("") }
+    var isSearchActive by remember { mutableStateOf(false) }
+    var isSearching by remember { mutableStateOf(false) }
+    // 上次已执行搜索的关键词，避免重复请求
+    var lastSearchKeyword by remember { mutableStateOf<String?>(null) }
+    // 当前搜索结果是否来自本地缓存（网络失败时的兜底）
+    var isLocalSearchResult by remember { mutableStateOf(false) }
+
+    // Function to load data from API (with optional search)
+    // Returns true when the API call succeeded (code == 0)
+    suspend fun loadDataFromApi(page: Int = 1, keyword: String? = null, append: Boolean = false): Boolean {
+        try {
+            Log.d("FavoriteContent", "loadDataFromApi: page=$page, keyword=$keyword, append=$append")
+            val response = repository.getFavoriteResources(
+                mediaId = folderId,
+                pageNumber = page,
+                pageSize = 20,
+                keyword = keyword
+            )
+            Log.d("FavoriteContent", "API Response: code=${response.body()?.code}, message=${response.body()?.message}")
+            if (response.isSuccessful && response.body()?.code == 0) {
+                val data = response.body()?.data
+                val newMedias = data?.medias ?: emptyList()
+                Log.d("FavoriteContent", "获取到 ${newMedias.size} 条数据, totalCount=${data?.info?.mediaCount}")
+                errorMessage = null
+                mediaList = if (append) {
+                    // Deduplicate by bvid to prevent LazyColumn "key already used" crash
+                    // (B站 API can return overlapping items across pages if the folder
+                    //  changes between requests).
+                    (mediaList + newMedias).distinctBy { it.bvid }
+                } else {
+                    newMedias.distinctBy { it.bvid }
+                }
+                totalCount = data?.info?.mediaCount ?: 0
+                hasMore = mediaList.size < totalCount
+
+                // Cache the data (only for non-search requests)
+                if (keyword == null) {
+                    withContext(Dispatchers.IO) {
+                        if (page == 1 && !append) {
+                            // Refresh page 1 without wiping later cached pages
+                            contentCacheRepository.refreshPage(folderId, newMedias, pageNumber = 1)
+                        } else {
+                            // Append new page to cache
+                            contentCacheRepository.appendToCache(folderId, newMedias, (page - 1) * 20)
+                        }
+                    }
+                }
+            } else {
+                val errorMsg = "加载失败: code=${response.body()?.code}, ${response.body()?.message ?: "未知错误"}"
+                errorMessage = errorMsg
+                Log.e("FavoriteContent", errorMsg)
+                return false
+            }
+        } catch (e: Exception) {
+            val errorMsg = e.message ?: "未知错误"
+            errorMessage = errorMsg
+            Log.e("FavoriteContent", "loadDataFromApi异常", e)
+            return false
+        }
+        return true
+    }
+
+    // Save as last opened folder for next launch
+    LaunchedEffect(folderId) {
+        container.storage.saveLastFolder(folderId, folderTitle)
+    }
+
+    // Load first page with cache support
+    LaunchedEffect(folderId) {
+        run {
+            isLoading = true
+            errorMessage = null
+            currentPage = 1
+
+            // Step 1: Try loading from cache first for instant display
+            val cachedData = withContext(Dispatchers.IO) {
+                contentCacheRepository.getCachedMediaList(folderId)
+            }
+
+            if (cachedData != null && cachedData.isNotEmpty()) {
+                Log.d("FavoriteContent", "从缓存加载 ${cachedData.size} 条数据")
+                mediaList = cachedData.distinctBy { it.bvid }
+                // Calculate which page we're on based on cached data count
+                currentPage = (mediaList.size + 19) / 20
+                // We don't know the real totalCount yet, but we know hasMore is at least true
+                // unless the API tells us otherwise
+                isLoading = false
+            }
+
+            // Step 2: Always load page 1 from API to get real totalCount
+            // This refreshes page 1 in cache without wiping later pages
+            try {
+                val response = repository.getFavoriteResources(
+                    mediaId = folderId,
+                    pageNumber = 1,
+                    pageSize = 20
+                )
+                if (response.isSuccessful && response.body()?.code == 0) {
+                    val data = response.body()?.data
+                    val newMedias = data?.medias ?: emptyList()
+                    totalCount = data?.info?.mediaCount ?: 0
+
+                    // Update page 1 in cache
+                    withContext(Dispatchers.IO) {
+                        contentCacheRepository.refreshPage(folderId, newMedias, pageNumber = 1)
+                    }
+
+                    if (cachedData != null && cachedData.size > 20) {
+                        // We had more than 1 page cached — keep using the full cached list
+                        // but replace the first 20 items with fresh data.
+                        // distinctBy avoids "key already used" if B站 moved items between pages.
+                        val updatedList = (newMedias + cachedData.drop(20)).distinctBy { it.bvid }
+                        mediaList = updatedList
+                        currentPage = (updatedList.size + 19) / 20
+                    } else {
+                        // Only had 1 page or no cache — just use the fresh data
+                        mediaList = newMedias.distinctBy { it.bvid }
+                        currentPage = 1
+                    }
+                    hasMore = mediaList.size < totalCount
+                    Log.d("FavoriteContent", "API刷新完成: ${mediaList.size}条, totalCount=$totalCount, hasMore=$hasMore")
+                } else if (cachedData == null || cachedData.isEmpty()) {
+                    errorMessage = "加载失败: ${response.body()?.message ?: "未知错误"}"
+                }
+            } catch (e: Exception) {
+                if (cachedData == null || cachedData.isEmpty()) {
+                    errorMessage = e.message ?: "未知错误"
+                }
+            }
+            isLoading = false
+        }
+    }
+
+    // Perform search when search query changes
+    LaunchedEffect(searchQuery, isSearchActive) {
+        if (isSearchActive) {
+            // Debounce for better UX (restarted on each keystroke, cancelling the previous)
+            kotlinx.coroutines.delay(400)
+            val keyword = if (searchQuery.isBlank()) null else searchQuery.trim()
+            // Skip duplicate requests for the same keyword
+            if (keyword == lastSearchKeyword && mediaList.isNotEmpty()) return@LaunchedEffect
+            lastSearchKeyword = keyword
+            isSearching = true
+            errorMessage = null
+            isLocalSearchResult = false
+            currentPage = 1
+            hasMore = true
+            Log.d("FavoriteContent", "执行搜索: keyword=$keyword, folderId=$folderId")
+            try {
+                val ok = loadDataFromApi(page = 1, keyword = keyword)
+                if (!ok) {
+                    // 网络失败：用本地收藏夹缓存兜底，保证搜索永远有结果
+                    if (keyword != null) {
+                        val cached = withContext(Dispatchers.IO) {
+                            contentCacheRepository.getCachedMediaList(folderId)
+                        }.orEmpty()
+                        val matched = cached.filter { m ->
+                            m.title.contains(keyword, ignoreCase = true) ||
+                                m.upper?.name?.contains(keyword, ignoreCase = true) == true
+                        }.distinctBy { it.bvid }
+                        Log.d("FavoriteContent", "搜索API失败，本地缓存兜底: ${matched.size} 条")
+                        if (matched.isNotEmpty()) {
+                            mediaList = matched
+                            totalCount = matched.size
+                            hasMore = false
+                            errorMessage = null
+                            isLocalSearchResult = true
+                        }
+                    }
+                }
+            } finally {
+                isSearching = false
+            }
+        } else if (lastSearchKeyword != null) {
+            // 关闭搜索：立即用本地缓存恢复完整列表，不发网络请求
+            lastSearchKeyword = null
+            isLocalSearchResult = false
+            val cached = withContext(Dispatchers.IO) {
+                contentCacheRepository.getCachedMediaList(folderId)
+            }
+            if (!cached.isNullOrEmpty()) {
+                mediaList = cached.distinctBy { it.bvid }
+                if (mediaList.size > totalCount) totalCount = mediaList.size
+                hasMore = mediaList.size < totalCount
+            }
+        }
+    }
+
+    // Function to load more
+    // 节流：两次加载至少间隔 [LOAD_MORE_MIN_INTERVAL_MS]，防止滚动时密集触发请求
+    fun loadMore() {
+        if (isLoadingMore || !hasMore || isLoading || isSearching) return
+        val now = System.currentTimeMillis()
+        if (now - lastLoadMoreAt < LOAD_MORE_MIN_INTERVAL_MS) return
+        lastLoadMoreAt = now
+
+        scope.launch {
+            isLoadingMore = true
+            try {
+                val nextPage = currentPage + 1
+                // 搜索模式分页必须与触发搜索的关键词一致（searchQuery 此刻可能已被用户改动）
+                val keyword = if (isSearchActive) lastSearchKeyword else null
+                loadDataFromApi(page = nextPage, keyword = keyword, append = true)
+                currentPage = nextPage
+            } catch (e: Exception) {
+                // Ignore load more errors
+            } finally {
+                isLoadingMore = false
+            }
+        }
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    if (isSearchActive) {
+                        TextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            placeholder = { Text("搜索歌曲或艺术家") },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            colors = TextFieldDefaults.colors(
+                                focusedContainerColor = MaterialTheme.colorScheme.surface,
+                                unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                                focusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent,
+                                unfocusedIndicatorColor = androidx.compose.ui.graphics.Color.Transparent
+                            )
+                        )
+                    } else if (isSelectionMode) {
+                        Text("已选择 ${selectedMediaIds.size} 项")
+                    } else {
+                        Text(folderTitle)
+                    }
+                },
+                navigationIcon = {
+                    if (isSearchActive) {
+                        IconButton(onClick = {
+                            isSearchActive = false
+                            searchQuery = ""
+                        }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭搜索")
+                        }
+                    } else if (isSelectionMode) {
+                        IconButton(onClick = {
+                            isSelectionMode = false
+                            selectedMediaIds = emptySet()
+                        }) {
+                            Icon(Icons.Default.Close, "取消选择")
+                        }
+                    } else {
+                        IconButton(onClick = { navController.popBackStack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                        }
+                    }
+                },
+                actions = {
+                    if (isSearchActive) {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, "清除搜索")
+                            }
+                        }
+                    } else {
+                        // Search button
+                        IconButton(onClick = { isSearchActive = true }) {
+                            Icon(Icons.Default.Search, "搜索")
+                        }
+                    if (isSelectionMode) {
+                        // Select all button
+                        IconButton(onClick = {
+                            selectedMediaIds = if (selectedMediaIds.size == mediaList.size) {
+                                emptySet()
+                            } else {
+                                mediaList.map { it.bvid }.toSet()
+                            }
+                        }) {
+                            Icon(
+                                if (selectedMediaIds.size == mediaList.size) {
+                                    Icons.Default.CheckBox
+                                } else {
+                                    Icons.Default.CheckBoxOutlineBlank
+                                },
+                                "全选"
+                            )
+                        }
+                        // Batch download selected button
+                        IconButton(
+                            onClick = {
+                                // Capture needed data before launching in application scope
+                                val selectedMedia = mediaList.filter { selectedMediaIds.contains(it.bvid) }
+                                val selectedCount = selectedMedia.size
+                                isBatchDownloading = true
+                                isSelectionMode = false
+                                selectedMediaIds = emptySet()
+
+                                scope.launch {
+                                    snackbarHostState.showSnackbar("开始下载选中的 $selectedCount 项（后台进行中）...")
+                                }
+
+                                // Launch in application scope so it survives navigation
+                                container.scope.launch(Dispatchers.IO) {
+                                    batchDownloadMedia(selectedMedia, database, downloadManager)
+                                    withContext(Dispatchers.Main) {
+                                        isBatchDownloading = false
+                                    }
+                                }
+                            },
+                            enabled = !isBatchDownloading && selectedMediaIds.isNotEmpty()
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "下载选中")
+                        }
+                    } else {
+                        // Enter selection mode button
+                        IconButton(onClick = { isSelectionMode = true }) {
+                            Icon(Icons.Default.CheckBox, "多选")
+                        }
+                        // Batch download all button
+                        IconButton(
+                            onClick = {
+                            // Capture needed data before launching in application scope
+                            val allMedia = mediaList.toList()
+                            isBatchDownloading = true
+
+                            scope.launch {
+                                snackbarHostState.showSnackbar("开始批量下载（后台进行中）...")
+                            }
+
+                            // Launch in application scope so it survives navigation
+                            container.scope.launch(Dispatchers.IO) {
+                                batchDownloadMedia(allMedia, database, downloadManager)
+                                withContext(Dispatchers.Main) {
+                                    isBatchDownloading = false
+                                }
+                            }
+                        },
+                        enabled = !isBatchDownloading && mediaList.isNotEmpty()
+                    ) {
+                        if (isBatchDownloading) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(24.dp),
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Default.Download, contentDescription = "全部下载")
+                        }
+                    }
+                    }
+                    }
+                }
+            )
+        },
+        snackbarHost = { SnackbarHost(snackbarHostState) }
+    ) { paddingValues ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(paddingValues)
+        ) {
+            when {
+                isLoading -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.Center)
+                    )
+                }
+
+                errorMessage != null -> {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = errorMessage ?: "",
+                            color = MaterialTheme.colorScheme.error
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Button(onClick = {
+                            scope.launch {
+                                isLoading = true
+                                errorMessage = null
+                                try {
+                                    val response = repository.getFavoriteResources(
+                                        mediaId = folderId,
+                                        pageNumber = 1,
+                                        pageSize = 20
+                                    )
+                                    if (response.isSuccessful && response.body()?.code == 0) {
+                                        val data = response.body()?.data
+                                        mediaList = (data?.medias ?: emptyList()).distinctBy { it.bvid }
+                                        totalCount = data?.info?.mediaCount ?: 0
+                                        currentPage = 1
+                                        hasMore = mediaList.size < totalCount
+                                    } else {
+                                        errorMessage = "加载失败"
+                                    }
+                                } catch (e: Exception) {
+                                    errorMessage = e.message
+                                } finally {
+                                    isLoading = false
+                                }
+                            }
+                        }) {
+                            Text("重试")
+                        }
+                    }
+                }
+
+                mediaList.isEmpty() && searchQuery.isNotEmpty() -> {
+                    Text(
+                        text = "未找到匹配的歌曲",
+                        modifier = Modifier.align(Alignment.Center),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+
+                mediaList.isEmpty() -> {
+                    Text(
+                        text = "收藏夹为空",
+                        modifier = Modifier.align(Alignment.Center),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
+
+                else -> {
+                    val listState = rememberLazyListState()
+
+                    // Detect when scrolled to bottom
+                    LaunchedEffect(listState) {
+                        snapshotFlow {
+                            val layoutInfo = listState.layoutInfo
+                            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                            lastVisibleItem?.index
+                        }
+                            .collect { lastVisibleIndex ->
+                                // Trigger load more when 5 items from the end
+                                if (lastVisibleIndex != null &&
+                                    lastVisibleIndex >= mediaList.size - 5 &&
+                                    hasMore &&
+                                    !isLoadingMore &&
+                                    mediaList.isNotEmpty()) {
+                                    loadMore()
+                                }
+                            }
+                    }
+
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Header showing total count
+                        item {
+                            Text(
+                                text = if (searchQuery.isNotEmpty()) {
+                                    // 显示总匹配数（来自API），而不是已加载条数，
+                                    // 否则每加载一页数字都会增长（20→40→60…）
+                                    when {
+                                        isLocalSearchResult -> "找到 ${mediaList.size} 个结果（本地缓存）"
+                                        mediaList.size < totalCount -> "找到 $totalCount 个结果（已加载 ${mediaList.size}）"
+                                        else -> "找到 $totalCount 个结果"
+                                    }
+                                } else {
+                                    "共 $totalCount 个视频"
+                                },
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                        }
+
+                        items(
+                            items = mediaList,
+                            key = { media -> media.bvid }
+                        ) { media ->
+                            MediaItem(
+                                media = media,
+                                isPlaying = playingBvid == media.bvid,
+                                isSelectionMode = isSelectionMode,
+                                isSelected = selectedMediaIds.contains(media.bvid),
+                                onClick = {
+                                    if (isSelectionMode) {
+                                        selectedMediaIds = if (selectedMediaIds.contains(media.bvid)) {
+                                            selectedMediaIds - media.bvid
+                                        } else {
+                                            selectedMediaIds + media.bvid
+                                        }
+                                    }
+                                },
+                                onPlayClick = {
+                                    playRequestJob?.cancel()
+                                    playRequestJob = scope.launch {
+                                        try {
+                                            playingBvid = media.bvid
+                                            isPlaying = true
+
+                                            if (isSearchActive && searchQuery.isNotEmpty()) {
+                                                // Search mode: add single song to queue end and play it
+                                                val playerController = player
+                                                val downloadedSongsMap = mutableMapOf<String, com.bilimusicplayer.data.model.Song>()
+                                                val cachedUrlsMap = mutableMapOf<String, com.bilimusicplayer.data.model.CachedPlaybackUrl>()
+                                                withContext(Dispatchers.IO) {
+                                                    database.songDao().getDownloadedSongsByIds(listOf(media.bvid)).forEach { song ->
+                                                        if (song.localPath != null && java.io.File(song.localPath).exists()) {
+                                                            downloadedSongsMap[song.bvid] = song
+                                                        }
+                                                    }
+                                                    database.cachedPlaybackUrlDao().getCachedUrls(listOf(media.bvid))
+                                                        .filter { it.expiresAt > System.currentTimeMillis() }
+                                                        .forEach { cachedUrlsMap[it.bvid] = it }
+                                                }
+                                                val mediaItem = withContext(Dispatchers.IO) {
+                                                    resolveMediaItem(media, downloadedSongsMap, cachedUrlsMap, repository, database.cachedPlaybackUrlDao())
+                                                } ?: throw Exception("无法获取播放链接")
+
+                                                val existingIndex = playerController.queue.value.indexOfFirst { it.id == media.bvid }
+                                                if (existingIndex >= 0) {
+                                                    playerController.skipTo(existingIndex)
+                                                } else {
+                                                    playerController.addToQueue(mediaItem)
+                                                    playerController.skipTo(playerController.queue.value.size - 1)
+                                                }
+                                            } else {
+                                                // Normal mode: load full playlist from folder
+                                                loadPlaylistWithCache(
+                                                    cacheRepository = cacheRepository,
+                                                    biliRepository = repository,
+                                                    folderId = folderId,
+                                                    folderName = folderTitle,
+                                                    folderCover = mediaList.firstOrNull()?.cover ?: "",
+                                                    clickedMedia = media,
+                                                    mediaList = mediaList,
+                                                    totalCount = totalCount,
+                                                    currentPage = currentPage,
+                                                    onPlaylistReady = { playlist ->
+                                                        // Start from the clicked song's position in the full list
+                                                        val startIdx = mediaList.indexOfFirst { it.bvid == media.bvid }.coerceAtLeast(0)
+                                                        player.setQueue(playlist, startIdx)
+                                                            },
+                                                    onSongLoaded = { mediaItem ->
+                                                        player.addToQueue(mediaItem)
+                                                    },
+                                                    backgroundScope = container.scope,
+                                                )
+                                            }
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            Log.e("FavoriteContent", "播放失败", e)
+                                            playingBvid = null
+                                            isPlaying = false
+                                            snackbarHostState.showSnackbar("播放失败: ${e.message ?: "未知错误"}")
+                                        } finally {
+                                            playingBvid = null
+                                            isPlaying = false
+                                        }
+                                    }
+                                }
+                            )
+                        }
+
+                        // Loading more indicator
+                        if (isLoadingMore) {
+                            item {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    CircularProgressIndicator()
+                                }
+                            }
+                        }
+
+                        // End indicator
+                        if (!hasMore && mediaList.isNotEmpty()) {
+                            item {
+                                Text(
+                                    text = "已加载全部内容",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(16.dp),
+                                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun MediaItem(
+    media: FavoriteMedia,
+    isPlaying: Boolean = false,
+    isSelectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onClick: () -> Unit = {},
+    onPlayClick: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = { if (isSelectionMode) onClick() else onPlayClick() }),
+        shape = RoundedCornerShape(12.dp),
+        tonalElevation = 1.dp,
+        color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Selection checkbox
+            if (isSelectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onClick() }
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+            }
+            // Cover: 统一缩略图组件（B站CDN小图 + 全局共享缓存，滑动不再逐张下载原图）
+            BiliCoverThumb(
+                url = media.cover,
+                modifier = Modifier.size(60.dp, 45.dp),
+                cornerRadius = 8.dp
+            )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Info
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    text = media.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = media.artistName,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    Text(
+                        text = " · ",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = formatDuration(media.duration),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            // Action buttons (hidden in selection mode)
+            if (!isSelectionMode) {
+                Row(
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    IconButton(
+                        onClick = onPlayClick,
+                        modifier = Modifier.size(48.dp),
+                        enabled = !isPlaying
+                    ) {
+                        if (isPlaying) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Icon(
+                            Icons.Default.PlayArrow,
+                            contentDescription = "播放",
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Batch download media with efficient deduplication and rate limiting.
+ *
+ * Strategy:
+ * 1. Batch-query DB to find already-downloaded and already-queued songs (0 API calls)
+ * 2. For remaining items, sequentially call API with delay between each to avoid B站 rate limiting
+ * 3. DownloadManager internally limits concurrent actual download workers via Semaphore
+ */
+private suspend fun batchDownloadMedia(
+    mediaList: List<FavoriteMedia>,
+    database: AppDatabase,
+    downloadManager: DownloadService
+) {
+    val allBvids = mediaList.map { it.bvid }
+    var successCount = 0
+    var failCount = 0
+    var skippedCount = 0
+
+    // Step 1: Batch dedup - query DB once for all IDs instead of one-by-one
+    // Room has a limit on IN clause size (~999), so chunk if needed
+    val downloadedIds = mutableSetOf<String>()
+    val activeDownloadIds = mutableSetOf<String>()
+
+    allBvids.chunked(500).forEach { chunk ->
+        downloadedIds.addAll(database.songDao().getDownloadedSongIds(chunk))
+        activeDownloadIds.addAll(database.downloadDao().getActiveDownloadSongIds(chunk))
+    }
+
+    val skipIds = downloadedIds + activeDownloadIds
+    val toDownload = mediaList.filter { it.bvid !in skipIds }
+    skippedCount = mediaList.size - toDownload.size
+
+    Log.d("BatchDownload", "总计: ${mediaList.size}, 跳过: $skippedCount (已下载: ${downloadedIds.size}, 队列中: ${activeDownloadIds.size}), 待处理: ${toDownload.size}")
+
+    // Only queue metadata here. The worker resolves with the current login Cookie
+    // when its turn starts, so neither old AAC caches nor expired URLs control quality.
+    for (media in toDownload) {
+        try {
+            val song = Song(
+                id = media.bvid,
+                title = media.title,
+                artist = media.artistName,
+                duration = media.duration,
+                coverUrl = fixImageUrl(media.cover),
+                cid = 0L,
+                bvid = media.bvid,
+                aid = media.id,
+                uploaderId = media.artistMid,
+                uploaderName = media.artistName,
+                pubDate = media.pubtime
+            )
+            database.songDao().insertSongIfNotExists(song)
+            downloadManager.startDownload(song, "")
+            successCount++
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e("BatchDownload", "入队失败: ${media.title}", e)
+            failCount++
+        }
+    }
+
+    Log.d("BatchDownload", "批量下载入队完成：成功=$successCount, 失败=$failCount, 跳过=$skippedCount")
+}
+
+private fun formatDuration(seconds: Int): String {
+    val minutes = seconds / 60
+    val remainingSeconds = seconds % 60
+    return String.format("%d:%02d", minutes, remainingSeconds)
+}
+
+private fun fixImageUrl(url: String): String {
+    return when {
+        url.startsWith("//") -> "https:$url"
+        url.startsWith("http://") -> url.replace("http://", "https://")
+        else -> url
+    }
+}
+
+/**
+ * Load playlist and start playing from the clicked song.
+ *
+ * ** Lazy Resolution Strategy (v2) **
+ * Instead of fetching audio URLs for every song upfront (which wastes bandwidth),
+ * we build the queue using lazy placeholder URIs ("bili://bvid"). The actual
+ * streaming URL is resolved on-demand by BiliAudioResolver when ExoPlayer
+ * needs to buffer a specific song.
+ *
+ * This means:
+ * - Queue creation is nearly instant (no per-song API calls)
+ * - Only songs that actually play consume bandwidth
+ * - Downloaded songs still use local files directly
+ * - The background job now only fetches metadata for subsequent pages (not URLs)
+ */
+suspend fun loadPlaylistWithCache(
+    cacheRepository: com.bilimusicplayer.data.repository.PlayQueueCacheRepository,
+    biliRepository: BiliFavoriteRepository,
+    folderId: Long,
+    folderName: String,
+    folderCover: String,
+    clickedMedia: FavoriteMedia,
+    mediaList: List<FavoriteMedia>,
+    totalCount: Int,
+    currentPage: Int,
+    onPlaylistReady: (List<Track>) -> Unit,
+    onSongLoaded: (Track) -> Unit,
+    backgroundScope: kotlinx.coroutines.CoroutineScope,
+) {
+    val clickedIndex = mediaList.indexOfFirst { it.bvid == clickedMedia.bvid }.coerceAtLeast(0)
+
+    val database = com.bilimusicplayer.data.local.AppDatabase.getDatabase()
+    val songDao = database.songDao()
+
+    // Step 1: Batch-query downloaded songs to use local files directly
+    val allBvids = mediaList.map { it.bvid }
+    val downloadedSongsMap = mutableMapOf<String, com.bilimusicplayer.data.model.Song>()
+    withContext(Dispatchers.IO) { allBvids.chunked(500).forEach { chunk ->
+        songDao.getDownloadedSongsByIds(chunk).forEach { song ->
+            if (song.localPath != null && java.io.File(song.localPath).exists()) {
+                downloadedSongsMap[song.bvid] = song
+            }
+        }
+    }
+    }
+    Log.d("PlaylistCache", "已下载歌曲: ${downloadedSongsMap.size}/${mediaList.size}")
+
+    // Step 2: Build the full playlist instantly using lazy placeholders.
+    // Downloaded songs get their local file URI; everything else gets a
+    // "bili://bvid" placeholder that BiliAudioResolver resolves at play time.
+    val fullPlaylist = mutableListOf<Track>()
+
+    withContext(Dispatchers.Default) { for (media in mediaList) {
+        val downloaded = downloadedSongsMap[media.bvid]
+        if (downloaded != null) {
+            fullPlaylist.add(buildLocalMediaItem(downloaded))
+        } else {
+            fullPlaylist.add(
+                Track(
+                    id = media.bvid,
+                    title = media.title,
+                    artist = media.artistName,
+                    coverUrl = fixImageUrl(media.cover),
+                    uri = "bili://${media.bvid}",
+                    durationMs = media.duration * 1000L,
+                )
+            )
+        }
+    }
+
+    }
+
+    if (fullPlaylist.isEmpty()) {
+        throw Exception("收藏夹为空")
+    }
+
+    Log.d("PlaylistCache", "队列已创建: ${fullPlaylist.size}首 (本地:${downloadedSongsMap.size}, 懒加载:${fullPlaylist.size - downloadedSongsMap.size}), 开始位置:$clickedIndex")
+
+    // Deliver the FULL playlist at once — ExoPlayer gets all items immediately
+    // but only buffers the current + next song (triggering lazy resolution).
+    onPlaylistReady(fullPlaylist)
+
+    // Step 3: If the folder has more pages than what's loaded, fetch their
+    // metadata in the background and append lazy items to the queue.
+    if (mediaList.size < totalCount) {
+        backgroundScope.launch(Dispatchers.IO) {
+            var nextPage = currentPage + 1
+            var remainingToLoad = totalCount - mediaList.size
+            var loadedCount = 0
+
+            while (remainingToLoad > 0) {
+                try {
+                    // Small delay between page fetches
+                    kotlinx.coroutines.delay(500)
+
+                    val pageResponse = biliRepository.getFavoriteResources(
+                        mediaId = folderId, pageNumber = nextPage, pageSize = 20
+                    )
+
+                    if (pageResponse.isSuccessful && pageResponse.body()?.code == 0) {
+                        val nextPageMedias = pageResponse.body()?.data?.medias ?: emptyList()
+                        for (nextMedia in nextPageMedias) {
+                            val downloaded = downloadedSongsMap[nextMedia.bvid]
+                            val mediaItem = if (downloaded != null) {
+                                buildLocalMediaItem(downloaded)
+                            } else {
+                                Track(
+                                    id = nextMedia.bvid,
+                                    title = nextMedia.title,
+                                    artist = nextMedia.artistName,
+                                    coverUrl = fixImageUrl(nextMedia.cover),
+                                    uri = "bili://${nextMedia.bvid}",
+                                    durationMs = nextMedia.duration * 1000L,
+                                )
+                            }
+                            withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
+                            loadedCount++
+                        }
+                        remainingToLoad -= nextPageMedias.size
+                        nextPage++
+                    } else {
+                        break
+                    }
+                } catch (e: Exception) {
+                    Log.e("PlaylistCache", "加载第 $nextPage 页出错", e)
+                    break
+                }
+            }
+
+            Log.d("PlaylistCache", "后续页加载完成: +${loadedCount}首 (0 音频URL请求)")
+        }
+
+        // Register the background job so it gets cancelled on next play action
+        // The shared player owns queue mutations; no per-screen job handle is needed.
+    }
+}
+
+/**
+ * Resolve a media item using the best available source:
+ * 1. Local downloaded file (0 API)
+ * 2. Cached playback URL (0 API)
+ * 3. API call (2 API calls)
+ */
+private suspend fun resolveMediaItem(
+    media: FavoriteMedia,
+    downloadedSongsMap: Map<String, com.bilimusicplayer.data.model.Song>,
+    cachedUrlsMap: Map<String, com.bilimusicplayer.data.model.CachedPlaybackUrl>,
+    biliRepository: BiliFavoriteRepository,
+    cachedUrlDao: com.bilimusicplayer.data.local.CachedPlaybackUrlDao
+): Track? {
+    // Priority 1: Local downloaded file
+    val downloaded = downloadedSongsMap[media.bvid]
+    if (downloaded != null) {
+        Log.d("PlaylistCache", "本地文件: ${media.title}")
+        return buildLocalMediaItem(downloaded)
+    }
+
+    // Priority 2: Cached URL
+    val cached = cachedUrlsMap[media.bvid]
+    if (cached != null) {
+        Log.d("PlaylistCache", "URL缓存: ${media.title}")
+        return buildMediaItem(cached.audioUrl, cached.title, cached.artist, fixImageUrl(media.cover), media.bvid)
+    }
+
+    // Priority 3: API call
+    return resolveMediaItemFromApi(biliRepository, cachedUrlDao, media, allowDolby = true)
+}
+
+/**
+ * Load a MediaItem from API and cache the result.
+ */
+private suspend fun resolveMediaItemFromApi(
+    biliRepository: BiliFavoriteRepository,
+    cachedUrlDao: com.bilimusicplayer.data.local.CachedPlaybackUrlDao,
+    media: FavoriteMedia,
+    allowDolby: Boolean,
+): Track? {
+    Log.d("PlaylistCache", "API请求: ${media.title} (${media.bvid})")
+    val detailResponse = biliRepository.getVideoDetail(media.bvid)
+    if (!detailResponse.isSuccessful || detailResponse.body()?.code != 0) {
+        Log.e("PlaylistCache", "getVideoDetail失败: HTTP=${detailResponse.code()}, code=${detailResponse.body()?.code}")
+        return null
+    }
+    val cid = detailResponse.body()?.data?.cid ?: return null
+
+    val playUrlResponse = biliRepository.getPlayUrl(cid, media.bvid)
+    if (!playUrlResponse.isSuccessful || playUrlResponse.body()?.code != 0) {
+        Log.e("PlaylistCache", "getPlayUrl失败: HTTP=${playUrlResponse.code()}, code=${playUrlResponse.body()?.code}")
+        return null
+    }
+    val audioUrl = biliRepository.selectBestAudioStream(
+        playUrlResponse.body()?.data?.dash,
+        allowDolby = allowDolby
+    )?.let { com.bilimusicplayer.network.bilibili.favorite.AudioQuality.urls(it).firstOrNull() } ?: return null
+
+    // Cache the result
+    try {
+        cachedUrlDao.insertCachedUrl(
+            com.bilimusicplayer.data.model.CachedPlaybackUrl(
+                bvid = media.bvid, cid = cid, audioUrl = audioUrl,
+                title = media.title, artist = media.artistName,
+                coverUrl = fixImageUrl(media.cover), duration = media.duration
+            )
+        )
+    } catch (_: Exception) {}
+
+    return buildMediaItem(audioUrl, media.title, media.artistName, fixImageUrl(media.cover), media.bvid)
+}
+
+/**
+ * Build MediaItem from a locally downloaded Song
+ */
+private fun buildLocalMediaItem(song: com.bilimusicplayer.data.model.Song): Track = Track(
+    id = song.bvid,
+    title = song.title,
+    artist = song.artist,
+    coverUrl = song.coverUrl,
+    uri = song.localPath.orEmpty(),
+    durationMs = song.duration * 1000L,
+)
+
+private fun buildMediaItem(audioUrl: String, title: String, artist: String, coverUrl: String, bvid: String = ""): Track = Track(
+    id = bvid,
+    title = title,
+    artist = artist,
+    coverUrl = coverUrl,
+    uri = audioUrl,
+)

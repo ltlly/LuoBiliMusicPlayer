@@ -1,110 +1,102 @@
 package com.bilimusicplayer
 
 import android.app.Application
-import android.content.Context
-import coil.ImageLoader
-import coil.ImageLoaderFactory
-import coil.disk.DiskCache
-import coil.memory.MemoryCache
-import okhttp3.Dispatcher
-import java.util.concurrent.TimeUnit
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.*
-import androidx.datastore.preferences.preferencesDataStore
+import coil3.ImageLoader
+import coil3.SingletonImageLoader
+import coil3.disk.DiskCache
+import coil3.memory.MemoryCache
+import coil3.network.okhttp.OkHttpNetworkFetcherFactory
+import com.bilimusicplayer.android.AndroidAppContainer
+import com.bilimusicplayer.core.initShared
 import com.bilimusicplayer.network.RetrofitClient
-import com.bilimusicplayer.service.MusicPlayerController
+import com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository
+import com.bilimusicplayer.network.interceptor.PersistentCookieJar
+import com.bilimusicplayer.settings.AppStorage
+import com.bilimusicplayer.settings.createSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
+import com.google.gson.Gson
+import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.launch
+import okio.Path.Companion.toOkioPath
 
-private val Context.appPrefsDataStore: DataStore<Preferences> by preferencesDataStore(name = "app_prefs")
-
-/**
- * Application class for BiliMusicPlayer
- */
-class BiliMusicApplication : Application(), ImageLoaderFactory {
+class BiliMusicApplication : Application() {
 
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    val downloadManager by lazy { com.bilimusicplayer.service.download.DownloadManager(this) }
 
-    companion object {
-        lateinit var instance: BiliMusicApplication
-            private set
+    lateinit var container: AndroidAppContainer
+        private set
 
-        val musicPlayerController: MusicPlayerController by lazy {
-            MusicPlayerController(instance)
-        }
-
-        private val LAST_FOLDER_ID = longPreferencesKey("last_folder_id")
-        private val LAST_FOLDER_TITLE = stringPreferencesKey("last_folder_title")
-    }
-
-    /**
-     * 全局 Coil ImageLoader：封面加载统一配置。
-     * - 磁盘缓存 128MB（默认只有 2% 磁盘且上限 250MB，这里显式固定）
-     * - 内存缓存固定上限 32MB
-     * - 图片请求并发限制 8（OkHttp dispatcher），避免快速滑动时瞬时打满 B站 CDN 连接
-     */
-    override fun newImageLoader(): ImageLoader {
-        val dispatcher = Dispatcher().apply {
-            maxRequests = 24
-            maxRequestsPerHost = 8
-        }
-        val okHttp = okhttp3.OkHttpClient.Builder()
-            .dispatcher(dispatcher)
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
-            .build()
-        return ImageLoader.Builder(this)
-            .okHttpClient(okHttp)
-            .memoryCache {
-                MemoryCache.Builder(this)
-                    .maxSizeBytes(32 * 1024 * 1024)
-                    .build()
-            }
-            .diskCache {
-                DiskCache.Builder()
-                    .directory(cacheDir.resolve("image_cache"))
-                    .maxSizeBytes(128L * 1024 * 1024)
-                    .build()
-            }
-            .crossfade(false)
-            .build()
-    }
+    val storage: AppStorage get() = container.storage
 
     override fun onCreate() {
         super.onCreate()
         instance = this
+        initShared(this)
 
-        // Initialize Retrofit client with context
-        RetrofitClient.init(this)
+        val storage = AppStorage(createSettings())
+        migrateLegacyCookies(storage)
+        RetrofitClient.init(storage)
 
-        // Initialize music player controller
-        applicationScope.launch {
-            musicPlayerController.initialize()
+        SingletonImageLoader.setSafe { context ->
+            ImageLoader.Builder(context)
+                .components { add(OkHttpNetworkFetcherFactory()) }
+                .memoryCache {
+                    MemoryCache.Builder().maxSizeBytes(32L * 1024 * 1024).build()
+                }
+                .diskCache {
+                    DiskCache.Builder()
+                        .directory(context.cacheDir.resolve("image_cache").toOkioPath())
+                        .maxSizeBytes(128L * 1024 * 1024)
+                        .build()
+                }
+                .build()
+        }
+
+        container = AndroidAppContainer(this, storage, applicationScope)
+        applicationScope.launch { container.player.initialize() }
+        if (!storage.accessToken.isNullOrEmpty()) {
+            applicationScope.launch {
+                runCatching {
+                    BiliAuthRepository(
+                        api = RetrofitClient.biliAuthApi,
+                        cookieJar = RetrofitClient.getCookieJar(),
+                        biliApi = RetrofitClient.biliApi,
+                        storage = storage,
+                    ).fetchAndSaveUserInfo()
+                }
+            }
         }
     }
 
     /**
-     * Save the last opened favorite folder for quick resume on next launch
+     * Earlier releases kept cookies in a per-host SharedPreferences file. Move
+     * them once so existing users stay logged in after the KMP migration.
      */
-    suspend fun saveLastFolder(folderId: Long, folderTitle: String) {
-        appPrefsDataStore.edit { prefs ->
-            prefs[LAST_FOLDER_ID] = folderId
-            prefs[LAST_FOLDER_TITLE] = folderTitle
+    private fun migrateLegacyCookies(storage: AppStorage) {
+        if (storage.cookieStoreJson() != null) return
+        val legacy = getSharedPreferences("cookies", MODE_PRIVATE)
+        if (legacy.all.isEmpty()) return
+        val gson = Gson()
+        val type = object : TypeToken<List<PersistentCookieJar.SerializableCookie>>() {}.type
+        val migrated = mutableMapOf<String, List<PersistentCookieJar.SerializableCookie>>()
+        legacy.all.forEach { (host, value) ->
+            if (value is String) {
+                runCatching { migrated[host] = gson.fromJson(value, type) }
+            }
+        }
+        if (migrated.isNotEmpty()) {
+            storage.saveCookieStoreJson(gson.toJson(migrated))
+            // Existing cookie sessions have no refresh token; the sentinel keeps
+            // isLoggedIn() true while Bilibili cookies remain valid.
+            storage.accessToken = "cookie-session"
+            storage.refreshToken = "cookie-session"
         }
     }
 
-    /**
-     * Get the last opened favorite folder, or null if none saved
-     */
-    suspend fun getLastFolder(): Pair<Long, String>? {
-        val prefs = appPrefsDataStore.data.first()
-        val folderId = prefs[LAST_FOLDER_ID] ?: return null
-        val folderTitle = prefs[LAST_FOLDER_TITLE] ?: return null
-        return Pair(folderId, folderTitle)
+    companion object {
+        lateinit var instance: BiliMusicApplication
+            private set
     }
 }

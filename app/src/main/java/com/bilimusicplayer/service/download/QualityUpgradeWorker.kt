@@ -29,7 +29,7 @@ class QualityUpgradeWorker(context: Context, params: WorkerParameters) : Corouti
         val temp = File(applicationContext.cacheDir, "upgrade_${id.hashCode()}_${this@QualityUpgradeWorker.id}.temp")
         try {
             AudioFileReplacement(applicationContext).recover()
-            val db = AppDatabase.getDatabase(applicationContext)
+            val db = AppDatabase.getDatabase()
             val song = db.songDao().getSongById(id) ?: throw IOException("歌曲记录不存在")
             manager.current(song.title)
             val original = File(song.localPath ?: throw IOException("没有本地音频路径"))
@@ -79,7 +79,7 @@ class QualityUpgradeWorker(context: Context, params: WorkerParameters) : Corouti
                 } else {
                     audioRank(temp) // Reject malformed/incomplete containers before touching the old file.
                     currentCoroutineContext().ensureActive()
-                    val player = com.bilimusicplayer.BiliMusicApplication.musicPlayerController
+                    val player = com.bilimusicplayer.BiliMusicApplication.instance.container.player
                     val playback = withContext(Dispatchers.Main) { player.suspendLocalFileUpdate(original.absolutePath) }
                     try {
                         AudioFileReplacement(applicationContext).replace(id, original, uri, temp) {

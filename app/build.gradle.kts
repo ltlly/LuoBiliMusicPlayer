@@ -1,17 +1,19 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
-    id("com.android.application")
-    id("org.jetbrains.kotlin.android")
-    id("com.google.devtools.ksp")
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.jetbrains.compose)
+    alias(libs.plugins.compose.compiler)
 }
 
 android {
     namespace = "com.bilimusicplayer"
-    compileSdk = 35
+    compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
         applicationId = "com.bilimusicplayer"
-        minSdk = 26
-        targetSdk = 34
+        minSdk = libs.versions.android.minSdk.get().toInt()
+        targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 12
         versionName = "1.5.4"
 
@@ -52,20 +54,12 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
     buildFeatures {
         compose = true
     }
-    testOptions {
-        // Repository unit tests exercise networking policy; Android Log is incidental.
-        unitTests.isReturnDefaultValues = true
-    }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = "1.5.8"
+    testOptions {
+        unitTests.isReturnDefaultValues = true
     }
 
     packaging {
@@ -73,79 +67,44 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
-    buildToolsVersion = "35.0.0"
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(JvmTarget.JVM_17)
+    }
 }
 
 dependencies {
-    // Core Android
-    implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
-    implementation("androidx.window:window:1.2.0")
-    implementation("androidx.activity:activity-compose:1.8.2")
+    implementation(project(":shared"))
 
-    // Jetpack Compose
-    implementation(platform("androidx.compose:compose-bom:2024.06.00"))
-    implementation("androidx.compose.ui:ui")
-    implementation("androidx.compose.ui:ui-graphics")
-    implementation("androidx.compose.ui:ui-tooling-preview")
-    implementation("androidx.compose.material3:material3:1.2.1")
-    implementation("androidx.compose.material:material-icons-extended")
+    implementation(libs.compose.runtime)
+    implementation(libs.compose.ui)
 
-    // Navigation Compose
-    implementation("androidx.navigation:navigation-compose:2.7.6")
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.ktx)
+    implementation(libs.androidx.window)
 
-    // ViewModel Compose
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+    implementation(libs.androidx.media3.exoplayer)
+    implementation(libs.androidx.media3.session)
+    implementation(libs.androidx.media3.ui)
+    implementation(libs.androidx.media3.common)
+    implementation(libs.androidx.media3.datasource)
+    implementation(libs.androidx.media3.database)
 
-    // Media3 for playback and watch support
-    implementation("androidx.media3:media3-exoplayer:1.2.1")
-    implementation("androidx.media3:media3-session:1.2.1")
-    implementation("androidx.media3:media3-ui:1.2.1")
-    implementation("androidx.media3:media3-common:1.2.1")
+    implementation(libs.androidx.work.runtime)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.okio)
 
-    // Networking
-    implementation("com.squareup.retrofit2:retrofit:2.9.0")
-    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
-    implementation("com.squareup.okhttp3:logging-interceptor:4.12.0")
-
-    // Room Database
-    implementation("androidx.room:room-runtime:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
-
-    // DataStore
-    implementation("androidx.datastore:datastore-preferences:1.0.0")
-
-    // Coroutines
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-
-    // WorkManager for background downloads
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
-
-    // FFmpeg for audio conversion
-    // 注意：FFmpeg库需要单独集成，这里先注释掉
-    // TODO: 集成 FFmpeg 或使用 ffmpeg-kit-audio 替代
-    // implementation("com.arthenica:ffmpeg-kit-audio:5.1")
-
-    // Image Loading
-    implementation("io.coil-kt:coil-compose:2.5.0")
-
-    // QR Code
-    implementation("com.google.zxing:core:3.5.2")
-    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
-
-    // JSON
-    implementation("com.google.code.gson:gson:2.10.1")
-
-    // Testing
-    testImplementation("junit:junit:4.13.2")
-    androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
-    androidTestImplementation(platform("androidx.compose:compose-bom:2024.06.00"))
-    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
-    debugImplementation("androidx.compose.ui:ui-tooling")
-    debugImplementation("androidx.compose.ui:ui-test-manifest")
+    testImplementation(libs.junit)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.androidx.test.espresso.core)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4:1.12.1")
+    androidTestImplementation(libs.compose.material3)
+    debugImplementation("androidx.compose.ui:ui-test-manifest:1.12.1")
+    debugImplementation(libs.compose.ui.tooling)
 }
