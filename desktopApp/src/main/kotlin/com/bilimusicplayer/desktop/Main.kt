@@ -40,7 +40,7 @@ fun main() {
     application {
         Window(
             onCloseRequest = {
-                container.player.saveState()
+                runCatching { container.player.saveState() }
                 exitApplication()
             },
             title = "BiliMusicPlayer",

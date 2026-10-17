@@ -184,8 +184,13 @@ class DesktopPlayerEngine(
     override fun setShuffle(enabled: Boolean) { _shuffle.value = enabled }
 
     override fun saveState() {
-        // Desktop restores a lightweight queue; full click-by-click state is optional.
-        storage.playbackStateJson = _queue.value.joinToString("\n") { "${it.id}\t${it.title}\t${it.artist}\t${it.coverUrl}\t${it.uri}" }
+        // Closing the window must never surface an exception dialog. The queue is
+        // best-effort state; a failed write only means the next launch starts empty.
+        runCatching {
+            storage.playbackStateJson = _queue.value.joinToString("\n") {
+                "${it.id}\t${it.title}\t${it.artist}\t${it.coverUrl}\t${it.uri}"
+            }
+        }.onFailure { System.err.println("Failed to save desktop queue: $it") }
     }
 
     private fun onEnded() {
