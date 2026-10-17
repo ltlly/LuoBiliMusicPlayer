@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.awt.ComposeWindow
 import java.awt.Frame
+import java.awt.MouseInfo
 import java.awt.Point
 
 /**
@@ -36,14 +37,28 @@ fun MacTitleBar(window: ComposeWindow) {
     val onSurface = MaterialTheme.colorScheme.onSurface
     val dark = surface.luminance() < 0.5f
 
-    val dragModifier = Modifier.pointerInput(Unit) {
-        detectDragGestures { change, dragAmount ->
-            change.consume()
-            window.location = Point(
-                window.location.x + dragAmount.x.toInt(),
-                window.location.y + dragAmount.y.toInt(),
-            )
-        }
+    // Compose reports deltas in pixels and a moving window also moves the local
+    // pointer, so accumulating deltas makes the window run away. Follow the real
+    // screen pointer instead; AWT screen coordinates are already in points.
+    val dragModifier = Modifier.pointerInput(window) {
+        var grabOffset: Point? = null
+        detectDragGestures(
+            onDragStart = {
+                grabOffset = MouseInfo.getPointerInfo()?.location?.let { pointer ->
+                    Point(pointer.x - window.location.x, pointer.y - window.location.y)
+                }
+            },
+            onDragEnd = { grabOffset = null },
+            onDragCancel = { grabOffset = null },
+            onDrag = { change, _ ->
+                change.consume()
+                val offset = grabOffset
+                val pointer = MouseInfo.getPointerInfo()?.location
+                if (offset != null && pointer != null) {
+                    window.location = Point(pointer.x - offset.x, pointer.y - offset.y)
+                }
+            },
+        )
     }
     val doubleClickModifier = Modifier.pointerInput(Unit) {
         detectTapGestures(onDoubleTap = { toggleMaximize(window) })
