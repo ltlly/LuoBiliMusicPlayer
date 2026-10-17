@@ -3,11 +3,9 @@ package com.bilimusicplayer.service
 import android.content.ComponentName
 import android.content.Context
 import android.util.Log
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.*
-import androidx.datastore.preferences.preferencesDataStore
 import androidx.media3.common.*
 import androidx.media3.session.*
+import com.bilimusicplayer.settings.AppStorage
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.*
@@ -16,13 +14,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 
-private val Context.playbackStateDataStore: DataStore<Preferences> by preferencesDataStore(name = "playback_state")
-
 /**
  * Controller for managing music playback
  * Handles playback state persistence and queue loading coordination
  */
-class MusicPlayerController(private val context: Context) {
+class MusicPlayerController(private val context: Context, private val storage: AppStorage) {
 
     private var mediaController: MediaController? = null
     private val _playbackState = MutableStateFlow(PlaybackState())
@@ -35,14 +31,8 @@ class MusicPlayerController(private val context: Context) {
     // Cancel previous queue-loading job to avoid duplicates
     private var queueLoadingJob: Job? = null
 
-    // Persistence keys & constants
     companion object {
         private const val TAG = "MusicPlayerController"
-        private val QUEUE_JSON = stringPreferencesKey("queue_json")
-        private val CURRENT_INDEX = intPreferencesKey("current_index")
-        private val CURRENT_POSITION = longPreferencesKey("current_position")
-        private val REPEAT_MODE_KEY = intPreferencesKey("repeat_mode")
-        private val SHUFFLE_MODE_KEY = booleanPreferencesKey("shuffle_mode")
     }
 
     private val gson = Gson()
@@ -510,12 +500,16 @@ class MusicPlayerController(private val context: Context) {
                 }.also { serializedQueue = queueSnapshot; serializedQueueJson = it }
             }
 
-            context.playbackStateDataStore.edit { prefs ->
-                prefs[QUEUE_JSON] = queueJson
-                prefs[CURRENT_INDEX] = index
-                prefs[CURRENT_POSITION] = position
-                prefs[REPEAT_MODE_KEY] = repeat
-                prefs[SHUFFLE_MODE_KEY] = shuffle
+            storage.playbackStateJson = buildString {
+                append(queueJson)
+                append("\n")
+                append(index)
+                append("\n")
+                append(position)
+                append("\n")
+                append(repeat)
+                append("\n")
+                append(shuffle)
             }
             Log.d(TAG, "播放状态已保存: index=${controller.currentMediaItemIndex}, pos=${controller.currentPosition}, queue=${queueSnapshot.size}")
         } catch (e: Exception) {
@@ -528,12 +522,14 @@ class MusicPlayerController(private val context: Context) {
      */
     private suspend fun restorePlaybackState() {
         try {
-            val prefs = context.playbackStateDataStore.data.first()
-            val queueJson = prefs[QUEUE_JSON] ?: return
-            val savedIndex = prefs[CURRENT_INDEX] ?: 0
-            val savedPosition = prefs[CURRENT_POSITION] ?: 0L
-            val savedRepeatMode = prefs[REPEAT_MODE_KEY] ?: Player.REPEAT_MODE_ALL
-            val savedShuffleMode = prefs[SHUFFLE_MODE_KEY] ?: false
+            val raw = storage.playbackStateJson ?: return
+            val lines = raw.split('\n')
+            if (lines.size < 5) return
+            val queueJson = lines[0]
+            val savedIndex = lines[1].toIntOrNull() ?: 0
+            val savedPosition = lines[2].toLongOrNull() ?: 0L
+            val savedRepeatMode = lines[3].toIntOrNull() ?: Player.REPEAT_MODE_ALL
+            val savedShuffleMode = lines[4].toBooleanStrictOrNull() ?: false
 
             val type = object : TypeToken<List<SavedMediaItem>>() {}.type
             val savedItems: List<SavedMediaItem> = withContext(Dispatchers.Default) {
@@ -544,7 +540,7 @@ class MusicPlayerController(private val context: Context) {
 
             // Rebuild MediaItems — validate local files, skip expired URLs
             val mediaItems = mutableListOf<MediaItem>()
-            val database = com.bilimusicplayer.data.local.AppDatabase.getDatabase(context)
+            val database = com.bilimusicplayer.data.local.AppDatabase.getDatabase()
 
             withContext(Dispatchers.IO) {
                 for (saved in savedItems) {
