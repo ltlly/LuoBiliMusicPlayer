@@ -457,7 +457,7 @@ fun FavoriteContentScreen(
                     )
                 }
 
-                errorMessage != null -> {
+                errorMessage != null && mediaList.isEmpty() -> {
                     Column(
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -470,6 +470,7 @@ fun FavoriteContentScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(onClick = {
+                            container.storage.clearRequestCooldown()
                             scope.launch {
                                 isLoading = true
                                 errorMessage = null
@@ -544,6 +545,36 @@ fun FavoriteContentScreen(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        if (errorMessage != null) {
+                            item(key = "error_banner") {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = "${errorMessage}\n当前显示缓存内容，可继续播放已缓存/下载歌曲。",
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                        TextButton(onClick = {
+                                            container.storage.clearRequestCooldown()
+                                            scope.launch {
+                                                isLoading = true
+                                                errorMessage = null
+                                                loadDataFromApi(page = 1)
+                                                isLoading = false
+                                            }
+                                        }) { Text("重试") }
+                                    }
+                                }
+                            }
+                        }
+
                         // Header showing total count
                         item {
                             Text(

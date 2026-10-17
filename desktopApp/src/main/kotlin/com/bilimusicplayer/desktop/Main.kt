@@ -19,6 +19,7 @@ import com.bilimusicplayer.network.RetrofitClient
 import com.bilimusicplayer.settings.AppStorage
 import com.bilimusicplayer.settings.createSettings
 import com.bilimusicplayer.shared.App
+import kotlinx.coroutines.runBlocking
 import okio.Path.Companion.toOkioPath
 import java.io.File
 
@@ -26,6 +27,7 @@ fun main() {
     initSharedLogging()
     val storage = AppStorage(createSettings())
     RetrofitClient.init(storage)
+    runBlocking { RetrofitClient.ensureBuvidCookies() }
 
     SingletonImageLoader.setSafe { context ->
         ImageLoader.Builder(context)
