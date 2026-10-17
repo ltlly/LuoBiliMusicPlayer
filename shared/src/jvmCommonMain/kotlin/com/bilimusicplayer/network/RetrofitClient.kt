@@ -6,12 +6,16 @@ import com.bilimusicplayer.network.bilibili.auth.BiliAuthApi
 import com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteApi
 import com.bilimusicplayer.network.interceptor.PersistentCookieJar
 import okhttp3.Dns
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.Request
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.net.Inet6Address
 import java.net.InetAddress
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
 /**
@@ -35,6 +39,8 @@ object RetrofitClient {
 
     private const val BASE_URL = "https://api.bilibili.com/"
     private const val PASSPORT_BASE_URL = "https://passport.bilibili.com/"
+    private const val USER_AGENT =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     private lateinit var cookieJar: PersistentCookieJar
     private lateinit var requestGate: BiliRequestGate
@@ -55,6 +61,41 @@ object RetrofitClient {
     }
 
     /**
+     * Bilibili's web API expects a buvid3 cookie. Without it, signed favorite
+     * requests are routinely answered with HTTP 412 even when the account is
+     * logged in. The finger endpoint returns a browser-equivalent pair.
+     */
+    suspend fun ensureBuvidCookies() = withContext(Dispatchers.IO) {
+        if (cookieJar.loadForRequest("https://api.bilibili.com".toHttpUrl()).any { it.name == "buvid3" }) return@withContext
+        runCatching {
+            val client = OkHttpClient()
+            val request = Request.Builder()
+                .url("https://api.bilibili.com/x/frontend/finger/spi")
+                .header("User-Agent", USER_AGENT)
+                .header("Referer", "https://www.bilibili.com")
+                .build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@runCatching
+                val body = response.body?.string() ?: return@runCatching
+                val json = com.google.gson.JsonParser.parseString(body).asJsonObject
+                val data = json.getAsJsonObject("data") ?: return@runCatching
+                val b3 = data.get("b_3")?.asString ?: return@runCatching
+                val b4 = data.get("b_4")?.asString ?: return@runCatching
+                val expires = System.currentTimeMillis() + 365L * 24 * 60 * 60 * 1000
+                cookieJar.saveFromResponse(
+                    "https://bilibili.com".toHttpUrl(),
+                    listOf(
+                        okhttp3.Cookie.Builder().name("buvid3").value(b3)
+                            .domain("bilibili.com").path("/").expiresAt(expires).build(),
+                        okhttp3.Cookie.Builder().name("buvid4").value(b4)
+                            .domain("bilibili.com").path("/").expiresAt(expires).build(),
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
      * OkHttp client with cookie support
      */
     private val okHttpClient: OkHttpClient by lazy {
@@ -69,7 +110,7 @@ object RetrofitClient {
             .addInterceptor(loggingInterceptor)
             .addInterceptor { chain ->
                 val request = chain.request().newBuilder()
-                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+                    .header("User-Agent", USER_AGENT)
                     .header("Referer", "https://www.bilibili.com")
                     .header("Origin", "https://www.bilibili.com")
                     .build()

@@ -127,6 +127,12 @@ class AppStorage(private val settings: Settings) {
         set(value) = value?.let { settings.putString(KEY_PLAYBACK_STATE, it) }
             ?: settings.remove(KEY_PLAYBACK_STATE)
 
+    fun clearRequestCooldown() {
+        gateCooldownUntil = 0L
+        gateLevel = 0
+        gateLastRequestAt = 0L
+    }
+
     fun cookieStoreJson(): String? = settings.getStringOrNull(KEY_COOKIES)
 
     fun saveCookieStoreJson(json: String) = settings.putString(KEY_COOKIES, json)

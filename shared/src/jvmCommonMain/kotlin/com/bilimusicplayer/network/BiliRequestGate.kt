@@ -25,7 +25,9 @@ class BiliRequestGate(private val storage: AppStorage) : Interceptor {
             val now = System.currentTimeMillis()
             if (storage.gateCooldownUntil > now) throw BiliRateLimitedException()
 
-            val interval = storage.downloadSettings.value.apiRequestIntervalMs
+            // Even with the user rate limit disabled, keep a small gap between
+            // requests. Bursting 40+ favorite pages is what typically triggers 412.
+            val interval = maxOf(storage.downloadSettings.value.apiRequestIntervalMs, MIN_INTERVAL_MS)
             val delay = if (interval > 0) storage.gateLastRequestAt + interval - now else 0L
             if (delay > 0) Thread.sleep(delay.coerceAtMost(60_000))
 
@@ -57,5 +59,6 @@ class BiliRequestGate(private val storage: AppStorage) : Interceptor {
 
     private companion object {
         val lock = ReentrantLock(true)
+        const val MIN_INTERVAL_MS = 250L
     }
 }

@@ -145,6 +145,7 @@ fun FavoriteListScreen(navController: NavController) {
                         )
                         Spacer(modifier = Modifier.height(16.dp))
                         Button(onClick = {
+                            container.storage.clearRequestCooldown()
                             loadFolders(forceRefresh = true)
                         }) {
                             Text("重试")

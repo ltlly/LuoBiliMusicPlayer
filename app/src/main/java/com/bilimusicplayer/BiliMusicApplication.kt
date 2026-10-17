@@ -54,6 +54,7 @@ class BiliMusicApplication : Application() {
                 .build()
         }
 
+        applicationScope.launch(Dispatchers.IO) { RetrofitClient.ensureBuvidCookies() }
         container = AndroidAppContainer(this, storage, applicationScope)
         applicationScope.launch { container.player.initialize() }
         if (!storage.accessToken.isNullOrEmpty()) {

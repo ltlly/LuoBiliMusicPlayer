@@ -284,6 +284,14 @@ fun DownloadSettingsScreen(navController: NavController) {
                 }
             }
 
+            SettingsActionItem(
+                icon = Icons.Default.Timer,
+                title = "解除请求冷却",
+                subtitle = "清除本地冷却计时并立即重试；不会绕过 B站 服务端限制",
+                actionText = "解除",
+                onActionClick = { storage.clearRequestCooldown() }
+            )
+
             HorizontalDivider()
 
             // Audio quality
