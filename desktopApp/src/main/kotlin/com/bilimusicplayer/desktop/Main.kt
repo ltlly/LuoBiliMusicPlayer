@@ -1,5 +1,11 @@
 package com.bilimusicplayer.desktop
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -37,16 +43,40 @@ fun main() {
     }
 
     val container = DesktopAppContainer(storage)
+    val isMac = System.getProperty("os.name").lowercase().contains("mac")
     application {
+        val closeWindow: () -> Unit = {
+            runCatching { container.player.saveState() }
+            exitApplication()
+        }
         Window(
-            onCloseRequest = {
-                runCatching { container.player.saveState() }
-                exitApplication()
-            },
+            onCloseRequest = closeWindow,
             title = "BiliMusicPlayer",
             state = rememberWindowState(size = DpSize(1100.dp, 760.dp)),
+            undecorated = isMac,
+            transparent = isMac,
         ) {
-            App(container)
+            LaunchedEffect(Unit) {
+                if (isMac) {
+                    window.rootPane.isOpaque = false
+                    window.background = java.awt.Color(0, 0, 0, 0)
+                    window.isResizable = true
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .then(if (isMac) Modifier.clip(RoundedCornerShape(12.dp)) else Modifier),
+            ) {
+                App(
+                    container = container,
+                    windowChrome = if (isMac) {
+                        { MacTitleBar(window, closeWindow) }
+                    } else {
+                        null
+                    },
+                )
+            }
         }
     }
 }
