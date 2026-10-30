@@ -39,7 +39,7 @@ class QualityUpgradeManager(private val context: Context) {
         awaitClose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
     }.distinctUntilChanged()
     suspend fun prepareUris(): List<Uri> = withContext(Dispatchers.IO) {
-        val songs = AppDatabase.getDatabase(context).songDao().getAllSongsOnce().filter { it.isDownloaded }
+        val songs = AppDatabase.getDatabase().songDao().getAllSongsOnce().filter { it.isDownloaded }
         val paths = songs.mapNotNull { it.localPath }.toSet()
         val collection = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
         val found = mutableListOf<Uri>()
@@ -69,7 +69,7 @@ class QualityUpgradeManager(private val context: Context) {
         android.util.Log.i("QualityUpgrade", "进度 ${state.done}/${state.total}，升级 ${state.upgraded}，保留 ${state.unchanged}，未能升级 ${state.failed}")
     }
     suspend fun errors(): List<Pair<String, String>> = withContext(Dispatchers.IO) {
-        AppDatabase.getDatabase(context).songDao().getAllSongsOnce()
+        AppDatabase.getDatabase().songDao().getAllSongsOnce()
             .filter { outcome(it.id) == "failed" }.map { it.title to prefs.getString("reason:${it.id}", "无法升级")!! }
     }
     suspend fun start(uris: List<Uri>, retryFailures: Boolean = false) = withContext(Dispatchers.IO) {
@@ -79,7 +79,7 @@ class QualityUpgradeManager(private val context: Context) {
             com.bilimusicplayer.network.RetrofitClient.biliFavoriteApi
         ).initWbiKeys()
         AudioFileReplacement(context).recover()
-        val dao = AppDatabase.getDatabase(context).songDao()
+        val dao = AppDatabase.getDatabase().songDao()
         val songs = dao.getAllSongsOnce().filter { it.isDownloaded && it.localPath != null }
         // Old renamed titles sometimes produced a local_* duplicate. Prove identity
         // against an existing identified file, without a search or any server request.
@@ -93,7 +93,7 @@ class QualityUpgradeManager(private val context: Context) {
             val matching = candidates.filter { fileHash(File(it.localPath!!)).contentEquals(hash) }.distinctBy { it.bvid }
             if (matching.size == 1) {
                 val source = matching.single()
-                val cid = source.cid.takeIf { it > 0 } ?: AppDatabase.getDatabase(context).cachedPlaybackUrlDao().getCachedUrl(source.bvid)?.cid ?: 0L
+                val cid = source.cid.takeIf { it > 0 } ?: AppDatabase.getDatabase().cachedPlaybackUrlDao().getCachedUrl(source.bvid)?.cid ?: 0L
                 dao.updateSource(unknown.id, source.bvid, cid)
             }
         }

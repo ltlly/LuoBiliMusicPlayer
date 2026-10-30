@@ -342,6 +342,26 @@ Room数据库持久化：
   - v1.2.0: 现代化UI设计、主题切换
   - v1.1.0: 搜索功能、多选功能、播放状态显示
 
+## 多端构建（Android + macOS + Windows）
+
+界面与业务逻辑现在位于 `:shared`（Compose Multiplatform），
+Android 壳在 `:app`，桌面壳在 `:desktopApp`。
+
+```bash
+# Android
+./gradlew :app:assembleDebug
+./gradlew :app:assembleRelease
+
+# 桌面（当前系统）
+./gradlew :desktopApp:run
+./gradlew :desktopApp:packageDmg   # macOS
+./gradlew :desktopApp:packageMsi   # Windows（需在 Windows 上执行）
+```
+
+桌面端使用 MPV 播放（MediaMP 自带 LGPL 运行时），macOS/Windows 是同一个
+`desktop` 目标，不需要维护两套界面。Windows 的 MSI 需在 Windows
+构建机或 CI 上打包；macOS 未签名时首次打开需右键 → 打开。
+
 ## 许可证
 
 本项目仅用于教育目的。请尊重哔哩哔哩的服务条款。

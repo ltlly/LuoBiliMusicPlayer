@@ -28,7 +28,7 @@ class AudioFileReplacement(private val context: Context) {
         if (!backup.exists() || backup.length() != prefs.getLong("size", -1)) throw IOException("旧音频恢复副本不完整")
         write(backup, uri)
         val id = prefs.getString("id", null)!!
-        AppDatabase.getDatabase(context).songDao().updateDownloadStatus(id, true, path, backup.length())
+        AppDatabase.getDatabase().songDao().updateDownloadStatus(id, true, path, backup.length())
         val quality = context.getSharedPreferences("download_audio_quality", Context.MODE_PRIVATE).edit()
         quality.putLong("size:$path", backup.length()).putInt("rank:$path", prefs.getInt("rank", 0))
         val oldLabel = prefs.getString("label", null)

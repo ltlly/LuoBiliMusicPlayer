@@ -1,94 +1,50 @@
 package com.bilimusicplayer.service.download
 
 import android.content.Context
-import androidx.datastore.core.DataStore
-import androidx.datastore.preferences.core.Preferences
-import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.booleanPreferencesKey
-import androidx.datastore.preferences.preferencesDataStore
+import com.bilimusicplayer.BiliMusicApplication
+import com.bilimusicplayer.settings.AppStorage
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
-private val Context.downloadSettingsDataStore: DataStore<Preferences> by preferencesDataStore(
-    name = "download_settings"
-)
-
 /**
- * Manager for download-related settings
- * Persisted using DataStore preferences
+ * Compatibility facade over the shared AppStorage for existing Android workers.
+ * The desktop implementation reads the same settings through AppStorage.
  */
-class DownloadSettingsManager(private val context: Context) {
+class DownloadSettingsManager(private val storage: AppStorage) {
 
-    private val MAX_CONCURRENT_DOWNLOADS_KEY = intPreferencesKey("max_concurrent_downloads")
-    private val API_RATE_LIMIT_KEY = intPreferencesKey("api_rate_limit_per_minute")
-    private val API_RATE_LIMIT_ENABLED_KEY = booleanPreferencesKey("api_rate_limit_enabled")
-    val apiRateLimitEnabled: Flow<Boolean> = context.downloadSettingsDataStore.data.map {
-        it[API_RATE_LIMIT_ENABLED_KEY] ?: false
-    }
+    constructor(context: Context) : this(BiliMusicApplication.instance.storage)
+
+    val apiRateLimitEnabled: Flow<Boolean> =
+        storage.downloadSettings.map { it.apiRateLimitEnabled }
+
     suspend fun setApiRateLimitEnabled(enabled: Boolean) {
-        context.downloadSettingsDataStore.edit { it[API_RATE_LIMIT_ENABLED_KEY] = enabled }
-    }
-    /** Disabled by default; preserves the chosen rate for a later explicit re-enable. */
-    suspend fun getApiRequestIntervalMs(): Long {
-        val preferences = context.downloadSettingsDataStore.data.first()
-        if (preferences[API_RATE_LIMIT_ENABLED_KEY] != true) return 0L
-        return 60_000L / (preferences[API_RATE_LIMIT_KEY] ?: DEFAULT_API_RATE_LIMIT)
-            .coerceIn(MIN_API_RATE_LIMIT, MAX_API_RATE_LIMIT)
+        storage.updateDownloadSettings { it.copy(apiRateLimitEnabled = enabled) }
     }
 
-    private val WIFI_ONLY_KEY = booleanPreferencesKey("wifi_only")
-    val wifiOnly: Flow<Boolean> = context.downloadSettingsDataStore.data.map { it[WIFI_ONLY_KEY] ?: false }
-    suspend fun getWifiOnly() = wifiOnly.first()
-    suspend fun setWifiOnly(value: Boolean) { context.downloadSettingsDataStore.edit { it[WIFI_ONLY_KEY] = value } }
+    suspend fun getApiRequestIntervalMs(): Long = storage.downloadSettings.value.apiRequestIntervalMs
 
-    /**
-     * Observe max concurrent downloads setting as Flow
-     */
-    val maxConcurrentDownloads: Flow<Int> = context.downloadSettingsDataStore.data.map { preferences ->
-        preferences[MAX_CONCURRENT_DOWNLOADS_KEY] ?: DEFAULT_MAX_CONCURRENT
+    val wifiOnly: Flow<Boolean> = storage.downloadSettings.map { it.wifiOnly }
+
+    suspend fun getWifiOnly(): Boolean = storage.downloadSettings.value.wifiOnly
+
+    suspend fun setWifiOnly(value: Boolean) {
+        storage.updateDownloadSettings { it.copy(wifiOnly = value) }
     }
 
-    /**
-     * Observe API rate limit (requests per minute) as Flow
-     */
-    val apiRateLimit: Flow<Int> = context.downloadSettingsDataStore.data.map { preferences ->
-        preferences[API_RATE_LIMIT_KEY] ?: DEFAULT_API_RATE_LIMIT
-    }
+    val maxConcurrentDownloads: Flow<Int> = storage.downloadSettings.map { it.maxConcurrent }
 
-    /**
-     * Get current max concurrent downloads value (blocking/suspending)
-     */
-    suspend fun getMaxConcurrentDownloads(): Int {
-        return maxConcurrentDownloads.first()
-    }
+    val apiRateLimit: Flow<Int> = storage.downloadSettings.map { it.apiRateLimitPerMinute }
 
-    /**
-     * Get current API rate limit (requests per minute)
-     */
-    suspend fun getApiRateLimit(): Int {
-        return apiRateLimit.first()
-    }
+    suspend fun getMaxConcurrentDownloads(): Int = storage.downloadSettings.value.maxConcurrent
 
-    /**
-     * Set max concurrent downloads
-     */
+    suspend fun getApiRateLimit(): Int = storage.downloadSettings.value.apiRateLimitPerMinute
+
     suspend fun setMaxConcurrentDownloads(count: Int) {
-        val value = count.coerceIn(MIN_CONCURRENT, MAX_CONCURRENT)
-        context.downloadSettingsDataStore.edit { preferences ->
-            preferences[MAX_CONCURRENT_DOWNLOADS_KEY] = value
-        }
+        storage.updateDownloadSettings { it.copy(maxConcurrent = count) }
     }
 
-    /**
-     * Set API rate limit (requests per minute)
-     */
     suspend fun setApiRateLimit(requestsPerMinute: Int) {
-        val value = requestsPerMinute.coerceIn(MIN_API_RATE_LIMIT, MAX_API_RATE_LIMIT)
-        context.downloadSettingsDataStore.edit { preferences ->
-            preferences[API_RATE_LIMIT_KEY] = value
-        }
+        storage.updateDownloadSettings { it.copy(apiRateLimitPerMinute = requestsPerMinute) }
     }
 
     companion object {
@@ -96,9 +52,8 @@ class DownloadSettingsManager(private val context: Context) {
         const val MIN_CONCURRENT = 1
         const val MAX_CONCURRENT = 8
 
-        const val DEFAULT_API_RATE_LIMIT = 20   // Used only when explicitly enabled.
-        const val MIN_API_RATE_LIMIT = 10        // minimum 10 req/min
-        const val MAX_API_RATE_LIMIT = 60        // maximum 60 req/min
+        const val DEFAULT_API_RATE_LIMIT = 20
+        const val MIN_API_RATE_LIMIT = 10
+        const val MAX_API_RATE_LIMIT = 60
     }
 }
-

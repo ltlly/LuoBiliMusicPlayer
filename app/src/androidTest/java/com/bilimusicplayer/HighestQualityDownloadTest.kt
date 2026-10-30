@@ -30,7 +30,7 @@ import java.util.concurrent.TimeUnit
 class HighestQualityDownloadTest {
     @Test fun workerRefreshesOldUrlAndSavesOriginalFlacTrack() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val db = AppDatabase.getDatabase(context)
+        val db = AppDatabase.getDatabase()
         val manager = WorkManager.getInstance(context)
         val id = "quality_probe_${UUID.randomUUID()}"
         val title = "Codex_${id}"
