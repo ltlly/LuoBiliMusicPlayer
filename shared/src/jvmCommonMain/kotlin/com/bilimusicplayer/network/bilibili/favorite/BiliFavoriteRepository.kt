@@ -61,7 +61,7 @@ class BiliFavoriteRepository(
     }
 
     /**
-     * Get favorite folder contents with WBI signature
+     * Get favorite folder contents — 默认 APP 签名，风控响应回退 WBI 签名。
      * @param mediaId Favorite folder ID
      * @param pageNumber Page number (default 1)
      * @param pageSize Page size (default 20)
@@ -73,13 +73,6 @@ class BiliFavoriteRepository(
         pageSize: Int = 20,
         keyword: String? = null
     ): Response<FavoriteResourceResponse> {
-        // Ensure WBI keys are initialized
-        if (!WbiSignature.isInitialized()) {
-            if (!initWbiKeys()) {
-                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
-            }
-        }
-
         val params = mutableMapOf(
             "media_id" to mediaId.toString(),
             "pn" to pageNumber.toString(),
@@ -93,53 +86,54 @@ class BiliFavoriteRepository(
             Log.d(TAG, "添加搜索关键词: $keyword")
         }
 
-        Log.d(TAG, "请求参数: $params")
+        // 默认通道：APP签名（无需先调 nav 初始化，且与 WBI 是不同风控计数）
+        val response = throttle { api.getFavoriteResources(AppSignature.signParams(params)) }
+        val code = response.body()?.code
+        if (response.isSuccessful && code !in listOf(-352, -403, -412)) return response
 
-        // Sign the parameters with WBI (without URL encoding)
-        val signedParams = WbiSignature.signParams(params)
-
-        Log.d(TAG, "签名后参数: $signedParams")
-
-        return throttle { api.getFavoriteResources(signedParams) }
+        // 兜底通道：WBI 签名
+        Log.w(TAG, "APP签名通道失败(HTTP ${response.code()}, code=$code)，回退WBI")
+        if (!WbiSignature.isInitialized() && !initWbiKeys()) return response
+        return throttle { api.getFavoriteResources(WbiSignature.signParams(params)) }
     }
 
     /**
-     * Get video detail by BVID (with WBI signature)
+     * Get video detail by BVID — 默认 APP 签名，风控响应回退 WBI 签名
      */
     suspend fun getVideoDetail(bvid: String): Response<VideoDetailResponse> {
-        // Ensure WBI keys are initialized
-        if (!WbiSignature.isInitialized()) {
-            if (!initWbiKeys()) {
-                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
-            }
-        }
+        val params = mapOf("bvid" to bvid)
 
-        val params = mapOf(
-            "bvid" to bvid
-        )
+        val response = throttle { api.getVideoDetail(AppSignature.signParams(params)) }
+        val code = response.body()?.code
+        if (response.isSuccessful && code !in listOf(-352, -403, -412)) return response
 
-        val signedParams = WbiSignature.signParams(params)
-
-        return throttle { api.getVideoDetail(signedParams) }
+        Log.w(TAG, "view接口APP签名失败(HTTP ${response.code()}, code=$code)，回退WBI")
+        if (!WbiSignature.isInitialized() && !initWbiKeys()) return response
+        return throttle { api.getVideoDetail(WbiSignature.signParams(params)) }
     }
 
     /**
      * Get all resource ids in a folder — 1 request regardless of folder size.
      * 收藏夹有几十页时用它替代逐页翻请求，请求数从 N 页降到 1 次。
+     * 默认 APP 签名，风控响应回退 WBI 签名。
      */
     suspend fun getFavoriteResourceIds(mediaId: Long): List<FavResourceId> {
-        if (!WbiSignature.isInitialized()) {
-            if (!initWbiKeys()) {
-                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
-            }
-        }
         val params = mapOf(
             "media_id" to mediaId.toString(),
             "platform" to "web"
         )
-        val response = throttle { api.getFavoriteResourceIds(WbiSignature.signParams(params)) }
-        if (!response.isSuccessful || response.body()?.code != 0) {
-            throw java.io.IOException("获取收藏夹ID列表失败: HTTP ${response.code()}, code=${response.body()?.code}")
+
+        var response = throttle { api.getFavoriteResourceIds(AppSignature.signParams(params)) }
+        var code = response.body()?.code
+        if (!response.isSuccessful || code in listOf(-352, -403, -412)) {
+            Log.w(TAG, "ids接口APP签名失败(HTTP ${response.code()}, code=$code)，回退WBI")
+            if (WbiSignature.isInitialized() || initWbiKeys()) {
+                response = throttle { api.getFavoriteResourceIds(WbiSignature.signParams(params)) }
+                code = response.body()?.code
+            }
+        }
+        if (!response.isSuccessful || code != 0) {
+            throw java.io.IOException("获取收藏夹ID列表失败: HTTP ${response.code()}, code=$code")
         }
         return response.body()?.data ?: emptyList()
     }
@@ -167,8 +161,8 @@ class BiliFavoriteRepository(
             "otype" to "json"
         )
 
-        // Primary: non-WBI endpoint
-        val response = throttle { api.getPlayUrl(params) }
+        // Primary: non-WBI endpoint, APP签名（默认算法）
+        val response = throttle { api.getPlayUrl(AppSignature.signParams(params)) }
         if (response.isSuccessful && response.body()?.code == 0) return response
 
         // Fallback: WBI-signed endpoint — 仅在接口级失败/风控时重试；
