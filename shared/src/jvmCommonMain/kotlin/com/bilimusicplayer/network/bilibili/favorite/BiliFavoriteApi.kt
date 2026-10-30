@@ -43,11 +43,30 @@ interface BiliFavoriteApi {
     ): Response<VideoDetailResponse>
 
     /**
-     * Get play URL (requires WBI signature)
+     * Get all resource ids in a favorite folder in ONE request (no pagination).
+     * GET https://api.bilibili.com/x/v3/fav/resource/ids
+     */
+    @GET("x/v3/fav/resource/ids")
+    suspend fun getFavoriteResourceIds(
+        @QueryMap params: Map<String, String>
+    ): Response<FavResourceIdsResponse>
+
+    /**
+     * Get play URL — 免WBI取流接口（bilimiao等三方客户端同款），
+     * 与 wbi/playurl 不同风控池，连播时更不容易触发 -352/412。
+     * GET https://api.bilibili.com/x/player/playurl
+     */
+    @GET("x/player/playurl")
+    suspend fun getPlayUrl(
+        @QueryMap params: Map<String, String>
+    ): Response<PlayUrlResponse>
+
+    /**
+     * WBI 签名版取流接口（兜底）。
      * GET https://api.bilibili.com/x/player/wbi/playurl
      */
     @GET("x/player/wbi/playurl")
-    suspend fun getPlayUrl(
+    suspend fun getPlayUrlWbi(
         @QueryMap params: Map<String, String>
     ): Response<PlayUrlResponse>
 }

@@ -105,10 +105,9 @@ class AndroidLocalLibraryService(
                             val contentCacheRepo = com.bilimusicplayer.data.repository.FavoriteContentCacheRepository(database)
                             for (folder in folders) {
                                 try {
-                                    val allMedia = repository.getAllFavoriteVideos(folder.id)
-                                    if (allMedia.isNotEmpty()) {
-                                        contentCacheRepo.cacheMediaList(folder.id, allMedia)
-                                    }
+                                    // 增量同步：resource/ids 一次拿全量bvid，只抓缺失页
+                                    val fetched = contentCacheRepo.syncFolderIncremental(repository, folder.id)
+                                    android.util.Log.d("LibraryScan", "  增量同步收藏夹 '${folder.title}': +$fetched 条")
                                     kotlinx.coroutines.delay(300)
                                 } catch (e: Exception) {
                                     android.util.Log.e("LibraryScan", "同步收藏夹失败: ${folder.title}", e)

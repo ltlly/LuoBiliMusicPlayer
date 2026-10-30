@@ -142,18 +142,25 @@ object BiliAudioResolver {
             return cachedUrl.audioUrl
         }
 
-        // Priority 3: Fetch from API (2 calls: getVideoDetail + getPlayUrl)
+        // Priority 3: Fetch from API.
+        // Reuse the cached CID even when the URL expired — CIDs don't expire,
+        // so this is 1 API call (playurl) instead of 2 (view + playurl).
         Log.d(TAG, "API请求: $bvid")
         val repository = BiliFavoriteRepository(RetrofitClient.biliFavoriteApi)
 
-        val detailResponse = repository.getVideoDetail(bvid)
-        if (!detailResponse.isSuccessful || detailResponse.body()?.code != 0) {
-            Log.e(TAG, "getVideoDetail失败: ${detailResponse.code()}")
-            return null
+        val knownCid = cachedUrl?.cid?.takeIf { it > 0 }
+        val cid = knownCid ?: run {
+            val detailResponse = repository.getVideoDetail(bvid)
+            if (!detailResponse.isSuccessful || detailResponse.body()?.code != 0) {
+                Log.e(TAG, "getVideoDetail失败: ${detailResponse.code()}")
+                return null
+            }
+            detailResponse.body()?.data?.cid ?: return null
         }
-        val cid = detailResponse.body()?.data?.cid ?: return null
 
-        val playUrlResponse = repository.getPlayUrl(cid, bvid)
+        val resolved = repository.getPlayUrlWithFreshCidFallback(cid, bvid, allowRefresh = knownCid != null)
+        val playUrlResponse = resolved.response
+        val finalCid = resolved.cid
         if (!playUrlResponse.isSuccessful || playUrlResponse.body()?.code != 0) {
             Log.e(TAG, "getPlayUrl失败: ${playUrlResponse.code()}")
             return null
@@ -168,7 +175,7 @@ object BiliAudioResolver {
             database.cachedPlaybackUrlDao().insertCachedUrl(
                 CachedPlaybackUrl(
                     bvid = bvid,
-                    cid = cid,
+                    cid = finalCid,
                     audioUrl = audioUrl,
                     title = song?.title ?: bvid,
                     artist = song?.artist ?: "",

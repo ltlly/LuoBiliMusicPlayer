@@ -223,16 +223,47 @@ class DesktopPlayerEngine(
                 track.uri to emptyMap()
             }
         }
+        val database = com.bilimusicplayer.data.local.AppDatabase.getDatabase()
+
+        // 已下载的本地文件直接播放（0 API）
+        val song = database.songDao().getSongById(track.id)
+        if (song != null && song.isDownloaded && song.localPath != null && File(song.localPath!!).exists()) {
+            return@withContext File(song.localPath!!).toURI().toString() to emptyMap()
+        }
+
+        // 有效URL缓存直接播放（0 API）
+        val cached = database.cachedPlaybackUrlDao().getCachedUrl(track.id)
+        if (cached != null && cached.expiresAt > System.currentTimeMillis()) {
+            return@withContext cached.audioUrl to bilibiliHeaders()
+        }
+
         val repository = BiliFavoriteRepository(RetrofitClient.biliFavoriteApi)
-        val detail = repository.getVideoDetail(track.id)
-        val cid = detail.body()?.data?.cid ?: throw IllegalStateException("无法获取视频信息")
-        val playUrl = repository.getPlayUrl(cid, track.id)
+
+        // 复用缓存行里的CID（即使URL已过期）——1次 playurl 请求替代 view+playurl
+        val knownCid = cached?.cid?.takeIf { it > 0 }
+        val cid = knownCid ?: run {
+            val detail = repository.getVideoDetail(track.id)
+            detail.body()?.data?.cid ?: throw IllegalStateException("无法获取视频信息")
+        }
+        val resolved = repository.getPlayUrlWithFreshCidFallback(cid, track.id, allowRefresh = knownCid != null)
+        val playUrl = resolved.response
         val stream = repository.selectBestAudioStream(playUrl.body()?.data?.dash)
             ?: throw IllegalStateException("当前账号无法获取音轨")
         val url = AudioQuality.urls(stream).firstOrNull() ?: throw IllegalStateException("音轨地址为空")
-        url to mapOf(
-            "Referer" to "https://www.bilibili.com",
-            "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        )
+        try {
+            database.cachedPlaybackUrlDao().insertCachedUrl(
+                com.bilimusicplayer.data.model.CachedPlaybackUrl(
+                    bvid = track.id, cid = resolved.cid, audioUrl = url,
+                    title = track.title, artist = track.artist,
+                    coverUrl = track.coverUrl, duration = (track.durationMs / 1000).toInt()
+                )
+            )
+        } catch (_: Exception) {}
+        url to bilibiliHeaders()
     }
+
+    private fun bilibiliHeaders() = mapOf(
+        "Referer" to "https://www.bilibili.com",
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    )
 }

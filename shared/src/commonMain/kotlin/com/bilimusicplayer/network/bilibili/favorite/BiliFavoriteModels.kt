@@ -100,6 +100,22 @@ val FavoriteMedia.artistName: String
 val FavoriteMedia.artistMid: Long
     get() = upper?.mid ?: 0L
 
+/**
+ * Response of x/v3/fav/resource/ids — data is a flat array of {id,type,bv_id|bvid}
+ */
+data class FavResourceIdsResponse(
+    val code: Int,
+    val message: String,
+    val data: List<FavResourceId>?
+)
+
+data class FavResourceId(
+    val id: Long,
+    val type: Int,
+    @SerializedName(value = "bv_id", alternate = ["bvid"])
+    val bvid: String?
+)
+
 data class Upper(
     val mid: Long? = null,
     val name: String? = null,
