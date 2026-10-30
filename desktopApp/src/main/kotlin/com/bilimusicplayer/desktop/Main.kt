@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
@@ -66,6 +67,7 @@ fun main() {
         Window(
             onCloseRequest = closeWindow,
             title = "BiliMusicPlayer",
+            icon = painterResource("icon.png"),
             state = rememberWindowState(size = DpSize(1100.dp, 760.dp)),
             undecorated = !isMac,
         ) {

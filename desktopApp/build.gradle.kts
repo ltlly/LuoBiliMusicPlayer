@@ -54,6 +54,12 @@ compose.desktop {
             packageVersion = "1.5.4"
             description = "Bilibili music player for Android, macOS and Windows"
             vendor = "LuoBiliMusicPlayer"
+            windows {
+                iconFile.set(project.file("icons/icon.ico"))
+            }
+            macOS {
+                iconFile.set(project.file("icons/icon.icns"))
+            }
         }
     }
 }
