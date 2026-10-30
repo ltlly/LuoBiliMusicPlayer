@@ -76,6 +76,9 @@ fun FavoriteContentScreen(
     var currentPage by remember { mutableStateOf(1) }
     var hasMore by remember { mutableStateOf(true) }
     var totalCount by remember { mutableStateOf(0) }
+    // 收藏夹真实总数（仅非搜索加载时更新）；搜索时 totalCount 会变成匹配数，
+    // 判断"缓存是否覆盖整个收藏夹"必须用这个值
+    var folderTotalCount by remember { mutableStateOf(0) }
     var isPlaying by remember { mutableStateOf(false) }
     var playingBvid by remember { mutableStateOf<String?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -127,6 +130,7 @@ fun FavoriteContentScreen(
 
                 // Cache the data (only for non-search requests)
                 if (keyword == null) {
+                    folderTotalCount = totalCount
                     withContext(Dispatchers.IO) {
                         if (page == 1 && !append) {
                             // Refresh page 1 without wiping later cached pages
@@ -191,6 +195,7 @@ fun FavoriteContentScreen(
                     val data = response.body()?.data
                     val newMedias = data?.medias ?: emptyList()
                     totalCount = data?.info?.mediaCount ?: 0
+                    folderTotalCount = totalCount
 
                     // Update page 1 in cache
                     withContext(Dispatchers.IO) {
@@ -226,11 +231,47 @@ fun FavoriteContentScreen(
     // Perform search when search query changes
     LaunchedEffect(searchQuery, isSearchActive) {
         if (isSearchActive) {
-            // Debounce for better UX (restarted on each keystroke, cancelling the previous)
-            kotlinx.coroutines.delay(400)
             val keyword = if (searchQuery.isBlank()) null else searchQuery.trim()
-            // Skip duplicate requests for the same keyword
+            // Skip duplicate work for the same keyword
             if (keyword == lastSearchKeyword && mediaList.isNotEmpty()) return@LaunchedEffect
+
+            // Local-first: filter the cached folder contents (0 API requests).
+            // 大收藏夹翻页+搜索极易触发B站风控，缓存齐全时完全本地搜索。
+            val cached = withContext(Dispatchers.IO) {
+                contentCacheRepository.getCachedMediaList(folderId)
+            }.orEmpty().distinctBy { it.bvid }
+
+            fun matches(m: FavoriteMedia, k: String) =
+                m.title.contains(k, ignoreCase = true) ||
+                    m.upper?.name?.contains(k, ignoreCase = true) == true
+
+            if (keyword == null) {
+                // 空搜索框：直接从缓存恢复完整列表，不发请求
+                lastSearchKeyword = null
+                isLocalSearchResult = false
+                if (cached.isNotEmpty()) {
+                    mediaList = cached
+                    hasMore = mediaList.size < totalCount
+                    errorMessage = null
+                }
+                return@LaunchedEffect
+            }
+
+            // Cache covers the whole folder → search entirely locally
+            val cacheComplete = cached.isNotEmpty() && (folderTotalCount <= 0 || cached.size >= folderTotalCount)
+            if (cacheComplete) {
+                lastSearchKeyword = keyword
+                mediaList = cached.filter { matches(it, keyword) }
+                hasMore = false
+                errorMessage = null
+                isLocalSearchResult = true
+                Log.d("FavoriteContent", "本地搜索: ${mediaList.size} 条 (缓存${cached.size}条)")
+                return@LaunchedEffect
+            }
+
+            // Cache incomplete → remote search (debounced)
+            kotlinx.coroutines.delay(400)
+            if (searchQuery.trim() != keyword) return@LaunchedEffect // query changed while waiting
             lastSearchKeyword = keyword
             isSearching = true
             errorMessage = null
@@ -242,22 +283,13 @@ fun FavoriteContentScreen(
                 val ok = loadDataFromApi(page = 1, keyword = keyword)
                 if (!ok) {
                     // 网络失败：用本地收藏夹缓存兜底，保证搜索永远有结果
-                    if (keyword != null) {
-                        val cached = withContext(Dispatchers.IO) {
-                            contentCacheRepository.getCachedMediaList(folderId)
-                        }.orEmpty()
-                        val matched = cached.filter { m ->
-                            m.title.contains(keyword, ignoreCase = true) ||
-                                m.upper?.name?.contains(keyword, ignoreCase = true) == true
-                        }.distinctBy { it.bvid }
-                        Log.d("FavoriteContent", "搜索API失败，本地缓存兜底: ${matched.size} 条")
-                        if (matched.isNotEmpty()) {
-                            mediaList = matched
-                            totalCount = matched.size
-                            hasMore = false
-                            errorMessage = null
-                            isLocalSearchResult = true
-                        }
+                    val matched = cached.filter { matches(it, keyword) }
+                    Log.d("FavoriteContent", "搜索API失败，本地缓存兜底: ${matched.size} 条")
+                    if (matched.isNotEmpty()) {
+                        mediaList = matched
+                        hasMore = false
+                        errorMessage = null
+                        isLocalSearchResult = true
                     }
                 }
             } finally {
@@ -289,6 +321,19 @@ fun FavoriteContentScreen(
         scope.launch {
             isLoadingMore = true
             try {
+                // 非搜索模式下，先尝试用本地缓存补齐下一页（0 API请求）
+                if (!isSearchActive) {
+                    val cached = withContext(Dispatchers.IO) {
+                        contentCacheRepository.getCachedMediaList(folderId)
+                    }.orEmpty().distinctBy { it.bvid }
+                    if (cached.size > mediaList.size) {
+                        mediaList = (mediaList + cached.drop(mediaList.size)).distinctBy { it.bvid }
+                        currentPage = (mediaList.size + 19) / 20
+                        hasMore = mediaList.size < totalCount
+                        Log.d("FavoriteContent", "loadMore 命中缓存: 共${mediaList.size}条")
+                        return@launch
+                    }
+                }
                 val nextPage = currentPage + 1
                 // 搜索模式分页必须与触发搜索的关键词一致（searchQuery 此刻可能已被用户改动）
                 val keyword = if (isSearchActive) lastSearchKeyword else null
@@ -484,6 +529,7 @@ fun FavoriteContentScreen(
                                         val data = response.body()?.data
                                         mediaList = (data?.medias ?: emptyList()).distinctBy { it.bvid }
                                         totalCount = data?.info?.mediaCount ?: 0
+                                        folderTotalCount = totalCount
                                         currentPage = 1
                                         hasMore = mediaList.size < totalCount
                                     } else {
@@ -650,6 +696,7 @@ fun FavoriteContentScreen(
                                                 // Normal mode: load full playlist from folder
                                                 loadPlaylistWithCache(
                                                     cacheRepository = cacheRepository,
+                                                    contentCacheRepository = contentCacheRepository,
                                                     biliRepository = repository,
                                                     folderId = folderId,
                                                     folderName = folderTitle,
@@ -657,7 +704,6 @@ fun FavoriteContentScreen(
                                                     clickedMedia = media,
                                                     mediaList = mediaList,
                                                     totalCount = totalCount,
-                                                    currentPage = currentPage,
                                                     onPlaylistReady = { playlist ->
                                                         // Start from the clicked song's position in the full list
                                                         val startIdx = mediaList.indexOfFirst { it.bvid == media.bvid }.coerceAtLeast(0)
@@ -921,6 +967,7 @@ private fun fixImageUrl(url: String): String {
  */
 suspend fun loadPlaylistWithCache(
     cacheRepository: com.bilimusicplayer.data.repository.PlayQueueCacheRepository,
+    contentCacheRepository: com.bilimusicplayer.data.repository.FavoriteContentCacheRepository,
     biliRepository: BiliFavoriteRepository,
     folderId: Long,
     folderName: String,
@@ -928,7 +975,6 @@ suspend fun loadPlaylistWithCache(
     clickedMedia: FavoriteMedia,
     mediaList: List<FavoriteMedia>,
     totalCount: Int,
-    currentPage: Int,
     onPlaylistReady: (List<Track>) -> Unit,
     onSongLoaded: (Track) -> Unit,
     backgroundScope: kotlinx.coroutines.CoroutineScope,
@@ -986,54 +1032,98 @@ suspend fun loadPlaylistWithCache(
     // but only buffers the current + next song (triggering lazy resolution).
     onPlaylistReady(fullPlaylist)
 
-    // Step 3: If the folder has more pages than what's loaded, fetch their
-    // metadata in the background and append lazy items to the queue.
+    // Step 3: If the folder has more items than what's loaded, complete the queue
+    // in the background — content cache first (0 API calls), then x/v3/fav/resource/ids
+    // (1 request for the ENTIRE folder), page-fetch only as a last resort.
     if (mediaList.size < totalCount) {
         backgroundScope.launch(Dispatchers.IO) {
-            var nextPage = currentPage + 1
-            var remainingToLoad = totalCount - mediaList.size
-            var loadedCount = 0
+            val emitted = mediaList.mapTo(HashSet()) { it.bvid }
+            var knownCount = mediaList.size
 
-            while (remainingToLoad > 0) {
-                try {
-                    // Small delay between page fetches
-                    kotlinx.coroutines.delay(500)
-
-                    val pageResponse = biliRepository.getFavoriteResources(
-                        mediaId = folderId, pageNumber = nextPage, pageSize = 20
+            suspend fun emitItem(nextMedia: FavoriteMedia) {
+                if (!emitted.add(nextMedia.bvid)) return
+                val downloaded = downloadedSongsMap[nextMedia.bvid]
+                val mediaItem = if (downloaded != null) {
+                    buildLocalMediaItem(downloaded)
+                } else {
+                    Track(
+                        id = nextMedia.bvid,
+                        title = nextMedia.title,
+                        artist = nextMedia.artistName,
+                        coverUrl = fixImageUrl(nextMedia.cover),
+                        uri = "bili://${nextMedia.bvid}",
+                        durationMs = nextMedia.duration * 1000L,
                     )
-
-                    if (pageResponse.isSuccessful && pageResponse.body()?.code == 0) {
-                        val nextPageMedias = pageResponse.body()?.data?.medias ?: emptyList()
-                        for (nextMedia in nextPageMedias) {
-                            val downloaded = downloadedSongsMap[nextMedia.bvid]
-                            val mediaItem = if (downloaded != null) {
-                                buildLocalMediaItem(downloaded)
-                            } else {
-                                Track(
-                                    id = nextMedia.bvid,
-                                    title = nextMedia.title,
-                                    artist = nextMedia.artistName,
-                                    coverUrl = fixImageUrl(nextMedia.cover),
-                                    uri = "bili://${nextMedia.bvid}",
-                                    durationMs = nextMedia.duration * 1000L,
-                                )
-                            }
-                            withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
-                            loadedCount++
-                        }
-                        remainingToLoad -= nextPageMedias.size
-                        nextPage++
-                    } else {
-                        break
-                    }
-                } catch (e: Exception) {
-                    Log.e("PlaylistCache", "加载第 $nextPage 页出错", e)
-                    break
                 }
+                withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
+                knownCount++
             }
 
-            Log.d("PlaylistCache", "后续页加载完成: +${loadedCount}首 (0 音频URL请求)")
+            // Phase 1: replay everything already in the content cache (0 API)
+            val cached = contentCacheRepository.getCachedMediaList(folderId).orEmpty()
+            for (m in cached) emitItem(m)
+            val fromCache = knownCount - mediaList.size
+
+            // Phase 2: x/v3/fav/resource/ids — 1 request returns the ENTIRE folder's
+            // bvids (no pagination). 几十页的收藏夹补全队列从"每页1请求"降到1次请求。
+            // 未缓存的条目先以 bvid 占位入队，播放时 BiliAudioResolver 再取真实信息。
+            var idsFilled = false
+            try {
+                val ids = biliRepository.getFavoriteResourceIds(folderId)
+                for (r in ids) {
+                    val bv = r.bvid ?: continue
+                    if (bv in emitted) continue
+                    emitItem(
+                        FavoriteMedia(
+                            id = r.id, type = r.type, title = bv, cover = "",
+                            bvid = bv, upper = null, duration = 0,
+                            intro = "", ctime = 0, pubtime = 0
+                        )
+                    )
+                }
+                idsFilled = true
+            } catch (e: Exception) {
+                Log.e("PlaylistCache", "resource/ids 失败，回退逐页加载", e)
+            }
+
+            // Phase 3 (fallback only): 若 resource/ids 不可用，仍按旧方式补页。
+            // 同时把缺失页的元数据写回内容缓存，供下次会话直接命中。
+            if (!idsFilled || knownCount < totalCount) {
+                var nextPage = knownCount / 20 + 1
+                var fetched = 0
+                val maxPage = totalCount / 20 + 2
+                while (nextPage <= maxPage) {
+                    try {
+                        // Small delay between page fetches
+                        kotlinx.coroutines.delay(500)
+
+                        val pageResponse = biliRepository.getFavoriteResources(
+                            mediaId = folderId, pageNumber = nextPage, pageSize = 20
+                        )
+
+                        if (pageResponse.isSuccessful && pageResponse.body()?.code == 0) {
+                            val nextPageMedias = pageResponse.body()?.data?.medias ?: emptyList()
+                            if (nextPageMedias.isEmpty()) break
+                            try {
+                                contentCacheRepository.appendToCache(folderId, nextPageMedias, (nextPage - 1) * 20)
+                            } catch (_: Exception) {}
+                            for (nextMedia in nextPageMedias) {
+                                emitItem(nextMedia)
+                                fetched++
+                            }
+                            nextPage++
+                        } else {
+                            break
+                        }
+                    } catch (e: Exception) {
+                        Log.e("PlaylistCache", "加载第 $nextPage 页出错", e)
+                        break
+                    }
+                }
+                Log.d("PlaylistCache", "队列补全完成: 缓存+${fromCache}首, API+${fetched}首 (0 音频URL请求)")
+            } else {
+                Log.d("PlaylistCache", "队列补全完成: 缓存+${fromCache}首, resource/ids +${knownCount - mediaList.size - fromCache}首 (1 请求)")
+            }
         }
 
         // Register the background job so it gets cancelled on next play action
@@ -1082,14 +1172,20 @@ private suspend fun resolveMediaItemFromApi(
     allowDolby: Boolean,
 ): Track? {
     Log.d("PlaylistCache", "API请求: ${media.title} (${media.bvid})")
-    val detailResponse = biliRepository.getVideoDetail(media.bvid)
-    if (!detailResponse.isSuccessful || detailResponse.body()?.code != 0) {
-        Log.e("PlaylistCache", "getVideoDetail失败: HTTP=${detailResponse.code()}, code=${detailResponse.body()?.code}")
-        return null
+    // 复用缓存行里的CID（即使URL已过期）——CID不失效，省一次 getVideoDetail 请求
+    val knownCid = try { cachedUrlDao.getCachedUrl(media.bvid)?.cid?.takeIf { it > 0 } } catch (_: Exception) { null }
+    val cid = knownCid ?: run {
+        val detailResponse = biliRepository.getVideoDetail(media.bvid)
+        if (!detailResponse.isSuccessful || detailResponse.body()?.code != 0) {
+            Log.e("PlaylistCache", "getVideoDetail失败: HTTP=${detailResponse.code()}, code=${detailResponse.body()?.code}")
+            return null
+        }
+        detailResponse.body()?.data?.cid ?: return null
     }
-    val cid = detailResponse.body()?.data?.cid ?: return null
 
-    val playUrlResponse = biliRepository.getPlayUrl(cid, media.bvid)
+    val resolved = biliRepository.getPlayUrlWithFreshCidFallback(cid, media.bvid, allowRefresh = knownCid != null)
+    val playUrlResponse = resolved.response
+    val finalCid = resolved.cid
     if (!playUrlResponse.isSuccessful || playUrlResponse.body()?.code != 0) {
         Log.e("PlaylistCache", "getPlayUrl失败: HTTP=${playUrlResponse.code()}, code=${playUrlResponse.body()?.code}")
         return null
@@ -1103,7 +1199,7 @@ private suspend fun resolveMediaItemFromApi(
     try {
         cachedUrlDao.insertCachedUrl(
             com.bilimusicplayer.data.model.CachedPlaybackUrl(
-                bvid = media.bvid, cid = cid, audioUrl = audioUrl,
+                bvid = media.bvid, cid = finalCid, audioUrl = audioUrl,
                 title = media.title, artist = media.artistName,
                 coverUrl = fixImageUrl(media.cover), duration = media.duration
             )

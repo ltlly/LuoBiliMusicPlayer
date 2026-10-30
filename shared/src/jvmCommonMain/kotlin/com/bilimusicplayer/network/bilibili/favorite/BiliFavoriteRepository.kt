@@ -124,7 +124,29 @@ class BiliFavoriteRepository(
     }
 
     /**
-     * Get play URL with WBI signature
+     * Get all resource ids in a folder — 1 request regardless of folder size.
+     * 收藏夹有几十页时用它替代逐页翻请求，请求数从 N 页降到 1 次。
+     */
+    suspend fun getFavoriteResourceIds(mediaId: Long): List<FavResourceId> {
+        if (!WbiSignature.isInitialized()) {
+            if (!initWbiKeys()) {
+                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
+            }
+        }
+        val params = mapOf(
+            "media_id" to mediaId.toString(),
+            "platform" to "web"
+        )
+        val response = throttle { api.getFavoriteResourceIds(WbiSignature.signParams(params)) }
+        if (!response.isSuccessful || response.body()?.code != 0) {
+            throw java.io.IOException("获取收藏夹ID列表失败: HTTP ${response.code()}, code=${response.body()?.code}")
+        }
+        return response.body()?.data ?: emptyList()
+    }
+
+    /**
+     * Get play URL — 优先免WBI接口（x/player/playurl），失败后回退WBI接口。
+     * 免WBI接口与收藏夹翻页走不同的风控计数，连播时更耐限流。
      * @param cid Video CID
      * @param bvid Video BVID
      * @param quality Video quality (default 127 to request highest available quality)
@@ -134,26 +156,27 @@ class BiliFavoriteRepository(
         bvid: String,
         quality: Int = 127  // Request highest quality, actual quality depends on video source and account level
     ): Response<PlayUrlResponse> {
-        // Ensure WBI keys are initialized
-        if (!WbiSignature.isInitialized()) {
-            if (!initWbiKeys()) {
-                throw IllegalStateException("无法初始化WBI签名，请检查网络连接")
-            }
-        }
-
         val params = mapOf(
             "cid" to cid.toString(),
             "bvid" to bvid,
             "qn" to quality.toString(),
             "fnval" to AudioQuality.DASH_FLAGS.toString(),
             "fnver" to "0",
-            "fourk" to "1"
+            "fourk" to "1",
+            "type" to "",
+            "otype" to "json"
         )
 
-        // Sign the parameters with WBI (without URL encoding)
-        val signedParams = WbiSignature.signParams(params)
+        // Primary: non-WBI endpoint
+        val response = throttle { api.getPlayUrl(params) }
+        if (response.isSuccessful && response.body()?.code == 0) return response
 
-        return throttle { api.getPlayUrl(signedParams) }
+        // Fallback: WBI-signed endpoint — 仅在接口级失败/风控时重试；
+        // -404 等业务错误原样返回，交给 CID 刷新逻辑处理
+        val apiCode = response.body()?.code
+        if (response.isSuccessful && apiCode !in listOf(-352, -400, -403, -412)) return response
+        if (!WbiSignature.isInitialized() && !initWbiKeys()) return response
+        return throttle { api.getPlayUrlWbi(WbiSignature.signParams(params)) }
     }
 
     /** Reuse a CID normally; refresh it once only when an old identifier is rejected. */

@@ -59,6 +59,6 @@ class BiliRequestGate(private val storage: AppStorage) : Interceptor {
 
     private companion object {
         val lock = ReentrantLock(true)
-        const val MIN_INTERVAL_MS = 250L
+        const val MIN_INTERVAL_MS = 400L
     }
 }
