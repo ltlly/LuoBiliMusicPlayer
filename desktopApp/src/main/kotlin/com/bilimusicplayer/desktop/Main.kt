@@ -16,9 +16,11 @@ import coil3.memory.MemoryCache
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import com.bilimusicplayer.core.initSharedLogging
 import com.bilimusicplayer.network.RetrofitClient
+import com.bilimusicplayer.network.bilibili.auth.BiliAuthRepository
 import com.bilimusicplayer.settings.AppStorage
 import com.bilimusicplayer.settings.createSettings
 import com.bilimusicplayer.shared.App
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import okio.Path.Companion.toOkioPath
 import java.io.File
@@ -43,6 +45,18 @@ fun main() {
     }
 
     val container = DesktopAppContainer(storage)
+    if (!storage.accessToken.isNullOrEmpty()) {
+        container.scope.launch {
+            runCatching {
+                BiliAuthRepository(
+                    api = RetrofitClient.biliAuthApi,
+                    cookieJar = RetrofitClient.getCookieJar(),
+                    biliApi = RetrofitClient.biliApi,
+                    storage = storage,
+                ).fetchAndSaveUserInfo()
+            }
+        }
+    }
     val isMac = System.getProperty("os.name").lowercase().contains("mac")
     application {
         val closeWindow: () -> Unit = {
@@ -53,6 +67,7 @@ fun main() {
             onCloseRequest = closeWindow,
             title = "BiliMusicPlayer",
             state = rememberWindowState(size = DpSize(1100.dp, 760.dp)),
+            undecorated = !isMac,
         ) {
             LaunchedEffect(Unit) {
                 if (isMac) {
@@ -87,7 +102,7 @@ fun main() {
                     windowChrome = if (isMac) {
                         { MacTitleBar(window) }
                     } else {
-                        null
+                        { WindowsTitleBar(window, onClose = closeWindow) }
                     },
                 )
             }

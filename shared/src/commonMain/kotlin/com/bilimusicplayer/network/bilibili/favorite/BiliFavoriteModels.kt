@@ -82,6 +82,8 @@ data class FavoriteMedia(
     val type: Int,
     val title: String,
     val cover: String,
+    // resource/infos 返回 bv_id，resource/list 返回 bvid
+    @SerializedName(value = "bvid", alternate = ["bv_id"])
     val bvid: String,
     // B站对已注销/删除的UP主会返回 null，Gson 会绕过 Kotlin 非空检查，
     // 因此这里必须声明为可空，否则渲染列表时会 NPE 崩溃
@@ -114,6 +116,15 @@ data class FavResourceId(
     val type: Int,
     @SerializedName(value = "bv_id", alternate = ["bvid"])
     val bvid: String?
+)
+
+/**
+ * Response of x/v3/fav/resource/infos — data 与 resource/list 的 medias 元素同构
+ */
+data class FavResourceInfosResponse(
+    val code: Int,
+    val message: String,
+    val data: List<FavoriteMedia>?
 )
 
 data class Upper(

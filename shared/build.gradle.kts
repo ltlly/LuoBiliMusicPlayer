@@ -79,6 +79,10 @@ kotlin {
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.mediamp.all)
         }
+
+        jvmTest.dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }
 

@@ -35,6 +35,12 @@ dependencies {
         os.contains("mac") -> runtimeOnly(libs.mediamp.runtime.macos.x64)
         os.contains("win") && arch.contains("aarch64") -> runtimeOnly(libs.mediamp.runtime.windows.arm64)
         os.contains("win") -> runtimeOnly(libs.mediamp.runtime.windows.x64)
+        // 跨平台打 Windows 包：./gradlew :desktopApp:packageUberJarForCurrentOS -PwindowsPackage
+        project.hasProperty("windowsPackage") -> {
+            runtimeOnly(libs.mediamp.runtime.windows.x64)
+            // skiko 渲染库随宿主OS解析，打Windows包必须显式带上
+            implementation("org.jetbrains.skiko:skiko-awt-runtime-windows-x64:0.150.2")
+        }
     }
 }
 

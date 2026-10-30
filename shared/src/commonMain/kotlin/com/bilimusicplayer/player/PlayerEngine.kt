@@ -10,6 +10,18 @@ interface PlayerEngine {
 
     fun setQueue(tracks: List<Track>, startIndex: Int = 0, startPositionMs: Long = 0L)
     fun addToQueue(track: Track)
+
+    /**
+     * 只往队尾追加：不改当前 index，也不打断正在解析/播放的任务。
+     * 队列异步补全（如收藏夹后台补全）必须用它，避免二次 setQueue 取消播放。
+     */
+    fun appendToQueue(tracks: List<Track>)
+
+    /**
+     * 按 id 就地更新队列中已有条目的元数据（title/artist/coverUrl/durationMs），
+     * uri 保持原样，不改 index、不打断播放。用于占位曲目补到真实元数据后刷新。
+     */
+    fun updateTracks(tracks: List<Track>)
     fun play()
     fun pause()
     fun toggle()

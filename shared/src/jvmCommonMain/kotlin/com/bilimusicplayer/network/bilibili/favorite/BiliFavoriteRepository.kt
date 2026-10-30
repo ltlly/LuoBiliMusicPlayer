@@ -139,6 +139,46 @@ class BiliFavoriteRepository(
     }
 
     /**
+     * 单块请求 resource/infos（至多20条）：APP签名默认，风控码 -352/-403/-412
+     * 或 HTTP 失败回退 WBI 签名；最终 HTTP 失败或 code!=0 返回 null，
+     * 表示"接口失败"（区别于"返回条目少"——失效视频本就不会返回）。
+     */
+    suspend fun getFavoriteResourceInfosChunk(chunk: List<FavResourceId>): List<FavoriteMedia>? {
+        if (chunk.isEmpty()) return emptyList()
+        val params = mapOf(
+            "resources" to chunk.joinToString(",") { "${it.id}:${it.type}" },
+            "platform" to "web"
+        )
+        var response = throttle { api.getFavoriteResourceInfos(AppSignature.signParams(params)) }
+        var code = response.body()?.code
+        if (!response.isSuccessful || code in listOf(-352, -403, -412)) {
+            Log.w(TAG, "infos接口APP签名失败(HTTP ${response.code()}, code=$code)，回退WBI")
+            if (WbiSignature.isInitialized() || initWbiKeys()) {
+                response = throttle { api.getFavoriteResourceInfos(WbiSignature.signParams(params)) }
+                code = response.body()?.code
+            }
+        }
+        if (!response.isSuccessful || code != 0) {
+            Log.w(TAG, "infos接口失败: HTTP ${response.code()}, code=$code")
+            return null
+        }
+        return response.body()?.data.orEmpty()
+    }
+
+    /**
+     * 批量补全收藏夹条目元数据：resources={id}:{type},... 固定20条一批。
+     * 遇到接口失败（null）就停止并返回已得结果（不抛，让上层下次再补）。
+     */
+    suspend fun getFavoriteResourceInfos(ids: List<FavResourceId>): List<FavoriteMedia> {
+        if (ids.isEmpty()) return emptyList()
+        val result = mutableListOf<FavoriteMedia>()
+        for (chunk in ids.chunked(RESOURCE_INFOS_BATCH)) {
+            result += getFavoriteResourceInfosChunk(chunk) ?: break
+        }
+        return result
+    }
+
+    /**
      * Get play URL — 优先免WBI接口（x/player/playurl），失败后回退WBI接口。
      * 免WBI接口与收藏夹翻页走不同的风控计数，连播时更耐限流。
      * @param cid Video CID
@@ -237,6 +277,7 @@ class BiliFavoriteRepository(
 
     companion object {
         private const val TAG = "BiliFavoriteRepository"
+        private const val RESOURCE_INFOS_BATCH = 20
         private val wbiInitMutex = Mutex()
     }
 }

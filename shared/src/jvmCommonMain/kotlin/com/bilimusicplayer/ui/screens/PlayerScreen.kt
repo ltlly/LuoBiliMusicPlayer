@@ -162,6 +162,8 @@ private fun PlayerDetails(state: PlaybackState, source: String, quality: String?
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
                 textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }

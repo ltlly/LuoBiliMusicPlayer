@@ -595,7 +595,9 @@ fun LibraryScreen(navController: NavController) {
                                                             uri = if (s.localPath != null && java.io.File(s.localPath).exists()) {
                                                                 s.localPath
                                                             } else {
-                                                                s.audioUrl.orEmpty()
+                                                                // B站 CDN 地址几小时就过期，
+                                                                // 用占位让引擎走缓存/CID 解析
+                                                                "bili://${s.bvid}"
                                                             },
                                                             durationMs = s.duration * 1000L,
                                                         )

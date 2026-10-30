@@ -52,6 +52,16 @@ interface BiliFavoriteApi {
     ): Response<FavResourceIdsResponse>
 
     /**
+     * Batch-fetch media metadata for ids returned by resource/ids.
+     * resources={id}:{type},{id}:{type},... — 固定每批20条。
+     * GET https://api.bilibili.com/x/v3/fav/resource/infos
+     */
+    @GET("x/v3/fav/resource/infos")
+    suspend fun getFavoriteResourceInfos(
+        @QueryMap params: Map<String, String>
+    ): Response<FavResourceInfosResponse>
+
+    /**
      * Get play URL — 免WBI取流接口（bilimiao等三方客户端同款），
      * 与 wbi/playurl 不同风控池，连播时更不容易触发 -352/412。
      * GET https://api.bilibili.com/x/player/playurl

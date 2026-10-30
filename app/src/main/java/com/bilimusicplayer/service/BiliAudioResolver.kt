@@ -149,14 +149,15 @@ object BiliAudioResolver {
         val repository = BiliFavoriteRepository(RetrofitClient.biliFavoriteApi)
 
         val knownCid = cachedUrl?.cid?.takeIf { it > 0 }
-        val cid = knownCid ?: run {
+        val detail = if (knownCid == null) {
             val detailResponse = repository.getVideoDetail(bvid)
             if (!detailResponse.isSuccessful || detailResponse.body()?.code != 0) {
                 Log.e(TAG, "getVideoDetail失败: ${detailResponse.code()}")
                 return null
             }
-            detailResponse.body()?.data?.cid ?: return null
-        }
+            detailResponse.body()?.data ?: return null
+        } else null
+        val cid = knownCid ?: detail!!.cid
 
         val resolved = repository.getPlayUrlWithFreshCidFallback(cid, bvid, allowRefresh = knownCid != null)
         val playUrlResponse = resolved.response
@@ -170,17 +171,17 @@ object BiliAudioResolver {
             allowDolby = com.bilimusicplayer.service.AudioPlaybackCapabilities.supportsDolby
         )?.let { com.bilimusicplayer.network.bilibili.favorite.AudioQuality.urls(it).firstOrNull() } ?: return null
 
-        // Cache for next time
+        // Cache for next time — view 拿到真实元数据时写真实值，占位(bvid)只作兜底
         try {
             database.cachedPlaybackUrlDao().insertCachedUrl(
                 CachedPlaybackUrl(
                     bvid = bvid,
                     cid = finalCid,
                     audioUrl = audioUrl,
-                    title = song?.title ?: bvid,
-                    artist = song?.artist ?: "",
-                    coverUrl = song?.coverUrl ?: "",
-                    duration = song?.duration ?: 0
+                    title = detail?.title ?: song?.title ?: bvid,
+                    artist = detail?.owner?.name ?: song?.artist ?: "",
+                    coverUrl = detail?.pic ?: song?.coverUrl ?: "",
+                    duration = detail?.duration ?: song?.duration ?: 0
                 )
             )
         } catch (_: Exception) {}
