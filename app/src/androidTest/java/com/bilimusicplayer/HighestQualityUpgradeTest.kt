@@ -27,7 +27,7 @@ import java.util.concurrent.TimeUnit
 class HighestQualityUpgradeTest {
     @Test fun upgradesAacToFlacSkipsIdenticalAndRecoversInterruptedReplacement() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        val db = AppDatabase.getDatabase(context)
+        val db = AppDatabase.getDatabase()
         val work = WorkManager.getInstance(context)
         val prefs = context.getSharedPreferences("quality_upgrade", Context.MODE_PRIVATE)
         assertTrue("不要在真实升级任务运行时执行此测试", prefs.getString("status", "idle") != "running")

@@ -123,7 +123,7 @@ object BiliAudioResolver {
      * Priority: 1) Local downloaded file  2) Cached URL  3) Fresh API call
      */
     private suspend fun resolveAudioUrl(context: Context, bvid: String): String? {
-        val database = AppDatabase.getDatabase(context)
+        val database = AppDatabase.getDatabase()
 
         // Priority 1: Check if song is downloaded locally
         val song = database.songDao().getSongById(bvid)

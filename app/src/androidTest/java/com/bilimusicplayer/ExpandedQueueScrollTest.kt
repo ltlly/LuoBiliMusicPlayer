@@ -16,8 +16,8 @@ class ExpandedQueueScrollTest {
         compose.waitUntil(30_000) {
             compose.onAllNodesWithTag("mini_player").fetchSemanticsNodes().isNotEmpty()
         }
-        compose.activityRule.scenario.onActivity { BiliMusicApplication.musicPlayerController.pause() }
-        compose.waitUntil(5000) { !BiliMusicApplication.musicPlayerController.playbackState.value.isPlaying }
+        compose.activityRule.scenario.onActivity { BiliMusicApplication.instance.container.player.pause() }
+        compose.waitUntil(5000) { !BiliMusicApplication.instance.container.player.state.value.isPlaying }
         compose.onNodeWithTag("mini_player").performClick()
         compose.waitUntil(10_000) {
             compose.onAllNodesWithTag("play_queue_inline").fetchSemanticsNodes().isNotEmpty()

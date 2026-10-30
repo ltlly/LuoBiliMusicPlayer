@@ -23,12 +23,12 @@ import java.util.concurrent.TimeUnit
  * Uses a Semaphore to limit actual concurrent download Workers to the configured max.
  * Workers are dispatched sequentially through a coroutine that acquires permits.
  */
-class DownloadManager(private val context: Context) {
+class DownloadManager(private val context: Context, storage: com.bilimusicplayer.settings.AppStorage) {
 
-    private val database = AppDatabase.getDatabase(context)
+    private val database = AppDatabase.getDatabase()
     private val downloadDao = database.downloadDao()
     private val workManager = WorkManager.getInstance(context)
-    private val settingsManager = DownloadSettingsManager(context)
+    private val settingsManager = DownloadSettingsManager(storage)
     private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     // Semaphore to limit concurrent actual downloads
