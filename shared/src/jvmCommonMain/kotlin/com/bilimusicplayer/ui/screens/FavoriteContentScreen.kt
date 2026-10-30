@@ -709,8 +709,11 @@ fun FavoriteContentScreen(
                                                         val startIdx = mediaList.indexOfFirst { it.bvid == media.bvid }.coerceAtLeast(0)
                                                         player.setQueue(playlist, startIdx)
                                                             },
-                                                    onSongLoaded = { mediaItem ->
-                                                        player.addToQueue(mediaItem)
+                                                    onSongsLoaded = { items ->
+                                                        player.appendToQueue(items)
+                                                    },
+                                                    onTracksUpdated = { items ->
+                                                        player.updateTracks(items)
                                                     },
                                                     backgroundScope = container.scope,
                                                 )
@@ -976,7 +979,8 @@ suspend fun loadPlaylistWithCache(
     mediaList: List<FavoriteMedia>,
     totalCount: Int,
     onPlaylistReady: (List<Track>) -> Unit,
-    onSongLoaded: (Track) -> Unit,
+    onSongsLoaded: (List<Track>) -> Unit,
+    onTracksUpdated: (List<Track>) -> Unit,
     backgroundScope: kotlinx.coroutines.CoroutineScope,
 ) {
     val clickedIndex = mediaList.indexOfFirst { it.bvid == clickedMedia.bvid }.coerceAtLeast(0)
@@ -1040,10 +1044,19 @@ suspend fun loadPlaylistWithCache(
             val emitted = mediaList.mapTo(HashSet()) { it.bvid }
             var knownCount = mediaList.size
 
-            suspend fun emitItem(nextMedia: FavoriteMedia) {
-                if (!emitted.add(nextMedia.bvid)) return
+            // 攒批后一次性 appendToQueue：补全只允许往队尾追加，不能再 setQueue
+            // （那会取消正在进行的 resolve/setMediaData，导致点歌无声）。
+            val pending = mutableListOf<Track>()
+            suspend fun flush() {
+                if (pending.isEmpty()) return
+                val items = pending.toList()
+                pending.clear()
+                withContext(Dispatchers.Main) { onSongsLoaded(items) }
+            }
+
+            fun toTrack(nextMedia: FavoriteMedia): Track {
                 val downloaded = downloadedSongsMap[nextMedia.bvid]
-                val mediaItem = if (downloaded != null) {
+                return if (downloaded != null) {
                     buildLocalMediaItem(downloaded)
                 } else {
                     Track(
@@ -1055,7 +1068,11 @@ suspend fun loadPlaylistWithCache(
                         durationMs = nextMedia.duration * 1000L,
                     )
                 }
-                withContext(Dispatchers.Main) { onSongLoaded(mediaItem) }
+            }
+
+            fun emitItem(nextMedia: FavoriteMedia) {
+                if (!emitted.add(nextMedia.bvid)) return
+                pending.add(toTrack(nextMedia))
                 knownCount++
             }
 
@@ -1063,13 +1080,16 @@ suspend fun loadPlaylistWithCache(
             val cached = contentCacheRepository.getCachedMediaList(folderId).orEmpty()
             for (m in cached) emitItem(m)
             val fromCache = knownCount - mediaList.size
+            flush()
 
             // Phase 2: x/v3/fav/resource/ids — 1 request returns the ENTIRE folder's
             // bvids (no pagination). 几十页的收藏夹补全队列从"每页1请求"降到1次请求。
-            // 未缓存的条目先以 bvid 占位入队，播放时 BiliAudioResolver 再取真实信息。
+            // 未缓存的条目先以 bvid 占位入队，随后 fillMissing 批量补真实元数据。
             var idsFilled = false
+            var resourceIds = emptyList<com.bilimusicplayer.network.bilibili.favorite.FavResourceId>()
             try {
                 val ids = biliRepository.getFavoriteResourceIds(folderId)
+                resourceIds = ids
                 for (r in ids) {
                     val bv = r.bvid ?: continue
                     if (bv in emitted) continue
@@ -1084,6 +1104,29 @@ suspend fun loadPlaylistWithCache(
                 idsFilled = true
             } catch (e: Exception) {
                 Log.e("PlaylistCache", "resource/ids 失败，回退逐页加载", e)
+            }
+            flush()
+
+            // Phase 2.5: 占位曲目元数据补齐。先补当前播放位置附近的（用户马上看到
+            // 正确标题），其余按收藏夹顺序后台补；每块就地 updateTracks 刷新队列。
+            if (idsFilled) {
+                try {
+                    val startIdx = resourceIds.indexOfFirst { it.bvid == clickedMedia.bvid }
+                        .coerceAtLeast(0)
+                    val priorityBvids = resourceIds.drop(startIdx).take(21)
+                        .mapNotNull { it.bvid }
+                    contentCacheRepository.fillMissing(
+                        repository = biliRepository,
+                        folderId = folderId,
+                        ids = resourceIds,
+                        priorityBvids = priorityBvids,
+                    ) { batch ->
+                        val tracks = batch.map(::toTrack)
+                        withContext(Dispatchers.Main) { onTracksUpdated(tracks) }
+                    }
+                } catch (e: Exception) {
+                    Log.e("PlaylistCache", "resource/infos 补全失败，占位标题将保持到播放时解析", e)
+                }
             }
 
             // Phase 3 (fallback only): 若 resource/ids 不可用，仍按旧方式补页。
@@ -1111,6 +1154,7 @@ suspend fun loadPlaylistWithCache(
                                 emitItem(nextMedia)
                                 fetched++
                             }
+                            flush()
                             nextPage++
                         } else {
                             break

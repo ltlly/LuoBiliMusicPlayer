@@ -322,6 +322,43 @@ class MusicPlayerController(private val context: Context, private val storage: A
     }
 
     /**
+     * Append media items to the queue end (deduplicates by mediaId).
+     * Unlike [setMediaItems], never touches the current index or playback.
+     */
+    fun addMediaItems(mediaItems: List<MediaItem>) {
+        val controller = mediaController ?: return
+        val existing = HashSet<String>(controller.mediaItemCount)
+        for (i in 0 until controller.mediaItemCount) {
+            existing.add(controller.getMediaItemAt(i).mediaId)
+        }
+        val newItems = mediaItems.filter { it.mediaId.isEmpty() || existing.add(it.mediaId) }
+        if (newItems.isNotEmpty()) {
+            controller.addMediaItems(newItems)
+        }
+    }
+
+    /**
+     * Update metadata of queue items in place by mediaId.
+     * Rebuilds each item from the existing one so the URI/config stays identical —
+     * media3 then treats replaceMediaItem as a metadata-only update (canUpdateMediaItem),
+     * which never re-buffers even for the currently playing item.
+     */
+    fun updateMediaItems(mediaItems: List<MediaItem>) {
+        val controller = mediaController ?: return
+        val byId = mediaItems.associateBy { it.mediaId }
+        for (i in 0 until controller.mediaItemCount) {
+            val current = controller.getMediaItemAt(i)
+            val patch = byId[current.mediaId] ?: continue
+            controller.replaceMediaItem(
+                i,
+                current.buildUpon()
+                    .setMediaMetadata(patch.mediaMetadata)
+                    .build(),
+            )
+        }
+    }
+
+    /**
      * Set repeat mode
      */
     fun setRepeatMode(repeatMode: Int) {

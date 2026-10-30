@@ -49,6 +49,12 @@ class Media3PlayerEngine(
 
     override fun addToQueue(track: Track) = controller.addMediaItem(toMediaItem(track))
 
+    override fun appendToQueue(tracks: List<Track>) =
+        controller.addMediaItems(tracks.map(::toMediaItem))
+
+    override fun updateTracks(tracks: List<Track>) =
+        controller.updateMediaItems(tracks.map(::toMediaItem))
+
     override fun play() = controller.play()
 
     override fun pause() = controller.pause()

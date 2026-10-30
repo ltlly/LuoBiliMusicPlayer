@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 class DesktopAppContainer(
     override val storage: AppStorage,
@@ -25,4 +26,10 @@ class DesktopAppContainer(
     override val qualityUpgrade: QualityUpgradeService = DesktopQualityUpgradeService()
     override val foldInfo = MutableStateFlow<FoldInfo?>(null)
     override var pendingRoute: String? = null
+
+    init {
+        // 启动事件采集：不调用 initialize() 的话 MediaEnded 永远进不了 onEnded，
+        // 单曲播完不会自动切下一首。
+        scope.launch { player.initialize() }
+    }
 }

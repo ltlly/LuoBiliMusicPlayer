@@ -81,13 +81,20 @@ fun MiniPlayer(
 
                         val title = playbackState.current?.title ?: "未知歌曲"
                         val artist = playbackState.current?.artist ?: "未知艺术家"
+                        val error = playbackState.error
                         Text(
                             text = buildAnnotatedString {
                                 withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.SemiBold)) {
                                     append(title)
                                 }
-                                withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
-                                    append(" · $artist")
+                                if (error != null) {
+                                    withStyle(SpanStyle(color = MaterialTheme.colorScheme.error)) {
+                                        append(" · $error")
+                                    }
+                                } else {
+                                    withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                                        append(" · $artist")
+                                    }
                                 }
                             },
                             style = MaterialTheme.typography.bodyMedium,
