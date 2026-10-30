@@ -92,8 +92,8 @@ class PlayQueueCacheRepository(
     suspend fun getCachedPlaybackUrl(bvid: String): CachedPlaybackUrl? {
         val cached = cachedUrlDao.getCachedUrl(bvid)
         if (cached != null && cached.expiresAt < System.currentTimeMillis()) {
-            // URL expired, delete it
-            cachedUrlDao.deleteCachedUrl(cached)
+            // URL expired — keep the row so the CID can be reused (1 API call
+            // instead of 2 on next resolve). The URL is simply not returned.
             Log.d(TAG, "缓存已过期: $bvid")
             return null
         }

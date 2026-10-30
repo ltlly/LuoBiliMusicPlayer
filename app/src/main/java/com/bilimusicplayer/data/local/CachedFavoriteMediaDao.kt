@@ -22,6 +22,9 @@ interface CachedFavoriteMediaDao {
     @Query("SELECT COUNT(*) FROM cached_favorite_medias WHERE folderId = :folderId")
     suspend fun getCountByFolderId(folderId: Long): Int
 
+    @Query("SELECT bvid FROM cached_favorite_medias WHERE folderId = :folderId")
+    suspend fun getBvidsByFolderId(folderId: Long): List<String>
+
     @Query("SELECT MIN(cachedAt) FROM cached_favorite_medias WHERE folderId = :folderId")
     suspend fun getCacheTimestamp(folderId: Long): Long?
 

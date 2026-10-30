@@ -75,7 +75,17 @@ class PersistentCookieJar(context: Context) : CookieJar {
 
             Log.d(TAG, "Loading cookies for $requestHost: found ${matchingCookies.size} cookies: ${matchingCookies.map { it.name }}")
 
-            return matchingCookies.map { it.toCookie() }
+            val result = matchingCookies.map { it.toCookie() }.toMutableList()
+            // 免WBI取流接口(x/player/playurl)按此Cookie放行DASH全格式，
+            // 缺失时部分账号会被降级/拦截
+            if (requestHost.endsWith("bilibili.com") && result.none { it.name == "CURRENT_FNVAL" }) {
+                result += Cookie.Builder()
+                    .name("CURRENT_FNVAL")
+                    .value("4048")
+                    .domain("bilibili.com")
+                    .build()
+            }
+            return result
         }
     }
 

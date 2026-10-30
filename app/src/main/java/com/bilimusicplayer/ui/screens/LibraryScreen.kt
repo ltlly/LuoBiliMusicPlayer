@@ -1351,12 +1351,9 @@ private suspend fun scanWithFavoriteSync(
 
                     for (folder in folders) {
                         try {
-                            // Fetch ALL pages of each folder
-                            val allMedia = repository.getAllFavoriteVideos(folder.id)
-                            if (allMedia.isNotEmpty()) {
-                                contentCacheRepo.cacheMediaList(folder.id, allMedia)
-                                android.util.Log.d("LibraryScan", "  缓存收藏夹 '${folder.title}': ${allMedia.size} 首")
-                            }
+                            // 增量同步：resource/ids 一次拿全量bvid，只抓缺失页
+                            val fetched = contentCacheRepo.syncFolderIncremental(repository, folder.id)
+                            android.util.Log.d("LibraryScan", "  增量同步收藏夹 '${folder.title}': +$fetched 条")
                             // Small delay to be nice to API
                             kotlinx.coroutines.delay(300)
                         } catch (e: Exception) {
