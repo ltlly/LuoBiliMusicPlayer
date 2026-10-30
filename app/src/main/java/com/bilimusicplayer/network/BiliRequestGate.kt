@@ -21,7 +21,9 @@ class BiliRequestGate(context: Context) : Interceptor {
         if (chain.request().url.host != "api.bilibili.com") return chain.proceed(chain.request())
         return lock.withLock {
             if (prefs.getLong("cooldown", 0) > System.currentTimeMillis()) throw BiliRateLimitedException()
-            val interval = runBlocking { settings.getApiRequestIntervalMs() }
+            // 即使用户关闭了限速设置，也保留最小间隔——B站风控对突发密集请求
+            // (大收藏夹翻页/搜索/连播) 非常敏感，无间隔连发必然触发 -352/412。
+            val interval = runBlocking { settings.getApiRequestIntervalMs() }.coerceAtLeast(MIN_SPACING_MS)
             val delay = if (interval > 0) prefs.getLong("last", 0) + interval - System.currentTimeMillis() else 0L
             if (delay > 0) Thread.sleep(delay.coerceAtMost(60_000))
             if (chain.call().isCanceled()) throw IOException("请求已取消")
@@ -43,5 +45,9 @@ class BiliRequestGate(context: Context) : Interceptor {
             response
         }
     }
-    companion object { private val lock = ReentrantLock(true) }
+    companion object {
+        private val lock = ReentrantLock(true)
+        /** api.bilibili.com 请求之间的最小间隔（毫秒） */
+        private const val MIN_SPACING_MS = 400L
+    }
 }

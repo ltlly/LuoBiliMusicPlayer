@@ -76,6 +76,45 @@ class FavoriteContentCacheRepository(private val database: AppDatabase) {
     }
 
     /**
+     * 增量同步收藏夹：先用 x/v3/fav/resource/ids 一次拿全量bvid（1次请求），
+     * 只抓取"包含未知条目"的页——新收藏集中在开头时通常只需1-2页，
+     * 而不是把几十页全部重拉。返回新抓取的条目数。
+     */
+    suspend fun syncFolderIncremental(
+        repository: com.bilimusicplayer.network.bilibili.favorite.BiliFavoriteRepository,
+        folderId: Long,
+        delayMs: Long = 500L
+    ): Int {
+        val ids = repository.getFavoriteResourceIds(folderId)
+        if (ids.isEmpty()) return 0
+        val known = dao.getBvidsByFolderId(folderId).toHashSet()
+
+        // 找缺失条目所在的页码（收藏夹列表按收藏时间倒序，ids顺序与之对应）
+        val pagesNeeded = ids.mapIndexedNotNull { index, r ->
+            val bv = r.bvid
+            if (bv == null || bv !in known) index / 20 + 1 else null
+        }.toSortedSet()
+        if (pagesNeeded.isEmpty()) return 0
+
+        var fetched = 0
+        for (page in pagesNeeded) {
+            val response = repository.getFavoriteResources(folderId, page, 20)
+            if (response.isSuccessful && response.body()?.code == 0) {
+                val medias = response.body()?.data?.medias ?: emptyList()
+                if (medias.isEmpty()) break
+                appendToCache(folderId, medias, (page - 1) * 20)
+                fetched += medias.size
+            } else {
+                Log.w(TAG, "增量同步第${page}页失败: ${response.code()}")
+                break
+            }
+            kotlinx.coroutines.delay(delayMs)
+        }
+        Log.d(TAG, "增量同步完成 folderId=$folderId: ${pagesNeeded.size}页/新增约${fetched}条 (ids共${ids.size})")
+        return fetched
+    }
+
+    /**
      * Clear cache for a folder
      */
     suspend fun clearCache(folderId: Long) {
