@@ -54,3 +54,11 @@ test "a partial collection index is distinct from an empty result" {
   let ui = mount(Music(false))
   ui.expect("收藏夹尚未核对完成，可点刷新重试")
 }
+
+test "playing the uncollected list selects the first visible song" {
+  player = Player(page: "rank", loggedIn: true, rankFiltered: true, rankVerified: true,
+    entries: [Entry(key: "BV17x411w7KC", title: "第一首", detail: "主榜"), Entry(key: "BV1AZxH6PEMi", title: "第二首", detail: "主榜")])
+  let ui = mount(Music(false))
+  ui.tap("播放未收藏")
+  ui.expect("正在准备播放…")
+}

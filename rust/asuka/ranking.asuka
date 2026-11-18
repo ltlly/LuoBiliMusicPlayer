@@ -23,6 +23,12 @@ fn videoMenu(id: string, title: string) {
   }
 }
 
+fn playRank(entry: Entry) {
+  if !player.preparingVideo.isEmpty() { return }
+  player.preparingVideo = entry.key
+  action("choose",entry.key,entry.title)
+}
+
 component RankPane {
   let palette = colorsFor(player.themeMode, environment().dark)
   let inset = contentInset(environment().width)
@@ -61,11 +67,17 @@ component RankPane {
         }
       }
       Row {
-        align: .center; gap: 8; padding: [1,11]; border: 1; radius: 11; borderColor: palette.rule; background: palette.surface
-        Glyph("search",palette.secondary,16.0)
-        TextField {
-          grow: 1; plain: true; minHeight: 36; text: query; color: palette.ink; placeholder: "搜索本期歌曲"
-          on change(v) { query = v; action("search",v) }
+        align: .center; gap: 8
+        Row {
+          grow: 1; shrink: 1; align: .center; gap: 8; padding: [1,11]; border: 1; radius: 11; borderColor: palette.rule; background: palette.surface
+          Glyph("search",palette.secondary,16.0)
+          TextField {
+            grow: 1; plain: true; minHeight: 36; text: query; color: palette.ink; placeholder: "搜索本期歌曲"
+            on change(v) { query = v; action("search",v) }
+          }
+        }
+        if player.rankFiltered && player.rankVerified && !player.entries.isEmpty() {
+          Pill("播放未收藏","play",palette.accent,palette.accentWash) { on press { playRank(player.entries[0]) } }
         }
       }
     }
@@ -86,7 +98,7 @@ component RankPane {
           align: .center; gap: 6; padding: [4,0]
           Row {
             grow: 1; shrink: 1; align: .center; gap: 10; padding: [5,0]
-            role: .button; label: e.title; on press { action("choose",e.key,e.title) }; pressed { opacity: 0.65 }
+            role: .button; label: e.title; on press { playRank(e) }; pressed { opacity: 0.65 }
             View {
               width: 38; height: 40; align: .center; justify: .center; radius: 9
               background: if e.status == "01" && e.detail == "主榜" { palette.accentWash } else { palette.surface }
@@ -96,7 +108,7 @@ component RankPane {
             Column {
               grow: 1; shrink: 1; gap: 2
               Text(e.title) { color: palette.ink; font: Font(size: 15).medium(); lines: 2 }
-              Text(e.detail) { color: palette.secondary; font: .footnote }
+              Text(if player.preparingVideo == e.key { "正在准备播放…" } else if player.playing && player.videoId == e.key { "正在播放" } else { e.detail }) { color: if player.preparingVideo == e.key || (player.playing && player.videoId == e.key) { palette.accent } else { palette.secondary }; font: .footnote }
             }
           }
           IconAction("more","视频操作",palette.secondary,#00000000,44.0,19.0) { on press { videoMenu(e.key,e.title) } }

@@ -114,6 +114,24 @@ fn cold_then_warm_and_expired_url_requests() -> Result<()> {
 }
 
 #[test]
+fn public_rank_audio_accepts_both_url_spellings_in_one_response() -> Result<()> {
+    let mut f = Fixture::new(vec![
+        ok(json!({"cid":123})),
+        ok(json!({"dash":{"audio":[{
+            "id":30280, "baseUrl":"https://cdn/song", "base_url":"https://cdn/song",
+            "backupUrl":["https://cdn/a"], "backup_url":["https://cdn/a","https://cdn/b"]
+        }]}})),
+    ])?;
+    let (_, source, _) = f.client.resolve_audio("BV17x411w7KC", None, true)?;
+    assert_eq!(
+        source.urls,
+        ["https://cdn/song", "https://cdn/a", "https://cdn/b"]
+    );
+    assert_eq!(f.trace(), [VIEW, PLAY]);
+    Ok(())
+}
+
+#[test]
 fn stale_cid_recovers_once_and_persists() -> Result<()> {
     let mut f = Fixture::new(vec![
         (200, json!({"code":-404})),

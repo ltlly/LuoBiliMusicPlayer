@@ -67,6 +67,7 @@ pub(crate) struct Snapshot {
     pub page: Page,
     pub rank_filtered: bool,
     pub rank_busy: bool,
+    pub preparing_video: String,
     pub rank_loading: bool,
     pub rank_verified: bool,
     pub rank_date: String,

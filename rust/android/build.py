@@ -25,7 +25,7 @@ unsigned = output / "android-gradle/outputs/apk/release/BiliMusicPlayer-release-
 if not env.get("BILI_STORE_PASSWORD"):
     env["BILI_STORE_PASSWORD"] = getpass.getpass("Release keystore password: ")
 env.setdefault("BILI_KEY_PASSWORD", env["BILI_STORE_PASSWORD"])
-signed = output / "BiliMusicPlayer-1.7.0.apk"
+signed = output / "BiliMusicPlayer-1.7.1.apk"
 signer = tools / ("apksigner.bat" if os.name == "nt" else "apksigner")
 subprocess.run([signer, "sign", "--ks", args.keystore,
                 "--ks-pass", "env:BILI_STORE_PASSWORD", "--key-pass", "env:BILI_KEY_PASSWORD",

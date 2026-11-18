@@ -42,10 +42,13 @@ struct Audio {
     bandwidth: i64,
     #[serde(default)]
     codecs: Option<String>,
-    #[serde(default, rename = "baseUrl", alias = "base_url")]
+    // Bilibili can return both spellings in the same DASH representation.
     base_url: Option<String>,
-    #[serde(default, rename = "backupUrl", alias = "backup_url")]
+    #[serde(rename = "baseUrl")]
+    base_url_camel: Option<String>,
     backup_url: Option<Vec<String>>,
+    #[serde(rename = "backupUrl")]
+    backup_url_camel: Option<Vec<String>>,
 }
 impl Audio {
     fn dolby(&self) -> bool {
@@ -78,7 +81,13 @@ impl Audio {
     }
     fn urls(&self) -> Vec<String> {
         let mut urls = vec![];
-        for url in self.base_url.iter().chain(self.backup_url.iter().flatten()) {
+        for url in self
+            .base_url_camel
+            .iter()
+            .chain(&self.base_url)
+            .chain(self.backup_url_camel.iter().flatten())
+            .chain(self.backup_url.iter().flatten())
+        {
             if (url.starts_with("http://") || url.starts_with("https://")) && !urls.contains(url) {
                 urls.push(url.clone());
             }

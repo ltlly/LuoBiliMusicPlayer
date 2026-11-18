@@ -538,9 +538,16 @@ impl Application {
                 Command::Choose(key, title) if self.page == Page::Favorites => {
                     self.open_folder(&key, &title)
                 }
-                Command::Choose(key, _)
-                    if matches!(self.page, Page::Library | Page::Content | Page::Rank) =>
-                {
+                Command::Choose(key, _) if self.page == Page::Rank => {
+                    self.show(|ui| {
+                        ui.message.clear();
+                        ui.preparing_video.clone_from(&key);
+                    });
+                    let result = self.play_row(&key);
+                    self.show(|ui| ui.preparing_video.clear());
+                    result.map_err(|e| anyhow::anyhow!("播放失败 · {e}"))
+                }
+                Command::Choose(key, _) if matches!(self.page, Page::Library | Page::Content) => {
                     self.play_row(&key)
                 }
                 Command::Choose(_, _) => Ok(()),

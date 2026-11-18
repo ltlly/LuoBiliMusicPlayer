@@ -28,6 +28,7 @@ struct Player {
   loggedIn: bool = false
   rankFiltered: bool = false
   rankBusy: bool = false
+  preparingVideo: string = ""
   rankLoading: bool = false
   rankVerified: bool = false
   rankDate: string = ""
