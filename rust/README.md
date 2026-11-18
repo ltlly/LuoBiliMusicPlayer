@@ -34,9 +34,13 @@ asuka build -p linux -o target/asuka asuka
 
 Linux 原生验证需要 GTK 4.14、libadwaita 1.5 或更高版本。播放时需要 libmpv.so.2。Asuka 测试链接本机架构的 Rust 静态库，在其他系统先用相应的平台参数运行 build_core.py。
 
+旧版数据兼容测试会在临时目录中生成 SQLite 数据库、WAL 和 Android 偏好设置。要额外验证自己的旧备份，可将 `BILI_TEST_ANDROID_BACKUP` 设为本机备份 tar 的绝对路径，再运行 `cargo test --locked --test legacy -- --ignored`。
+
 ### Android
 
 配置 JDK 21、`ANDROID_HOME`、`ANDROID_NDK_HOME`，安装 Android SDK 36、NDK、Gradle 8.14.3，以及 `aarch64-linux-android`、`armv7-linux-androideabi`、`x86_64-linux-android` 三个 Rust targets。
+
+打包时通过 `--keystore` 指定自己的签名文件。脚本默认读取本机的 `keystore/bilimusic-release.keystore`。覆盖已有安装需要使用与旧版相同的签名。
 
 ```sh
 python android/build.py --gradle /path/to/gradle-8.14.3/bin/gradle

@@ -40,10 +40,10 @@ captures/
 *.iml
 .idea/
 
-# Keystore files
-# Uncomment the following lines if you do not want to check your keystore files in.
-#*.jks
-#*.keystore
+# Local signing keys and credentials
+/keystore/
+*.keystore
+*.jks
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild
@@ -81,4 +81,5 @@ lint/tmp/
 .DS_Store
 
 # Private device backups (database and login cookies)
-backup/device-private/
+/backup/
+/.pi-subagents/

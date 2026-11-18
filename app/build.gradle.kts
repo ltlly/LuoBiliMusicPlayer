@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -23,25 +24,30 @@ android {
         }
     }
 
-    signingConfigs {
-        // 项目内固定签名：debug/release 一律使用同一把钥匙，
-        // 保证任何机器、任何一次构建都能覆盖安装（不会因 debug.keystore 丢失而被迫卸载）
-        create("fixed") {
-            storeFile = rootProject.file("keystore/bilimusic-release.keystore")
-            storePassword = System.getenv("BILI_STORE_PASSWORD")
-            keyAlias = "bilimusic"
-            keyPassword = System.getenv("BILI_KEY_PASSWORD")
-        }
+    val localSigning = Properties().apply {
+        val file = rootProject.file("keystore/signing.properties")
+        if (file.isFile) file.inputStream().use { load(it) }
     }
+    val store = rootProject.file("keystore/bilimusic-release.keystore")
+    val storePass = providers.environmentVariable("BILI_STORE_PASSWORD").orNull ?: localSigning.getProperty("storePassword")
+    val alias = providers.environmentVariable("BILI_KEY_ALIAS").orNull ?: localSigning.getProperty("keyAlias")
+    val fixedSigning = if (store.isFile && storePass != null && alias != null) {
+        signingConfigs.create("fixed") {
+            storeFile = store
+            storePassword = storePass
+            keyAlias = alias
+            keyPassword = providers.environmentVariable("BILI_KEY_PASSWORD").orNull ?: localSigning.getProperty("keyPassword") ?: storePass
+        }
+    } else null
 
     buildTypes {
         debug {
-            signingConfig = signingConfigs.getByName("fixed")
+            fixedSigning?.let { signingConfig = it }
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            signingConfig = signingConfigs.getByName("fixed")
+            signingConfig = fixedSigning
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
