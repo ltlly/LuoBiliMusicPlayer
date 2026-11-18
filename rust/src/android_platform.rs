@@ -61,9 +61,20 @@ pub fn files_dir() -> Result<PathBuf> {
 }
 
 fn activity<T>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Result<T> {
-    let (vm, activity) = context()?;
-    let mut env = vm.attach_current_thread()?;
-    env.with_local_frame(16, |env| match f(env, activity.as_obj()) {
+    with_java(context()?.1, f)
+}
+fn storage<T>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Result<T> {
+    with_java(DOWNLOADS.get().context("下载服务尚未初始化")?.clone(), f)
+}
+fn with_java<T>(
+    object: GlobalRef,
+    f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>,
+) -> Result<T> {
+    let mut env = VM
+        .get()
+        .context("Android 尚未初始化")?
+        .attach_current_thread()?;
+    env.with_local_frame(16, |env| match f(env, object.as_obj()) {
         Ok(value) => Ok(value),
         Err(error) => {
             if env.exception_check()? {
@@ -81,7 +92,7 @@ pub fn supports_dolby() -> bool {
     })
 }
 pub fn can_download(wifi_only: bool) -> Result<bool> {
-    activity(|env, ctx| {
+    storage(|env, ctx| {
         env.call_method(
             ctx,
             "canDownload",
@@ -92,7 +103,7 @@ pub fn can_download(wifi_only: bool) -> Result<bool> {
     })
 }
 pub fn music_directory() -> Result<PathBuf> {
-    activity(|env, ctx| {
+    storage(|env, ctx| {
         let path = JString::from(
             env.call_method(ctx, "musicDirectory", "()Ljava/lang/String;", &[])?
                 .l()?,
@@ -101,7 +112,7 @@ pub fn music_directory() -> Result<PathBuf> {
     })
 }
 pub fn publish(source: &Path, name: &str) -> Result<String> {
-    activity(|env, ctx| {
+    storage(|env, ctx| {
         let path = env.new_string(source.to_string_lossy())?;
         let name = env.new_string(name)?;
         let result = JString::from(
@@ -317,4 +328,49 @@ pub fn removal_plan() -> Result<Vec<crate::library_remove::Item>> {
 }
 pub fn clear_removal() -> Result<()> {
     activity(|env, ctx| env.call_method(ctx, "clearRemoval", "()V", &[])?.v())
+}
+
+static DOWNLOADS: std::sync::OnceLock<GlobalRef> = std::sync::OnceLock::new();
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_bilimusicplayer_DownloadPlatform_bind(
+    env: JNIEnv,
+    object: JObject,
+) {
+    if let Ok(reference) = env.new_global_ref(object) {
+        let _ = DOWNLOADS.set(reference);
+    }
+}
+
+pub fn schedule_downloads(wifi_only: bool, append: bool) -> Result<()> {
+    storage(|env, obj| {
+        env.call_method(
+            obj,
+            "schedule",
+            "(ZZ)V",
+            &[JValue::Bool(wifi_only.into()), JValue::Bool(append.into())],
+        )?
+        .v()
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_bilimusicplayer_DownloadPlatform_pump(
+    mut env: JNIEnv,
+    _: jni::objects::JClass,
+) -> i64 {
+    let result = (|| -> Result<i64> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        crate::bridge::start_worker()
+            .send(crate::app::Command::Pump(tx))
+            .map_err(|_| anyhow::anyhow!("下载服务已停止"))?;
+        rx.recv()?
+    })();
+    match result {
+        Ok(delay) => delay,
+        Err(e) => {
+            let _ = env.throw_new("java/io/IOException", e.to_string());
+            -1
+        }
+    }
 }

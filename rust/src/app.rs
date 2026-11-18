@@ -17,6 +17,8 @@ use std::{
 pub(crate) enum Command {
     Open,
     #[cfg(target_os = "android")]
+    Pump(std::sync::mpsc::Sender<Result<i64>>),
+    #[cfg(target_os = "android")]
     Quality(
         crate::quality_android::Request,
         std::sync::mpsc::Sender<Result<serde_json::Value>>,
@@ -271,8 +273,36 @@ impl Application {
                 Command::Open => {
                     if !opened {
                         opened = true;
+                        #[cfg(target_os = "android")]
+                        if self.downloads.pending
+                            && let Err(error) = self.schedule_downloads(false)
+                        {
+                            self.error(error);
+                        }
                         self.open();
                     }
+                    Ok(())
+                }
+                #[cfg(target_os = "android")]
+                Command::Pump(reply) => {
+                    let result = (|| -> Result<i64> {
+                        if self.downloads.pending && self.downloads.next <= Instant::now() {
+                            self.downloads.tick(&mut self.client, &mut self.library)?;
+                            if opened && self.page == Page::Downloads {
+                                self.download_entries()?;
+                            }
+                        }
+                        Ok(if self.downloads.pending {
+                            self.downloads
+                                .next
+                                .saturating_duration_since(Instant::now())
+                                .as_millis()
+                                .clamp(150, 5000) as i64
+                        } else {
+                            0
+                        })
+                    })();
+                    let _ = reply.send(result);
                     Ok(())
                 }
                 #[cfg(target_os = "android")]
@@ -480,8 +510,19 @@ impl Application {
         });
         Ok(())
     }
+    #[cfg(target_os = "android")]
+    fn schedule_downloads(&self, append: bool) -> Result<()> {
+        crate::android_platform::schedule_downloads(
+            self.client.settings.get("wifi_only") == Some("true"),
+            append,
+        )
+    }
     fn enqueue(&mut self, media: &[Media]) -> Result<()> {
         let count = crate::download::enqueue(&mut self.library, media)?;
+        #[cfg(target_os = "android")]
+        if count > 0 {
+            self.schedule_downloads(true)?;
+        }
         self.downloads.wake();
         self.show(move |ui| ui.message = format!("已加入下载队列：{count} 首"));
         Ok(())
@@ -577,6 +618,9 @@ impl Application {
     }
     fn download_action(&mut self, id: &str, action: &str) -> Result<()> {
         let sql = match action {
+            "pause" => {
+                "UPDATE downloads SET status='PAUSED' WHERE songId=?1 AND status IN ('QUEUED','DOWNLOADING')"
+            }
             "cancel" => {
                 "UPDATE downloads SET status='CANCELLED' WHERE songId=?1 AND status IN ('QUEUED','DOWNLOADING')"
             }
@@ -588,7 +632,11 @@ impl Application {
             }
             _ => return Ok(()),
         };
-        self.library.0.execute(sql, [id])?;
+        let _changed = self.library.0.execute(sql, [id])?;
+        #[cfg(target_os = "android")]
+        if _changed > 0 && action == "retry" {
+            self.schedule_downloads(true)?;
+        }
         self.downloads.wake();
         self.download_entries()
     }

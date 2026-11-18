@@ -3,23 +3,14 @@ package com.bilimusicplayer;
 import android.Manifest;
 import android.os.Bundle;
 import dev.asuka.AsukaActivity;
-import android.content.ContentResolver;
-import android.content.ContentValues;
-import android.content.Context;
 import android.content.Intent;
-import android.database.Cursor;
 import android.content.pm.PackageManager;
 import android.media.MediaCodecList;
 import android.media.MediaCodecInfo;
-import android.net.ConnectivityManager;
 import android.net.Uri;
 import java.util.Collections;
-import android.os.Environment;
 import android.provider.MediaStore;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.IOException;
-import java.io.OutputStream;
 
 public final class PlayerActivity extends AsukaActivity {
     static { System.loadLibrary("asuka"); }
@@ -167,16 +158,6 @@ public final class PlayerActivity extends AsukaActivity {
         }
         if (requestCode == RESTORE_AUDIO) mediaAction(8, resultCode == RESULT_OK ? 1 : 0);
     }
-    public String musicDirectory() {
-        return new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
-                        "BiliMusic").getAbsolutePath();
-    }
-
-    public boolean canDownload(boolean wifiOnly) {
-        ConnectivityManager manager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-        return manager.getActiveNetwork() != null && (!wifiOnly || !manager.isActiveNetworkMetered());
-    }
-
     public boolean supportsDolby() {
         for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
             if (info.isEncoder()) continue;
@@ -187,37 +168,4 @@ public final class PlayerActivity extends AsukaActivity {
         return false;
     }
 
-    public String publishTrack(String source, String name) throws IOException {
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.Audio.Media.DISPLAY_NAME, name);
-        values.put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4");
-        values.put(MediaStore.Audio.Media.RELATIVE_PATH, Environment.DIRECTORY_MUSIC + "/BiliMusic/");
-        values.put(MediaStore.Audio.Media.IS_PENDING, 1);
-        ContentResolver resolver = getContentResolver();
-        Uri pending = resolver.insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), values);
-        if (pending == null) throw new IOException("无法创建音频文件");
-        boolean published = false;
-        try {
-            try (FileInputStream in = new FileInputStream(source);
-                 OutputStream out = resolver.openOutputStream(pending, "w")) {
-                if (out == null) throw new IOException("无法写入音频文件");
-                byte[] buffer = new byte[65536];
-                int n;
-                while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
-            }
-            values.clear();
-            values.put(MediaStore.Audio.Media.IS_PENDING, 0);
-            if (resolver.update(pending, values, null, null) != 1) throw new IOException("无法发布音频文件");
-            published = true;
-            try (Cursor row = resolver.query(pending, new String[]{MediaStore.Audio.Media.DATA}, null, null, null)) {
-                if (row != null && row.moveToFirst() && row.getString(0) != null) {
-                    File file = new File(row.getString(0));
-                    if (file.isFile() && file.length() == new File(source).length()) return file.getAbsolutePath();
-                }
-            }
-            return pending.toString();
-        } finally {
-            if (!published) resolver.delete(pending, null, null);
-        }
-    }
 }

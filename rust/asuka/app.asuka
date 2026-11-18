@@ -231,9 +231,10 @@ component Music(live: bool = true) {
                     Symbol(if selected.contains(e.key) { "checkmark.circle.fill" } else { "circle" })
                   } else if player.page == "downloads" {
                     if e.status == "QUEUED" || e.status == "DOWNLOADING" {
+                      Button("暂停") { on press { action("downloadAction", e.key, "pause") } }
                       Button("取消") { on press { action("downloadAction", e.key, "cancel") } }
                     } else {
-                      if e.status != "COMPLETED" { Button("重试") { on press { action("downloadAction", e.key, "retry") } } }
+                      if e.status != "COMPLETED" && e.status != "CONVERTING" { Button(if e.status == "PAUSED" { "继续" } else { "重试" }) { on press { action("downloadAction", e.key, "retry") } } }
                       Button("移除") { on press { action("downloadAction", e.key, "delete") } }
                     }
                   } else { Text("›") { color: .tertiaryLabel; font: .title3 } }
