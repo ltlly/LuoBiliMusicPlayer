@@ -1,21 +1,57 @@
-// Draw the four navigation marks with Asuka so they also work on systems
-// without SF Symbols, Segoe Fluent Icons or an installed music font.
-component Glyph(kind: string, tint: Color) {
+// One 24-point grid keeps the same optical weight on Android and Win32.
+component Glyph(kind: string, tint: Color, size: float = 22.0) {
   Canvas(g => {
-    let stroke = StrokeStyle(width: 1.8, cap: .round)
-    if kind == "favorites" {
-      let heart = Path().move(12, 20).cubic(9, 17, 2, 12, 2, 7).cubic(2, 2, 9, 1, 12, 6).cubic(15, 1, 22, 2, 22, 7).cubic(22, 12, 15, 17, 12, 20)
-      g.stroke(heart, tint, stroke)
+    g.transform(g.width / 24.0, 0, 0, g.height / 24.0, 0, 0)
+    let pen = StrokeStyle(width: 1.9, cap: .round)
+    if kind == "mark" {
+      g.stroke(Path().move(4,15).line(7,7).move(8,18).line(12,5).move(13,18).line(17,6).move(18,15).line(20,9), tint, StrokeStyle(width: 2.5, cap: .round))
+    } else if kind == "favorites" {
+      g.stroke(Path().move(3,7).line(3,5).line(10,5).line(12,7).line(20,7).line(21,9).line(21,19).line(3,19).close(), tint, pen)
+      g.stroke(Path().move(3,10).line(20,10), tint, pen)
     } else if kind == "library" {
-      g.stroke(Path().move(8, 17).line(8, 6).line(20, 3).line(20, 14), tint, stroke)
-      g.fill(Path().arc(5.5, 17, 3.2, start: 0, end: 6.283185), tint)
-      g.fill(Path().arc(17.5, 14, 3.2, start: 0, end: 6.283185), tint)
+      g.stroke(Path().move(4,5).line(4,20).move(9,5).line(9,20).move(14,5).line(14,20).move(17,6).line(21,19), tint, pen)
     } else if kind == "downloads" {
-      g.stroke(Path().move(12, 3).line(12, 15).move(6, 10).line(12, 16).line(18, 10).move(3, 17).line(3, 21).line(21, 21).line(21, 17), tint, stroke)
+      g.stroke(Path().move(12,3).line(12,15).move(7,10).line(12,15).line(17,10).move(4,16).line(4,20).line(20,20).line(20,16), tint, pen)
+    } else if kind == "settings" {
+      g.stroke(Path().move(3,7).line(21,7).move(3,17).line(21,17), tint, pen)
+      g.fill(Path().arc(8,7,3.3,start:0,end:6.2832),tint)
+      g.fill(Path().arc(16,17,3.3,start:0,end:6.2832),tint)
+    } else if kind == "queue" {
+      g.stroke(Path().move(3,5).line(20,5).move(3,11).line(14,11).move(3,17).line(10,17), tint, pen)
+      g.fill(Path().move(15,13).line(22,17).line(15,21).close(), tint)
+    } else if kind == "play" {
+      g.fill(Path().move(7,3.7).line(20,12).line(7,20.3).close(), tint)
+    } else if kind == "pause" {
+      g.stroke(Path().move(8,5).line(8,19).move(16,5).line(16,19),tint,StrokeStyle(width:4.2,cap:.round))
+    } else if kind == "next" || kind == "previous" {
+      if kind == "previous" { g.transform(-1,0,0,1,24,0) }
+      g.fill(Path().move(4,5).line(15,12).line(4,19).close(),tint)
+      g.stroke(Path().move(18,5).line(18,19),tint,StrokeStyle(width:2.7,cap:.round))
+    } else if kind == "refresh" {
+      g.stroke(Path().arc(12,12,7.9,start:0.2,end:5.64).move(19.1,4).line(19.1,8.8).line(14.4,8.8),tint,pen)
+    } else if kind == "down" || kind == "right" || kind == "back" {
+      if kind == "down" { g.transform(0,1,-1,0,24,0) }
+      if kind == "back" { g.transform(-1,0,0,1,24,0) }
+      g.stroke(Path().move(9,5).line(16,12).line(9,19),tint,pen)
+    } else if kind == "open" {
+      g.stroke(Path().move(5,18).line(18,5).move(8,5).line(18,5).line(18,15),tint,pen)
+    } else if kind == "check" {
+      g.stroke(Path().move(4,12).line(9,17).line(20,6),tint,pen)
+    } else if kind == "minus" {
+      g.stroke(Path().move(5,12).line(19,12),tint,pen)
+    } else if kind == "repeat" || kind == "single" {
+      g.stroke(Path().move(4,10).line(4,7).line(19,7).move(15,3).line(19,7).line(15,11).move(20,14).line(20,17).line(5,17).move(9,13).line(5,17).line(9,21),tint,pen)
+      if kind == "single" { g.stroke(Path().move(11,11).line(12,10).line(12,14),tint,pen) }
+    } else if kind == "shuffle" {
+      g.stroke(Path().move(3,6).line(6,6).cubic(10,6,13,17,17,17).line(21,17).move(18,14).line(21,17).line(18,20).move(3,17).line(6,17).line(9,13).move(14,8).line(16,6).line(21,6).move(18,3).line(21,6).line(18,9),tint,pen)
+    } else if kind == "search" {
+      g.stroke(Path().arc(10,10,6.4,start:0,end:6.2832).move(15,15).line(21,21),tint,pen)
+    } else if kind == "account" {
+      g.stroke(Path().arc(12,7,3.8,start:0,end:6.2832).move(4,20).cubic(4,12,20,12,20,20),tint,pen)
+    } else if kind == "sun" {
+      g.stroke(Path().arc(12,12,4.1,start:0,end:6.2832).move(12,2).line(12,4).move(12,20).line(12,22).move(2,12).line(4,12).move(20,12).line(22,12).move(5,5).line(6.5,6.5).move(17.5,17.5).line(19,19),tint,pen)
     } else {
-      g.stroke(Path().move(3, 7).line(21, 7).move(3, 17).line(21, 17), tint, stroke)
-      g.fill(Path().arc(8, 7, 3.2, start: 0, end: 6.283185), tint)
-      g.fill(Path().arc(16, 17, 3.2, start: 0, end: 6.283185), tint)
+      g.stroke(Path().move(4,10).line(4,15).move(8,6).line(8,18).move(12,3).line(12,21).move(16,7).line(16,17).move(20,9).line(20,15),tint,pen)
     }
-  }) { width: 24; height: 24 }
+  }) { width: size; height: size }
 }

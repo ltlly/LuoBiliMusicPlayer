@@ -14,31 +14,12 @@ app {
   }
 }
 
-component Art(source: string, size: float, glyph: string = "music.note") {
-  state path = ""
-  task(source) {
-    path = ""
-    let url = source
-    if !url.isEmpty() { path = await spawn { lbm_cover(url) } }
-  }
-  if path.isEmpty() {
-    View {
-      width: size
-      height: size
-      radius: 9
-      align: .center
-      justify: .center
-      background: #245B55
-      if size >= 100 { Sleeve() } else { Glyph(if glyph == "heart.fill" { "favorites" } else { "library" }, #D4F5CF) }
-    }
-  } else {
-    Image(path) { width: size; height: size; radius: 9 }
-  }
-}
-
 component Music(live: bool = true) {
-  let wide = environment().width >= 680
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let inset = contentInset(environment().width)
+  let wide = environment().width >= 720
   state panel = ""
+  let showHero = player.page == "favorites" && panel.isEmpty() && environment().height >= 535
   state query = ""
   state selected: [string] = []
   state selecting = false
@@ -101,171 +82,212 @@ component Music(live: bool = true) {
   }
 
   SafeArea {
-    grow: 1
+    grow: 1; background: palette.paper
     Row {
       grow: 1
       if wide {
         Column {
-          width: 154
-          padding: [14, 0]
-          gap: 12
-          Text("哔哩音乐") { padding: [6, 22]; font: .title3.bold() }
+          width: if environment().width < 850 { 152 } else { 177 }; padding: [23, 12]; gap: 24
+          View { padding: [0,6]; Brand() }
           Navigation(true, panel) { on choose(p) { openTab(p) } }
+          View { grow: 1 }
+          Pill("播放队列", "queue", palette.violet, palette.violetWash) { on press { panel = "queue" } }
         }
+        View { width: 1; background: palette.rule }
       }
-    Column {
-      grow: 1
-      Heading(panel) {
-        on queue { panel = if panel == "queue" { "" } else { "queue" } }
-      }
-      if panel == "player" || panel == "queue" {
-        NowPlaying(panel) {
-          on dismiss { panel = "" }
-          on queue { panel = if panel == "queue" { "player" } else { "queue" } }
-        }
-      } else {
-        if player.page == "content" || player.page == "downloadSettings" || player.page == "library" || player.page == "favorites" || player.page == "downloads" {
-          Row {
-            align: .center
-            padding: [5, 16]
-            if player.page == "content" || player.page == "downloadSettings" {
-              Button("返回") { on press { go(if player.page == "content" { "favorites" } else { "settings" }) } }
-            }
-            View { grow: 1 }
-            if player.page != "downloadSettings" {
-              Button("刷新") { on press { action("retry") } }
-            }
+      Column {
+        grow: 1; shrink: 1; padding: if wide { [12,0,6,0] } else { 0 }
+        if panel == "player" || panel == "queue" {
+          NowPlaying(panel) {
+            on dismiss { panel = "" }
+            on queue { panel = if panel == "queue" { "player" } else { "queue" } }
           }
-        }
-        if !player.message.isEmpty() {
-          Text(player.message) { color: .secondaryLabel; font: .footnote; padding: [4, 20]; lines: 3 }
-        }
-        if player.page == "login" {
-          Column {
-            grow: 1
-            padding: 20
-            gap: 14
-            align: .center
-            justify: .center
-            if player.loginState == "waiting" && !player.qr.isEmpty() {
-              Image(player.qr) { width: 192; height: 192 }
-              Text("请使用哔哩哔哩客户端扫码") { font: .headline }
-            } else if player.loginState == "error" || player.loginState == "expired" {
-              Symbol("qrcode") { font: .largeTitle; color: .accent }
-              Button("重新获取二维码") { variant: .filled; on press { action("retry") } }
-            } else {
-              Activity()
-              Text("正在获取二维码") { color: .secondaryLabel }
-            }
-          }
-        } else if player.page == "settings" || player.page == "downloadSettings" {
-          Preferences()
         } else {
-          if player.page != "favorites" {
-            TextField {
-              padding: [4, 20]
-              text: query
-              placeholder: "搜索歌曲或歌手"
-              on change(t) {
-                if t.isEmpty() && !query.isEmpty() { action("search", "") }
-                query = t
-              }
-            }
-          }
-          if player.page == "downloads" {
-            Segmented(["进行中", "已完成", "失败"]) {
-              padding: [4, 20]
-              selected: tab
-              on change(i) { tab = i; selected = []; selecting = false; action("downloadsTab", "{i}") }
-            }
-          }
-          if (player.page == "content" || player.page == "library" || player.page == "downloads") && !player.entries.isEmpty() {
-            Row {
-              gap: 6
-              padding: [4, 16]
-              if selecting {
-                Button("全选") { on press { selected = player.entries.map(e => e.key) } }
-                if player.page == "content" {
-                  Button("下载 ({selected.count()})") { disabled: selected.isEmpty(); on press { sendDownload(selected) } }
-                } else {
-                  Button("删除 ({selected.count()})") { disabled: selected.isEmpty(); on press { confirmRemoval() } }
-                }
-                Button("取消") { on press { selecting = false; selected = [] } }
-              } else {
-                Button(if player.page == "downloads" { "选择记录" } else { "选择歌曲" }) { on press { selecting = true } }
-                if player.page == "content" { Button("下载全部") { on press { sendDownload([]) } } }
-                if player.page == "library" { Button("清理未匹配歌曲") { on press { confirmRemoval(true) } } }
-              }
-            }
-          }
-          if player.entries.isEmpty() {
-            Column {
-              grow: 1
-              align: .center
-              justify: .center
-              gap: 10
-              Symbol("music.note") { font: .largeTitle; color: .tertiaryLabel }
-              Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.page == "downloads" { "暂无下载" } else if player.page == "favorites" { "暂无收藏夹" } else { "暂无歌曲" }) { color: .secondaryLabel }
+          if !wide { Masthead { on queue { panel = "queue" } } }
+          if showHero { ListeningCard { on open { panel = "player" } } }
+          if !showHero || !player.trackTitle.isEmpty() {
+            PageTitle(pageName(player.page),
+              if player.page == "favorites" { "{player.entries.count()} 个" } else if player.page == "library" { "{player.entries.count()} 首" } else { "" },
+              player.page == "favorites" || player.page == "library" || player.page == "content" || player.page == "downloads",
+              player.page == "content" || player.page == "downloadSettings") {
+              on returnPage { go(if player.page == "content" { "favorites" } else { "settings" }) }
+              on refreshPage { action("retry") }
             }
           } else {
-            List {
-              grow: 1
-              for e in player.entries key e.key {
-                Row {
-                  padding: [8, 20]
-                  gap: 12
-                  align: .center
-                  role: .button
-                  label: e.title
-                  on press {
-                    if selecting { select(e.key) } else { action("choose", e.key, e.title) }
+            Row { padding: [1,inset]; justify: .end; IconAction("refresh","刷新",palette.secondary,palette.soft,36.0,17.0) { on press { action("retry") } } }
+          }
+          if !player.message.isEmpty() {
+            Text(player.message) { color: palette.violet; font: .footnote; padding: [4,inset]; lines: 3 }
+          }
+          if player.page == "login" {
+            LoginPane()
+          } else if player.page == "settings" || player.page == "downloadSettings" {
+            Preferences()
+          } else {
+            if player.page != "favorites" {
+              Row {
+                margin: [2,inset,5,inset]; padding: [2,11]; gap: 8; radius: 12
+                border: 1; borderColor: palette.rule; background: palette.surface; align: .center
+                Glyph("search",palette.secondary,17.0)
+                TextField {
+                  grow: 1; plain: true; minHeight: 36; text: query; placeholder: "搜索歌曲或歌手"; color: palette.ink
+                  on change(t) {
+                    if t.isEmpty() && !query.isEmpty() { action("search", "") }
+                    query = t
                   }
-                  Art(e.coverUrl, 44.0, if player.page == "favorites" { "heart.fill" } else { "music.note" })
-                  Column {
-                    grow: 1
-                    gap: 3
-                    Text(e.title) { font: .headline; lines: 1 }
-                    Text(e.detail) { font: .footnote; color: .secondaryLabel; lines: 1 }
-                  }
-                  if selecting {
-                    Symbol(if selected.contains(e.key) { "checkmark.circle.fill" } else { "circle" })
-                  } else if player.page == "downloads" {
-                    if e.status == "QUEUED" || e.status == "DOWNLOADING" {
-                      Button("暂停") { on press { action("downloadAction", e.key, "pause") } }
-                      Button("取消") { on press { action("downloadAction", e.key, "cancel") } }
-                    } else {
-                      if e.status != "COMPLETED" && e.status != "CONVERTING" { Button(if e.status == "PAUSED" { "继续" } else { "重试" }) { on press { action("downloadAction", e.key, "retry") } } }
-                      Button("移除") { on press { action("downloadAction", e.key, "delete") } }
-                    }
-                  } else { Text("›") { color: .tertiaryLabel; font: .title3 } }
                 }
               }
             }
-            if player.hasMore { Button("加载更多") { on press { action("more") } } }
+            if player.page == "downloads" {
+              Segmented(["进行中", "已完成", "失败"]) {
+                margin: [3,inset]; selected: tab
+                on change(i) { tab = i; selected = []; selecting = false; action("downloadsTab", "{i}") }
+              }
+            }
+            if player.page != "favorites" && !player.entries.isEmpty() {
+              Row {
+                gap: 6; wrap: true; padding: [4,inset,7,inset]
+                if selecting {
+                  Pill("全选","check",palette.violet,palette.violetWash) { on press { selected = player.entries.map(e => e.key) } }
+                  if !selected.isEmpty() {
+                    if player.page == "content" {
+                      Pill("下载 ({selected.count()})", "downloads", palette.ink, palette.soft) { on press { sendDownload(selected) } }
+                    } else {
+                      Pill("删除 ({selected.count()})", "minus", palette.ink, palette.soft) { on press { confirmRemoval() } }
+                    }
+                  }
+                  Pill("取消","",palette.ink,palette.soft) { on press { selecting = false; selected = [] } }
+                } else {
+                  Pill(if player.page == "downloads" { "选择记录" } else { "选择歌曲" }, "check", palette.ink, palette.soft) { on press { selecting = true } }
+                  if player.page == "content" { Pill("下载全部","downloads",palette.violet,palette.violetWash) { on press { sendDownload([]) } } }
+                  if player.page == "library" { Pill("清理未匹配歌曲","",palette.secondary,palette.soft) { on press { confirmRemoval(true) } } }
+                }
+              }
+            }
+            if player.entries.isEmpty() {
+              Column {
+                grow: 1; align: .center; justify: .center; gap: 9
+                View { width: 50; height: 50; radius: 16; background: palette.violetWash; align: .center; justify: .center; Glyph(if query.isEmpty() { player.page } else { "search" },palette.violet,22.0) }
+                Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.page == "downloads" { "暂无下载" } else if player.page == "favorites" { "暂无收藏夹" } else { "暂无歌曲" }) { color: palette.secondary; font: .subheadline }
+              }
+            } else {
+              List {
+                grow: 1; margin: [2,inset,4,inset]
+                columns: if player.page == "favorites" && player.entries.count() > 1 && environment().width >= 340 {
+                  if environment().width >= 1210 { 3 } else { 2 }
+                } else { 1 }; gap: 10
+                for (i,e) in player.entries.enumerated() key e.key {
+                  if player.page == "favorites" {
+                    FolderCard(e, i, player.entries.count() == 1) { on open { action("choose",e.key,e.title) } }
+                  } else { EntryRow(e, i, selecting, selected.contains(e.key)) {
+                    on choose { if selecting { select(e.key) } else { action("choose", e.key, e.title) } }
+                  } }
+                }
+              }
+              if player.hasMore { Pill("加载更多","down",palette.violet,palette.violetWash) { on press { action("more") } } }
+            }
+          }
+          if !showHero && !player.trackTitle.isEmpty() {
+            MiniPlayer { on open { panel = "player" } }
+          }
+          if !wide {
+            View { height: 1; background: palette.rule }
+            Navigation(false,panel) { on choose(p) { openTab(p) } }
           }
         }
       }
-
-      if panel.isEmpty() && !player.trackTitle.isEmpty() {
-        Row {
-          padding: [7, 16]
-          align: .center
-          gap: 12
-          background: .groupedBackground
-          role: .button
-          on press { panel = "player" }
-          Art(player.smallCoverUrl, 40.0)
-          Column {
-            grow: 1
-            Text(player.trackTitle) { font: .headline; lines: 1 }
-            Text(player.artist) { color: .secondaryLabel; font: .footnote; lines: 1 }
-          }
-          Button(if player.playing { "暂停" } else { "播放" }) { variant: .filled; on press { control("toggle") } }
-          Button("下一首") { on press { control("next") } }
-        }
-      }
-      if !wide { Navigation(false, panel) { on choose(p) { openTab(p) } } }
     }
+  }
+}
+
+component FolderCard(e: Entry, index: int, single: bool) {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  event open
+  View {
+    direction: if single { .row } else { .column }
+    radius: 14; clip: true; background: palette.surface; border: 1; borderColor: palette.rule
+    role: .button; label: e.title; on press { emit open }; pressed { opacity: 0.8 }
+    View {
+      width: if single { 40% } else { 100% }
+      height: if single { 134 } else if environment().width >= 720 { 122 } else { 102 }
+      CoverImage(e.coverUrl, printedSleeve(index), 0.0)
+    }
+    Row {
+      grow: if single { 1 } else { 0 }; shrink: 1; align: .center; gap: 6
+      padding: if single { 16 } else { [10,11] }
+      Column {
+        grow: 1; shrink: 1; gap: 3
+        Text(e.title) { color: palette.ink; font: Font(size: if single { 20.0 } else { 15.0 }).bold(); lines: 2 }
+        Text(e.detail) { color: palette.secondary; font: Font(size: 12); lines: 1 }
+      }
+      if single {
+        View { width: 31; height: 31; radius: 16; background: palette.violetWash; align: .center; justify: .center; Glyph("open",palette.violet,14.0) }
+      }
+    }
+  }
+}
+
+component EntryRow(e: Entry, index: int, selecting: bool, checked: bool) {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  event choose
+  let downloads = player.page == "downloads"
+  Row {
+    background: if checked { palette.violetWash } else { palette.surface }; border: 1; borderColor: if checked { palette.violet } else { palette.rule }
+    radius: 12; padding: 8; gap: 10; align: .center
+    Row {
+      grow: 1; shrink: 1; align: .center; gap: 12; role: .button; label: e.title
+      on press { emit choose }
+      pressed { opacity: 0.7 }
+      Art(e.coverUrl, 44.0, printedSleeve(index), 7.0)
+      Column {
+        grow: 1; shrink: 1; gap: 4
+        Text(e.title) { color: palette.ink; font: Font(size: 15).bold(); lines: 2 }
+        Text(e.detail) { color: palette.secondary; font: Font(size: 12); lines: if downloads { 2 } else { 1 } }
+      }
+      if selecting {
+        View { width: 22; height: 22; radius: 11; border: 1; borderColor: if checked { palette.violet } else { palette.rule }; background: if checked { palette.violet } else { palette.surface }; align: .center; justify: .center
+          if checked { Glyph("check",palette.surface,14.0) }
+        }
+      } else if !downloads { Glyph("right", palette.secondary, 14.0) }
+    }
+    if downloads && !selecting {
+      Column {
+        if e.status == "QUEUED" || e.status == "DOWNLOADING" {
+          Button("暂停") { on press { action("downloadAction", e.key, "pause") } }
+          Button("取消") { on press { action("downloadAction", e.key, "cancel") } }
+        } else {
+          if e.status != "COMPLETED" && e.status != "CONVERTING" { Button(if e.status == "PAUSED" { "继续" } else { "重试" }) { on press { action("downloadAction", e.key, "retry") } } }
+          Button("移除") { on press { action("downloadAction", e.key, "delete") } }
+        }
+      }
+    }
+  }
+}
+
+component LoginPane {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let inset = contentInset(environment().width)
+  Scroll {
+    grow: 1
+    Column {
+      padding: [12,inset,20,inset]; align: .center
+      Column {
+        width: 100%; maxWidth: 420; padding: [22,18]; gap: 16; align: .center
+        background: palette.surface; border: 1; borderColor: palette.rule; radius: 18
+        if player.loginState == "waiting" && !player.qr.isEmpty() {
+          View {
+            background: #FFFFFF; border: 1; borderColor: #DDD9D4; radius: 12; padding: 11
+            Image(player.qr) { width: 176; height: 176 }
+          }
+          Text("请使用哔哩哔哩客户端扫码") { color: palette.ink; font: .headline }
+        } else if player.loginState == "error" || player.loginState == "expired" {
+          Glyph("refresh",palette.violet,32.0)
+          Pill("重新获取二维码","refresh",palette.violet,palette.violetWash) { on press { action("retry") } }
+        } else {
+          Activity()
+          Text("正在获取二维码") { color: palette.secondary }
+        }
+      }
     }
   }
 }

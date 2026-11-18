@@ -1,0 +1,93 @@
+struct Palette {
+  paper: Color = #F7F6F1
+  surface: Color = #FFFDF9
+  ink: Color = #21232D
+  secondary: Color = #626270
+  rule: Color = #DEDDD7
+  soft: Color = #EBEAE5
+  violet: Color = #4039B7
+  violetWash: Color = #EAE7FB
+}
+
+fn colorsFor(mode: string, systemDark: bool) -> Palette {
+  if mode == "DARK" || (mode != "LIGHT" && systemDark) {
+    return Palette(
+      paper: #181920, surface: #23242D, ink: #F5F2EB, secondary: #B5B3C2,
+      rule: #363640, soft: #30303C, violet: #B9B5FF, violetWash: #34304D)
+  }
+  return Palette()
+}
+
+fn contentInset(width: float) -> float = if width >= 720 { 30.0 } else if width < 355 { 13.0 } else { 19.0 }
+let orange = #FF774C
+
+component IconAction(symbol: string, name: string, fg: Color, bg: Color, diameter: float = 40.0, iconSize: float = 20.0) {
+  event press
+  View {
+    role: .button; label: name; width: diameter; height: diameter; radius: diameter / 2
+    align: .center; justify: .center; background: bg
+    on press { emit press }
+    pressed { opacity: 0.72 }
+    Glyph(symbol, fg, iconSize)
+  }
+}
+
+component Pill(text: string, symbol: string, fg: Color, bg: Color) {
+  event press
+  Row {
+    role: .button; label: text; alignSelf: .start; align: .center; justify: .center
+    gap: 7; minHeight: 38; padding: [6, 13]; radius: 18; background: bg
+    on press { emit press }
+    pressed { opacity: 0.72 }
+    if !symbol.isEmpty() { Glyph(symbol, fg, 16.0) }
+    Text(text) { color: fg; font: Font(size: 13).semibold(); lines: 1 }
+  }
+}
+
+component Brand {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  Row {
+    align: .center; gap: 10
+    View {
+      width: 31; height: 31; radius: 9; align: .center; justify: .center; background: #4840CA
+      Glyph("mark", #FFF2DB, 23.0)
+    }
+    Text("哔哩音乐") { color: palette.ink; font: Font(size: 19).bold() }
+  }
+}
+
+component CoverImage(source: string, fallback: string, corner: float) {
+  state path = ""
+  task(source) {
+    path = ""
+    let url = source
+    if !url.isEmpty() { path = await spawn { lbm_cover(url) } }
+  }
+  Image(if path.isEmpty() { fallback } else { path }) {
+    width: 100%; height: 100%; mode: .fill; radius: corner
+  }
+}
+
+component Art(source: string, size: float, fallback: string = "sleeve-tape.jpg", corner: float = 8.0) {
+  View { width: size; height: size; CoverImage(source, fallback, corner) }
+}
+
+fn printedSleeve(index: int) -> string = ["sleeve-dusk.jpg", "sleeve-tide.jpg", "sleeve-phase.jpg", "sleeve-film.jpg"][index % 4]
+
+component Card {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  prop children: View
+  Column {
+    background: palette.surface; border: 1; borderColor: palette.rule; radius: 16; padding: 17; gap: 12
+    children
+  }
+}
+
+component SectionName(title: string, symbol: string) {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  Row {
+    align: .center; gap: 9
+    Glyph(symbol, palette.violet, 18.0)
+    Text(title) { color: palette.ink; font: Font(size: 16).bold() }
+  }
+}

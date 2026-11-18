@@ -1,53 +1,92 @@
-// The sleeve is drawn locally. Opening a section requests only the covers
-// belonging to its visible rows.
-component Sleeve {
-  Canvas(g => {
-    let x = g.width * 0.56
-    let y = g.height * 0.69
-    let r = g.height * 0.53
-    let circle = Path().arc(x, y, r, start: 0, end: 6.283185)
-    g.fill(circle, #162D31)
-    for i in 1..7 {
-      let radius = r * (0.35 + i.float() * 0.084)
-      g.stroke(Path().arc(x, y, radius, start: 0, end: 6.283185), #426560, StrokeStyle(width: 1))
-    }
-    g.fill(Path().arc(x, y, r * 0.28, start: 0, end: 6.283185), #E9B88B)
-    g.fill(Path().arc(x, y, r * 0.055, start: 0, end: 6.283185), #183E3A)
-  }) { width: 98; height: 85 }
+component Masthead {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let inset = contentInset(environment().width)
+  event queue
+  Row {
+    padding: [10, inset]; align: .center; justify: .spaceBetween
+    Brand()
+    IconAction("queue", "队列", palette.ink, palette.soft) { on press { emit queue } }
+  }
 }
 
-component Heading(panel: string) {
-  event queue
-  let title = if panel == "player" { "正在播放" } else if panel == "queue" { "播放队列" } else { pageName(player.page) }
-  let count = player.entries.count()
-  let detail = if panel == "queue" { "{player.queue.count()} 首歌曲" }
-    else if !panel.isEmpty() { player.artist }
-    else if player.page == "favorites" { "{count} 个收藏夹" }
-    else if player.page == "library" { "{count} 首本地歌曲" }
-    else { "" }
+component PageTitle(title: string, count: string = "", refresh: bool = false, back: bool = false) {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let inset = contentInset(environment().width)
+  event returnPage
+  event refreshPage
   Row {
-    padding: [12, 20, 12, 22]
-    gap: 10
-    align: .center
-    gradient: Gradient(stops: [Stop(color: #163C3C, at: 0), Stop(color: #245954, at: 1)])
+    align: .center; gap: 10; padding: [8, inset]
+    if back { IconAction("back", "返回", palette.ink, palette.soft, 34.0, 16.0) { on press { emit returnPage } } }
     Column {
-      gap: 5
-      grow: 1
-      if environment().width < 680 { Text("哔哩音乐") { color: #C3DCCF; font: .footnote.semibold() } }
-      Text(title) { color: #FFFAEB; font: .largeTitle.bold(); lines: 1 }
-      if !detail.isEmpty() { Text(detail) { color: #D3EBDC; font: .footnote } }
+      grow: 1; shrink: 1
+      Text(title) { color: palette.ink; font: Font(size: if environment().width >= 720 { 31.0 } else { 26.0 }).bold(); lines: 1 }
     }
-    if panel.isEmpty() && !player.trackTitle.isEmpty() {
-      View {
-        role: .button
-        label: "队列"
-        padding: [9, 15]
-        radius: 16
-        background: #D4EADA
-        on press { emit queue }
-        Text("队列") { color: #1C443F; font: .subheadline.semibold() }
+    if !count.isEmpty() { Text(count) { color: palette.secondary; font: Font(size: 13).medium() } }
+    if refresh { IconAction("refresh", "刷新", palette.secondary, palette.soft, 36.0, 17.0) { on press { emit refreshPage } } }
+  }
+}
+
+component ListeningCard {
+  let inset = contentInset(environment().width)
+  event open
+  let hasTrack = !player.trackTitle.isEmpty()
+  let wide = environment().width >= 720
+  let compact = environment().width < 355
+  let height = if wide { 204.0 } else if compact { 146.0 } else { 161.0 }
+  Column {
+    padding: [1, inset, 10, inset]
+    View {
+      height: height; radius: if wide { 22 } else { 18 }; clip: true
+      background: #3934B5
+      gradient: Gradient(stops: [Stop(color: #303190, at: 0), Stop(color: #5045DA, at: 1)])
+      Canvas(g => {
+        let r = g.height * 0.72
+        for i in 0..<4 {
+          g.stroke(Path().arc(g.width * 0.79, g.height * 0.42, r + i.float() * 8, start: 0, end: 6.2832), #AAA6F63C, StrokeStyle(width: 1))
+        }
+      }) { absolute: true; top: 0; left: 0; width: 100%; height: 100% }
+      if hasTrack && !player.smallCoverUrl.isEmpty() {
+        View {
+          absolute: true; right: if wide { 8% } else { 7% }; top: 10%
+          width: height * 0.8; height: height * 0.8
+          CoverImage(player.smallCoverUrl, "sleeve-tape.jpg", 11.0)
+        }
+      } else {
+        Image("cassette.png") {
+          absolute: true; right: if wide { 0 } else { -10 }; top: 0
+          width: if wide { 49% } else { 50% }; height: 100%; mode: .fit
+        }
+      }
+      Column {
+        width: if wide { 55% } else { 57% }; height: 100%; padding: if wide { [21, 26] } else { [14, 16] }
+        justify: .center; gap: if compact { 3 } else { 5 }
+        Row {
+          gap: 7; align: .center
+          View { width: 7; height: 7; radius: 4; background: orange }
+          Text(if !hasTrack { "哔哩音乐" } else if player.playing { "正在播放" } else { "继续收听" }) { color: #E7E6FF; font: Font(size: 12).semibold() }
+        }
+        Text(if hasTrack { player.trackTitle } else { "我的收藏夹" }) { font: Font(size: if wide { 32.0 } else { 23.0 }).bold(); color: #FFF9EA; lines: 2 }
+        if hasTrack && !player.artist.isEmpty() { Text(player.artist) { color: #DBD9FF; font: Font(size: 13); lines: 1 } }
+        if hasTrack {
+          Row {
+            margin: Edges(top: 3); gap: 7; align: .center
+            Pill(if player.playing { "暂停" } else { "播放" }, if player.playing { "pause" } else { "play" }, #212136, #FFF1DA) { on press { control("toggle") } }
+            IconAction("next","下一首",#FFF1DA,#FFFFFF24,36.0,16.0) { on press { control("next") } }
+          }
+        } else {
+          Text("{player.entries.count()} 个收藏夹") { color: #DBD9FF; font: .subheadline }
+        }
+      }
+      if hasTrack {
+        View {
+          absolute: true; right: 0; top: 0; width: 43%; height: 100%; role: .button; label: "展开播放器"
+          on press { emit open }
+          View {
+            absolute: true; bottom: 9; right: 10; height: 24; width: 24; radius: 12; align: .center; justify: .center; background: #28266C
+            Glyph("open", #FFF5E7, 13.0)
+          }
+        }
       }
     }
-    Sleeve()
   }
 }

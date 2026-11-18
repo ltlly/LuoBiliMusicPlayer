@@ -9,3 +9,23 @@ test "a restored library opens its existing player and queue" {
   ui.tap("播放器")
   ui.expect("正在播放", "上一首", "下一首")
 }
+
+test "an empty queue returns to the collection" {
+  player = Player(page: "favorites", entries: [Entry(key: "1", title: "日落之后")])
+  let ui = mount(Music(false))
+  ui.expect("日落之后")
+  ui.tap("队列")
+  ui.expect("队列为空")
+  ui.tap("返回")
+  ui.expect("日落之后")
+}
+
+test "the listening card opens the restored track" {
+  player = Player(page: "favorites", trackTitle: "夜色慢行", artist: "岛屿来信",
+    entries: [Entry(key: "1", title: "日落之后"), Entry(key: "2", title: "潮汐唱片")],
+    queue: [Entry(title: "夜色慢行")])
+  let ui = mount(Music(false))
+  ui.expect("日落之后", "潮汐唱片")
+  ui.tap("展开播放器")
+  ui.expect("正在播放", "夜色慢行", "上一首", "下一首")
+}

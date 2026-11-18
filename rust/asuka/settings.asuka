@@ -1,81 +1,107 @@
 component Preferences {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let inset = contentInset(environment().width)
   state errorsOpen = false
   Scroll {
     grow: 1
     Column {
-      gap: 12
-      padding: [8, 20, 20, 20]
+      padding: [6,inset,18,inset]; gap: 11
       if player.page == "settings" {
         if player.pendingReplacement {
-          Text("旧版音质升级曾中断，原音频有一份恢复副本。") { font: .headline }
-          Button("使用副本恢复歌曲") { on press { action("recoverAudio") } }
+          Card {
+            SectionName("恢复旧版音频","wave")
+            Text("音质升级曾中断，原音频有一份恢复副本。") { color: palette.secondary }
+            Pill("使用副本恢复歌曲","back",palette.violet,palette.violetWash) { on press { action("recoverAudio") } }
+          }
         }
-        Text("账户") { color: .accent; font: .headline }
-        Text(player.account)
-        if !player.accountDetail.isEmpty() { Text(player.accountDetail) { color: .secondaryLabel } }
-        Row {
-          gap: 8
-          Button("检查登录状态") { on press { action("account") } }
-          if player.account == "未登录" {
-            Button("扫码登录") { on press { go("login") } }
-          } else {
-            Button("退出登录") {
-              on press { alert("退出当前账户？", actions: [.button(title: "取消", role: .cancel), .button(title: "退出", role: .destructive, run: () => action("logout"))]) }
+        Card {
+          SectionName("账户","account")
+          Text(player.account) { color: palette.ink; font: .subheadline }
+          if !player.accountDetail.isEmpty() { Text(player.accountDetail) { color: palette.secondary; font: .footnote } }
+          Row {
+            gap: 7; wrap: true
+            Pill("检查登录状态","refresh",palette.violet,palette.violetWash) { on press { action("account") } }
+            if player.account == "未登录" {
+              Pill("扫码登录","",palette.ink,palette.soft) { on press { go("login") } }
+            } else {
+              Pill("退出登录","",palette.secondary,palette.soft) {
+                on press { alert("退出当前账户？", actions: [.button(title: "取消", role: .cancel), .button(title: "退出", role: .destructive, run: () => action("logout"))]) }
+              }
             }
           }
         }
-        Text("外观") { color: .accent; font: .headline }
-        Segmented(["跟随系统", "浅色", "深色"]) {
-          selected: if player.themeMode == "DARK" { 2 } else if player.themeMode == "LIGHT" { 1 } else { 0 }
-          on change(i) { action("theme", ["SYSTEM", "LIGHT", "DARK"][i]) }
+        Row {
+          padding: [15,17]; gap: 9; align: .center; background: palette.surface; border: 1; borderColor: palette.rule; radius: 15
+          role: .button; label: "下载设置"; on press { go("downloadSettings") }; pressed { opacity: 0.7 }
+          Glyph("downloads",palette.violet,18.0)
+          Text("下载设置") { grow: 1; color: palette.ink; font: Font(size: 16).bold() }
+          Glyph("right",palette.secondary,14.0)
+        }
+        Card {
+          SectionName("外观","sun")
+          Segmented(["跟随系统", "浅色", "深色"]) {
+            selected: if player.themeMode == "DARK" { 2 } else if player.themeMode == "LIGHT" { 1 } else { 0 }
+            on change(i) { action("theme", ["SYSTEM", "LIGHT", "DARK"][i]) }
+          }
         }
         if !player.qualityStatus.isEmpty() {
-          Text("已有歌曲音质") { color: .accent; font: .headline }
-          if !player.qualitySummary.isEmpty() { Text(player.qualitySummary) { color: .secondaryLabel; font: .footnote } }
-          if player.qualityFailures {
-            Button(if errorsOpen { "收起失败详情" } else { "查看失败详情" }) { on press { errorsOpen = !errorsOpen } }
-            if errorsOpen { Text(player.qualityErrors) { font: .footnote; color: .secondaryLabel } }
-          }
-          if player.qualityStatus == "running" {
-            Button("暂停升级") { on press { action("quality", "pause") } }
-          } else {
-            Button(if player.qualityStatus == "permission" || player.qualityStatus == "paused" { "继续升级" } else { "升级到最高音质" }) {
-              on press { action("quality", "start") }
+          Card {
+            SectionName("已有歌曲音质","wave")
+            if !player.qualitySummary.isEmpty() { Text(player.qualitySummary) { color: palette.secondary; font: .footnote } }
+            if player.qualityFailures {
+              Pill(if errorsOpen { "收起失败详情" } else { "查看失败详情" },"",palette.ink,palette.soft) { on press { errorsOpen = !errorsOpen } }
+              if errorsOpen { Text(player.qualityErrors) { color: palette.secondary; font: .footnote } }
             }
-            if player.qualityFailures { Button("重试失败的歌曲") { on press { action("quality", "retry") } } }
+            if player.qualityStatus == "running" {
+              Pill("暂停升级","pause",palette.violet,palette.violetWash) { on press { action("quality","pause") } }
+            } else {
+              Pill(if player.qualityStatus == "permission" || player.qualityStatus == "paused" { "继续升级" } else { "升级到最高音质" },"downloads",palette.violet,palette.violetWash) { on press { action("quality","start") } }
+              if player.qualityFailures { Pill("重试失败的歌曲","refresh",palette.ink,palette.soft) { on press { action("quality","retry") } } }
+            }
           }
         }
-        Button("下载设置") { on press { go("downloadSettings") } }
-        Text("哔哩音乐 1.6.0") { color: .secondaryLabel; font: .footnote }
+        Text("哔哩音乐 1.6.0") { color: palette.secondary; font: .footnote; alignSelf: .center }
       } else {
-        Text("保存目录") { font: .headline }
-        Text(player.downloadDir) { color: .secondaryLabel }
-        Row {
-          align: .center
-          Text("仅 Wi-Fi 下载") { grow: 1 }
-          Toggle { on: player.wifiOnly; on change(v) { action("option", "wifi_only", if v { "1" } else { "0" }) } }
+        Card {
+          SectionName("保存目录","favorites")
+          Text(player.downloadDir) { color: palette.secondary; font: .subheadline }
         }
-        Row {
-          align: .center
-          Text("同时下载 {player.concurrent} 首") { grow: 1 }
-          Stepper { value: player.concurrent.float(); min: 1; max: 8; on change(v) { action("option", "max_concurrent_downloads", "{v.int()}") } }
-        }
-        Row {
-          align: .center
-          Text("限制请求频率") { grow: 1 }
-          Toggle { on: player.rateEnabled; on change(v) { action("option", "api_rate_limit_enabled", if v { "1" } else { "0" }) } }
-        }
-        if player.rateEnabled {
+        Card {
+          SectionName("下载","downloads")
           Row {
-            align: .center
-            Text("每分钟 {player.rateLimit} 次") { grow: 1 }
-            Stepper { value: player.rateLimit.float(); min: 10; max: 60; on change(v) { action("option", "api_rate_limit_per_minute", "{v.int()}") } }
+            align: .center; gap: 8
+            Text("仅 Wi-Fi 下载") { grow: 1; color: palette.ink }
+            Toggle { on: player.wifiOnly; label: "仅 Wi-Fi 下载"; on change(v) { action("option","wifi_only",if v { "1" } else { "0" }) } }
+          }
+          View { height: 1; background: palette.rule }
+          Row {
+            align: .center; gap: 8
+            Text("同时下载 {player.concurrent} 首") { grow: 1; color: palette.ink }
+            Stepper { value: player.concurrent.float(); min: 1; max: 8; on change(v) { action("option","max_concurrent_downloads","{v.int()}") } }
           }
         }
-        Button("清除播放和封面缓存（{player.cacheSize}）") {
-          on press { alert("清除播放和封面缓存？", actions: [.button(title: "取消", role: .cancel), .button(title: "清除", role: .destructive, run: () => action("clearCache"))]) }
+        Card {
+          SectionName("请求频率","settings")
+          Row {
+            align: .center; gap: 8
+            Text("限制请求频率") { grow: 1; color: palette.ink }
+            Toggle { on: player.rateEnabled; label: "限制请求频率"; on change(v) { action("option","api_rate_limit_enabled",if v { "1" } else { "0" }) } }
+          }
+          if player.rateEnabled {
+            Row {
+              align: .center; gap: 8
+              Text("每分钟 {player.rateLimit} 次") { grow: 1; color: palette.ink }
+              Stepper { value: player.rateLimit.float(); min: 10; max: 60; on change(v) { action("option","api_rate_limit_per_minute","{v.int()}") } }
+            }
+          }
+          Pill("清除冷却记录","",palette.ink,palette.soft) { on press { action("clearCooldown") } }
         }
-        Button("清除冷却记录") { on press { action("clearCooldown") } }
+        Card {
+          SectionName("缓存","library")
+          Pill("清除播放和封面缓存（{player.cacheSize}）","",palette.ink,palette.soft) {
+            on press { alert("清除播放和封面缓存？", actions: [.button(title: "取消", role: .cancel), .button(title: "清除", role: .destructive, run: () => action("clearCache"))]) }
+          }
+        }
       }
     }
   }
