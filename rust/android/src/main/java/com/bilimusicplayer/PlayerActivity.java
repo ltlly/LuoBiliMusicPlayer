@@ -5,8 +5,8 @@ import android.os.Bundle;
 import dev.asuka.AsukaActivity;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.media.MediaCodecList;
-import android.media.MediaCodecInfo;
+
+
 import android.net.Uri;
 import java.util.Collections;
 import android.provider.MediaStore;
@@ -26,19 +26,6 @@ public final class PlayerActivity extends AsukaActivity {
         requestingUpgrade = upgradeMode != null;
     }
     static native void mediaAction(int action, long value);
-    private boolean playbackStarted;
-    public void playbackChanged(String title, String artist, boolean playing, long position, long duration) {
-        if (!playing && !playbackStarted) return;
-        if (title.isEmpty()) {
-            stopService(new Intent(this, PlaybackService.class));
-            playbackStarted = false;
-            return;
-        }
-        Intent update = new Intent(this, PlaybackService.class).putExtra("title", title).putExtra("artist", artist)
-            .putExtra("playing", playing).putExtra("position", position).putExtra("duration", duration);
-        if (!playbackStarted) startForegroundService(update); else startService(update);
-        playbackStarted = true;
-    }
     @Override protected void onPause() {
         mediaAction(7, 0);
         super.onPause();
@@ -64,7 +51,6 @@ public final class PlayerActivity extends AsukaActivity {
     }
     @Override protected void onDestroy() {
         quality().prefs.unregisterOnSharedPreferenceChangeListener(progressListener);
-        stopService(new Intent(this, PlaybackService.class));
         super.onDestroy();
         unbindActivity();
     }
@@ -158,14 +144,4 @@ public final class PlayerActivity extends AsukaActivity {
         }
         if (requestCode == RESTORE_AUDIO) mediaAction(8, resultCode == RESULT_OK ? 1 : 0);
     }
-    public boolean supportsDolby() {
-        for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
-            if (info.isEncoder()) continue;
-            for (String type : info.getSupportedTypes()) {
-                if ("audio/eac3".equalsIgnoreCase(type) || "audio/eac3-joc".equalsIgnoreCase(type)) return true;
-            }
-        }
-        return false;
-    }
-
 }

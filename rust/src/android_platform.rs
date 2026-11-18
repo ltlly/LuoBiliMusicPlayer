@@ -63,8 +63,14 @@ pub fn files_dir() -> Result<PathBuf> {
 fn activity<T>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Result<T> {
     with_java(context()?.1, f)
 }
-fn storage<T>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Result<T> {
-    with_java(DOWNLOADS.get().context("下载服务尚未初始化")?.clone(), f)
+fn platform<T>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Result<T> {
+    with_java(
+        PLATFORM
+            .get()
+            .context("Android 系统服务尚未初始化")?
+            .clone(),
+        f,
+    )
 }
 fn with_java<T>(
     object: GlobalRef,
@@ -88,11 +94,11 @@ fn with_java<T>(
 pub fn supports_dolby() -> bool {
     static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SUPPORTED.get_or_init(|| {
-        activity(|env, ctx| env.call_method(ctx, "supportsDolby", "()Z", &[])?.z()).unwrap_or(false)
+        platform(|env, ctx| env.call_method(ctx, "supportsDolby", "()Z", &[])?.z()).unwrap_or(false)
     })
 }
 pub fn can_download(wifi_only: bool) -> Result<bool> {
-    storage(|env, ctx| {
+    platform(|env, ctx| {
         env.call_method(
             ctx,
             "canDownload",
@@ -103,7 +109,7 @@ pub fn can_download(wifi_only: bool) -> Result<bool> {
     })
 }
 pub fn music_directory() -> Result<PathBuf> {
-    storage(|env, ctx| {
+    platform(|env, ctx| {
         let path = JString::from(
             env.call_method(ctx, "musicDirectory", "()Ljava/lang/String;", &[])?
                 .l()?,
@@ -112,7 +118,7 @@ pub fn music_directory() -> Result<PathBuf> {
     })
 }
 pub fn publish(source: &Path, name: &str) -> Result<String> {
-    storage(|env, ctx| {
+    platform(|env, ctx| {
         let path = env.new_string(source.to_string_lossy())?;
         let name = env.new_string(name)?;
         let result = JString::from(
@@ -135,7 +141,7 @@ pub fn playback_changed(
     position: i64,
     duration: i64,
 ) -> Result<()> {
-    activity(|env, ctx| {
+    platform(|env, ctx| {
         let title = env.new_string(title)?;
         let artist = env.new_string(artist)?;
         env.call_method(
@@ -330,20 +336,17 @@ pub fn clear_removal() -> Result<()> {
     activity(|env, ctx| env.call_method(ctx, "clearRemoval", "()V", &[])?.v())
 }
 
-static DOWNLOADS: std::sync::OnceLock<GlobalRef> = std::sync::OnceLock::new();
+static PLATFORM: std::sync::OnceLock<GlobalRef> = std::sync::OnceLock::new();
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_bilimusicplayer_DownloadPlatform_bind(
-    env: JNIEnv,
-    object: JObject,
-) {
+pub extern "system" fn Java_com_bilimusicplayer_PlayerPlatform_bind(env: JNIEnv, object: JObject) {
     if let Ok(reference) = env.new_global_ref(object) {
-        let _ = DOWNLOADS.set(reference);
+        let _ = PLATFORM.set(reference);
     }
 }
 
 pub fn schedule_downloads(wifi_only: bool, append: bool) -> Result<()> {
-    storage(|env, obj| {
+    platform(|env, obj| {
         env.call_method(
             obj,
             "schedule",
@@ -355,7 +358,7 @@ pub fn schedule_downloads(wifi_only: bool, append: bool) -> Result<()> {
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_com_bilimusicplayer_DownloadPlatform_pump(
+pub extern "system" fn Java_com_bilimusicplayer_PlayerPlatform_pump(
     mut env: JNIEnv,
     _: jni::objects::JClass,
 ) -> i64 {
@@ -373,4 +376,11 @@ pub extern "system" fn Java_com_bilimusicplayer_DownloadPlatform_pump(
             -1
         }
     }
+}
+
+pub fn player_context() -> Result<(&'static JavaVM, GlobalRef)> {
+    Ok((
+        VM.get().context("Android 尚未初始化")?,
+        PLATFORM.get().context("播放服务尚未初始化")?.clone(),
+    ))
 }

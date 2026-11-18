@@ -18,11 +18,11 @@ pub struct Output {
 }
 impl Output {
     pub fn new() -> Result<Self> {
-        let (vm, activity) = crate::android_platform::context()?;
+        let (vm, platform) = crate::android_platform::player_context()?;
         let mut env = vm.attach_current_thread()?;
         let application = env
             .call_method(
-                &activity,
+                &platform,
                 "getApplicationContext",
                 "()Landroid/content/Context;",
                 &[],

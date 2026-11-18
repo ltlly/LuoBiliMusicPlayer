@@ -33,7 +33,7 @@ public final class QualityTasks {
         journal = new LegacyAudioReplacement(app);
         work = WorkManager.getInstance(app);
         bind(app.getFilesDir().getAbsolutePath());
-        new DownloadPlatform(app);
+        new PlayerPlatform(app);
     }
     private native void bind(String dir);
     private native String request(String request) throws IOException;

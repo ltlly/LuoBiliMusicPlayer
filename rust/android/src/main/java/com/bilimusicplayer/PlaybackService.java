@@ -88,7 +88,13 @@ public final class PlaybackService extends Service {
         return START_NOT_STICKY;
     }
 
+    @Override public void onTaskRemoved(Intent rootIntent) {
+        if (!playing) stopSelf();
+        super.onTaskRemoved(rootIntent);
+    }
+
     @Override public void onDestroy() {
+        PlayerPlatform.serviceStopped();
         audio.abandonAudioFocus(focus);
         session.release();
         stopForeground(true);

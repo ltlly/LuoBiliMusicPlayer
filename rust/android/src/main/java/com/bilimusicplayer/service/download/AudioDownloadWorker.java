@@ -3,7 +3,7 @@ package com.bilimusicplayer.service.download;
 import android.content.Context;
 import androidx.work.Worker;
 import androidx.work.WorkerParameters;
-import com.bilimusicplayer.DownloadPlatform;
+import com.bilimusicplayer.PlayerPlatform;
 import com.bilimusicplayer.QualityTasks;
 import java.io.IOException;
 
@@ -14,7 +14,7 @@ public final class AudioDownloadWorker extends Worker {
         QualityTasks.get(getApplicationContext());
         try {
             while (!isStopped()) {
-                long delay = DownloadPlatform.pump();
+                long delay = PlayerPlatform.pump();
                 if (delay == 0) return Result.success();
                 Thread.sleep(delay);
             }

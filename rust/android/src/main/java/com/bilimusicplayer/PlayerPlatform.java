@@ -3,6 +3,8 @@ package com.bilimusicplayer;
 import android.content.*;
 import android.database.Cursor;
 import android.net.ConnectivityManager;
+import android.media.MediaCodecList;
+import android.media.MediaCodecInfo;
 import android.net.Uri;
 import android.os.Environment;
 import android.provider.MediaStore;
@@ -11,10 +13,10 @@ import com.bilimusicplayer.service.download.AudioDownloadWorker;
 import java.io.*;
 import java.util.concurrent.TimeUnit;
 
-/** A background download can start in a fresh process before any Activity exists. */
-public final class DownloadPlatform {
+/** Application-lifetime services for media playback and background downloads. */
+public final class PlayerPlatform {
     private final Context context;
-    DownloadPlatform(Context app) { context = app; bind(); }
+    PlayerPlatform(Context app) { context = app; bind(); }
     private native void bind();
     public static native long pump() throws IOException;
     public void schedule(boolean wifiOnly, boolean append) throws Exception {
@@ -25,6 +27,31 @@ public final class DownloadPlatform {
                 .addTag("audio_download").build();
         WorkManager.getInstance(context).enqueueUniqueWork("rust_audio_downloads",
                 append ? ExistingWorkPolicy.APPEND_OR_REPLACE : ExistingWorkPolicy.KEEP, request).getResult().get();
+    }
+
+    private static volatile boolean playbackStarted;
+    static void serviceStopped() { playbackStarted = false; }
+    public Context getApplicationContext() { return context; }
+    public void playbackChanged(String title, String artist, boolean playing, long position, long duration) {
+        if (!playing && !playbackStarted) return;
+        if (title.isEmpty()) {
+            context.stopService(new Intent(context, PlaybackService.class));
+            playbackStarted = false;
+            return;
+        }
+        Intent update = new Intent(context, PlaybackService.class).putExtra("title", title).putExtra("artist", artist)
+            .putExtra("playing", playing).putExtra("position", position).putExtra("duration", duration);
+        if (!playbackStarted) context.startForegroundService(update); else context.startService(update);
+        playbackStarted = true;
+    }
+    public boolean supportsDolby() {
+        for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+            if (info.isEncoder()) continue;
+            for (String type : info.getSupportedTypes()) {
+                if ("audio/eac3".equalsIgnoreCase(type) || "audio/eac3-joc".equalsIgnoreCase(type)) return true;
+            }
+        }
+        return false;
     }
 
     public String musicDirectory() {
