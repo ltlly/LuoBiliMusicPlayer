@@ -8,6 +8,7 @@ mod cover;
 pub mod database;
 mod download;
 mod folder_queue;
+mod library_remove;
 mod library_scan;
 pub mod playback;
 mod properties;

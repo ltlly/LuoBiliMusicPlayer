@@ -215,6 +215,7 @@ fn command(name: &str, arg: &str, value: &str) -> Option<Command> {
         "choose" => Command::Choose(arg.into(), value.into()),
         "search" => Command::Search(arg.into()),
         "download" => Command::Download(serde_json::from_str(arg).ok()?),
+        "removeItems" => Command::RemoveItems(serde_json::from_str(arg).ok()?, value == "unsynced"),
         "downloadsTab" => Command::DownloadsTab(arg.parse().ok()?),
         "downloadAction" => Command::DownloadAction(arg.into(), value.into()),
         "option" => Command::SetDownloadOption(arg.into(), value.parse().ok()?),

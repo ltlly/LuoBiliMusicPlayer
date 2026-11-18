@@ -24,6 +24,7 @@ pub(crate) enum Command {
     #[cfg(target_os = "android")]
     QualityControl(String),
     Download(Vec<String>),
+    RemoveItems(Vec<String>, bool),
     SetDownloadOption(String, i32),
     ClearCache,
     #[cfg(target_os = "android")]
@@ -54,6 +55,10 @@ pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_mediaAction(
     action: i32,
     value: i64,
 ) {
+    if action == 11 {
+        let _ = crate::bridge::start_worker().send(Command::AndroidAction(11, value));
+        return;
+    }
     if action == 12 {
         let tx = crate::bridge::start_worker();
         let _ = tx.send(Command::Open);
@@ -311,6 +316,13 @@ impl Application {
                     }
                 }),
                 Command::ClearCache => self.download_settings(true),
+                Command::RemoveItems(ids, unsynced) if self.page == Page::Library => {
+                    self.remove_songs(ids, unsynced)
+                }
+                Command::RemoveItems(ids, false) if self.page == Page::Downloads => {
+                    self.remove_records(&ids)
+                }
+                Command::RemoveItems(_, _) => Ok(()),
                 Command::Download(ids) if self.page == Page::Content => {
                     let selected: HashSet<_> = ids.into_iter().collect();
                     let media = self
@@ -360,6 +372,7 @@ impl Application {
                         });
                         Ok(())
                     }),
+                    11 => self.finish_removal(value != 0),
                     10 if self.page == Page::Settings => self.quality_state(),
                     7 => {
                         self.show_player(true);
@@ -487,6 +500,78 @@ impl Application {
                 })
                 .collect::<Vec<_>>();
             ui.entries = rows;
+        });
+        Ok(())
+    }
+    fn remove_records(&mut self, ids: &[String]) -> Result<()> {
+        let tx = self.library.0.transaction()?;
+        let mut removed = 0;
+        for id in ids {
+            removed += tx.execute(
+                "DELETE FROM downloads WHERE songId=?1 AND status!='CONVERTING'",
+                [id],
+            )?;
+        }
+        tx.commit()?;
+        self.download_entries()?;
+        self.show(|ui| ui.message = format!("已移除 {removed} 条下载记录"));
+        Ok(())
+    }
+    fn remove_songs(&mut self, ids: Vec<String>, unsynced: bool) -> Result<()> {
+        let items =
+            crate::library_remove::select(&self.library, &ids.into_iter().collect(), unsynced)?;
+        #[cfg(target_os = "android")]
+        if let Some(j) = crate::android_platform::pending_replacement()? {
+            anyhow::ensure!(
+                !items
+                    .iter()
+                    .any(|i| i.id == j.id || i.path.as_ref() == Some(&j.path)),
+                "请先恢复音频副本"
+            );
+        }
+        let removed = crate::library_remove::remove(&mut self.library, &items, false)?;
+        self.search(&self.keyword.clone())?;
+        if !removed.pending.is_empty() {
+            #[cfg(target_os = "android")]
+            {
+                return crate::android_platform::request_media_removal(&removed.pending);
+            }
+            #[cfg(not(target_os = "android"))]
+            {
+                self.show(|ui| {
+                    ui.message = format!(
+                        "已删除 {} 首，另有 {} 首文件无法删除，已保留记录",
+                        removed.rows,
+                        removed.pending.len()
+                    )
+                });
+            }
+        } else {
+            self.show(|ui| ui.message = format!("已删除 {} 首本地歌曲", removed.rows));
+        }
+        Ok(())
+    }
+    #[cfg(target_os = "android")]
+    fn finish_removal(&mut self, accepted: bool) -> Result<()> {
+        let pending = crate::android_platform::removal_plan()?;
+        if pending.is_empty() {
+            return Ok(());
+        }
+        let result = crate::library_remove::remove(&mut self.library, &pending, true)?;
+        crate::android_platform::clear_removal()?;
+        if self.page == Page::Library {
+            self.search(&self.keyword.clone())?;
+        }
+        self.show(|ui| {
+            ui.message = if accepted && result.pending.is_empty() {
+                format!("已删除 {} 首本地歌曲", result.rows)
+            } else {
+                format!(
+                    "已删除 {} 首，保留 {} 首",
+                    result.rows,
+                    result.pending.len()
+                )
+            }
         });
         Ok(())
     }

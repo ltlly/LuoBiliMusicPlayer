@@ -28,6 +28,8 @@ public final class PlayerActivity extends AsukaActivity {
     @Override protected void onCreate(Bundle state) {
         bindActivity();
         QualityTasks.get(this);
+        removal = new LibraryRemoval(this);
+        freshLaunch = state == null;
         super.onCreate(state);
         upgradeMode = state == null ? null : state.getString("upgradeMode");
         requestingUpgrade = upgradeMode != null;
@@ -55,6 +57,8 @@ public final class PlayerActivity extends AsukaActivity {
         quality().prefs.registerOnSharedPreferenceChangeListener(progressListener);
         mediaAction(7, 1);
         openFromNotification(getIntent());
+        removal.recover(freshLaunch);
+        freshLaunch = false;
     }
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
@@ -88,6 +92,12 @@ public final class PlayerActivity extends AsukaActivity {
         if (request==2 && results.length>0 && results[0]==PackageManager.PERMISSION_GRANTED) mediaAction(6,0);
     }
 
+    private LibraryRemoval removal;
+    private boolean freshLaunch;
+    public void requestMediaRemoval(String plan) throws Exception { removal.begin(plan); }
+    public boolean mediaMissing(String uri) { return removal.missing(uri); }
+    public String removalPlan() { return removal.plan(); }
+    public void clearRemoval() { removal.clear(); }
     private static final int RESTORE_AUDIO = 41;
     private static final int UPGRADE_ACCESS = 42;
     private QualityTasks quality() { return QualityTasks.get(this); }
@@ -151,6 +161,7 @@ public final class PlayerActivity extends AsukaActivity {
     }
     @Override public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == LibraryRemoval.REQUEST) removal.result(resultCode == RESULT_OK);
         if (requestCode == UPGRADE_ACCESS) {
             if (resultCode == RESULT_OK) prepareUpgrade(); else finishGrant(false);
         }

@@ -84,6 +84,16 @@ component Music(live: bool = true) {
   fn select(key: string) {
     if selected.contains(key) { selected.removeWhere(k => k == key) } else { selected.push(key) }
   }
+  fn confirmRemoval(unsynced: bool = false) {
+    let page = player.page
+    let ids = selected
+    let title = if unsynced { "删除未匹配的本地歌曲及其文件？" } else if page == "downloads" { "移除 {ids.count()} 条下载记录？" } else { "删除选中的 {ids.count()} 首歌曲及其文件？" }
+    alert(title, actions: [.button(title: "取消", role: .cancel), .button(title: "删除", role: .destructive, run: () => {
+      if let encoded = try? json.encode(ids) { action("removeItems", encoded, if unsynced { "unsynced" } else { "" }) }
+      selecting = false
+      selected = []
+    })])
+  }
   fn sendDownload(ids: [string]) {
     if let encoded = try? json.encode(ids) { action("download", encoded) }
     selecting = false
@@ -166,20 +176,25 @@ component Music(live: bool = true) {
             Segmented(["进行中", "已完成", "失败"]) {
               padding: [4, 20]
               selected: tab
-              on change(i) { tab = i; action("downloadsTab", "{i}") }
+              on change(i) { tab = i; selected = []; selecting = false; action("downloadsTab", "{i}") }
             }
           }
-          if player.page == "content" && !player.entries.isEmpty() {
+          if (player.page == "content" || player.page == "library" || player.page == "downloads") && !player.entries.isEmpty() {
             Row {
               gap: 6
               padding: [4, 16]
               if selecting {
                 Button("全选") { on press { selected = player.entries.map(e => e.key) } }
-                Button("下载 ({selected.count()})") { disabled: selected.isEmpty(); on press { sendDownload(selected) } }
+                if player.page == "content" {
+                  Button("下载 ({selected.count()})") { disabled: selected.isEmpty(); on press { sendDownload(selected) } }
+                } else {
+                  Button("删除 ({selected.count()})") { disabled: selected.isEmpty(); on press { confirmRemoval() } }
+                }
                 Button("取消") { on press { selecting = false; selected = [] } }
               } else {
-                Button("选择歌曲") { on press { selecting = true } }
-                Button("下载全部") { on press { sendDownload([]) } }
+                Button(if player.page == "downloads" { "选择记录" } else { "选择歌曲" }) { on press { selecting = true } }
+                if player.page == "content" { Button("下载全部") { on press { sendDownload([]) } } }
+                if player.page == "library" { Button("清理未匹配歌曲") { on press { confirmRemoval(true) } } }
               }
             }
           }

@@ -279,3 +279,42 @@ pub fn quality_control(mode: &str) -> Result<()> {
         .v()
     })
 }
+
+pub fn request_media_removal(items: &[crate::library_remove::Item]) -> Result<()> {
+    let json = serde_json::to_string(items)?;
+    activity(|env, ctx| {
+        let plan = env.new_string(json)?;
+        env.call_method(
+            ctx,
+            "requestMediaRemoval",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&plan)],
+        )?
+        .v()
+    })
+}
+pub fn media_missing(uri: &str) -> Result<bool> {
+    activity(|env, ctx| {
+        let uri = env.new_string(uri)?;
+        env.call_method(
+            ctx,
+            "mediaMissing",
+            "(Ljava/lang/String;)Z",
+            &[JValue::Object(&uri)],
+        )?
+        .z()
+    })
+}
+pub fn removal_plan() -> Result<Vec<crate::library_remove::Item>> {
+    let raw: String = activity(|env, ctx| {
+        let plan = JString::from(
+            env.call_method(ctx, "removalPlan", "()Ljava/lang/String;", &[])?
+                .l()?,
+        );
+        Ok(env.get_string(&plan)?.into())
+    })?;
+    Ok(serde_json::from_str(&raw)?)
+}
+pub fn clear_removal() -> Result<()> {
+    activity(|env, ctx| env.call_method(ctx, "clearRemoval", "()V", &[])?.v())
+}
