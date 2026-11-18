@@ -146,3 +146,70 @@ pub fn request_library_access() -> Result<bool> {
             .z()
     })
 }
+
+#[derive(serde::Deserialize)]
+pub struct Replacement {
+    pub id: String,
+    pub path: String,
+    pub uri: String,
+    pub size: i64,
+}
+
+pub fn pending_replacement() -> Result<Option<Replacement>> {
+    let raw: String = activity(|env, obj| {
+        let text = JString::from(
+            env.call_method(obj, "pendingReplacement", "()Ljava/lang/String;", &[])?
+                .l()?,
+        );
+        Ok(env.get_string(&text)?.into())
+    })?;
+    if raw.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::from_str(&raw)?))
+    }
+}
+
+impl Replacement {
+    fn call(&self, method: &str, a: &str, b: &str) -> Result<()> {
+        activity(|env, obj| {
+            let a = env.new_string(a)?;
+            let b = env.new_string(b)?;
+            env.call_method(
+                obj,
+                method,
+                "(Ljava/lang/String;Ljava/lang/String;)V",
+                &[JValue::Object(&a), JValue::Object(&b)],
+            )?
+            .v()
+        })
+    }
+    pub fn request_access(&self) -> Result<()> {
+        self.call("requestReplacementAccess", &self.path, &self.uri)
+    }
+    pub fn recover(self, library: &mut crate::database::Library) -> Result<()> {
+        anyhow::ensure!(
+            !self.id.is_empty() && !self.uri.is_empty() && !self.path.is_empty() && self.size > 0,
+            "旧版音频恢复记录不完整"
+        );
+        let tx = library
+            .0
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current: Option<String> = tx.query_row(
+            "SELECT localPath FROM songs WHERE id=?1",
+            [&self.id],
+            |row| row.get(0),
+        )?;
+        anyhow::ensure!(
+            current.as_deref() == Some(&self.path),
+            "歌曲路径已变更，请保留旧版恢复副本"
+        );
+        self.call("restoreReplacement", &self.id, &self.path)?;
+        tx.execute(
+            "UPDATE songs SET fileSize=?2,isDownloaded=1 WHERE id=?1",
+            rusqlite::params![self.id, self.size],
+        )?;
+        tx.commit()?;
+        self.call("finishReplacement", &self.id, &self.path)
+    }
+}

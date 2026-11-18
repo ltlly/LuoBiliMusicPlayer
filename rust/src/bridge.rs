@@ -82,6 +82,7 @@ pub(crate) struct Snapshot {
     pub account_detail: String,
     pub download_dir: String,
     pub cache_size: String,
+    pub pending_replacement: bool,
     pub wifi_only: bool,
     pub rate_enabled: bool,
     pub rate_limit: i32,
@@ -211,6 +212,8 @@ fn command(name: &str, arg: &str, value: &str) -> Option<Command> {
         "theme" => Command::Theme(arg.into()),
         "more" => Command::More,
         "retry" => Command::Retry,
+        #[cfg(target_os = "android")]
+        "recoverAudio" => Command::RecoverAudio,
         "account" => Command::Account,
         "logout" => Command::Logout,
         "clearCache" => Command::ClearCache,

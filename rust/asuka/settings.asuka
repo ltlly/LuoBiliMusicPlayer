@@ -5,6 +5,10 @@ component Preferences {
       gap: 12
       padding: [8, 20, 20, 20]
       if player.page == "settings" {
+        if player.pendingReplacement {
+          Text("旧版音质升级曾中断，原音频有一份恢复副本。") { font: .headline }
+          Button("使用副本恢复歌曲") { on press { action("recoverAudio") } }
+        }
         Text("账户") { color: .accent; font: .headline }
         Text(player.account)
         if !player.accountDetail.isEmpty() { Text(player.accountDetail) { color: .secondaryLabel } }

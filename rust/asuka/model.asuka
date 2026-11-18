@@ -39,6 +39,7 @@ struct Player {
   accountDetail: string = ""
   downloadDir: string = ""
   cacheSize: string = ""
+  pendingReplacement: bool = false
   wifiOnly: bool = false
   rateEnabled: bool = false
   rateLimit: int = 20

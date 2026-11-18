@@ -2,6 +2,8 @@
 
 Asuka 0.2.9 负责原生界面。宽窗口显示侧栏，手机使用底部导航。Rust 工作线程负责 B 站请求、SQLite、旧设置、播放队列和下载。Asuka 轮询的是进程内的状态版本，检查界面变化不会触发 HTTP 请求。
 
+当前维护 Android 和 Windows x64。macOS 暂缓打包和验收。
+
 Android 最低为 13（API 33），目标为 Android 16（API 36）。应用沿用 `com.bilimusicplayer`、原启动入口、签名和数据路径。桌面沿用 `BiliMusicPlayer` 用户数据目录。模拟运行时可以用 `BILIMUSIC_DATA_DIR` 指向一份独立的桌面数据副本。
 
 ## 本机构建
@@ -40,7 +42,7 @@ python desktop/package_windows.py --app target/asuka/windows-amd64/BiliMusicPlay
   --output target/asuka/windows-amd64/BiliMusicPlayer-1.6.0.zip
 ```
 
-### macOS
+### macOS（暂缓）
 
 Asuka 官方打包使用本机 Xcode 命令行工具。分别构建 Apple Silicon 和 Intel 时，将下面的 `macos-arm64`、`arm64`、`darwin-arm64` 和运行库换成对应架构。Intel 的两个架构参数为 `macos-x64` 和 `amd64`。
 

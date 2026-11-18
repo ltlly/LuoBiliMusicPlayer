@@ -13,6 +13,7 @@ import android.media.MediaCodecList;
 import android.media.MediaCodecInfo;
 import android.net.ConnectivityManager;
 import android.net.Uri;
+import java.util.Collections;
 import android.os.Environment;
 import android.provider.MediaStore;
 import java.io.File;
@@ -64,6 +65,38 @@ public final class PlayerActivity extends AsukaActivity {
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
         if (request==2 && results.length>0 && results[0]==PackageManager.PERMISSION_GRANTED) mediaAction(6,0);
+    }
+
+    private static final int RESTORE_AUDIO = 41;
+    public String pendingReplacement() throws org.json.JSONException {
+        return new LegacyAudioReplacement(this).pending();
+    }
+    public void requestReplacementAccess(String path, String address) {
+        Uri uri = Uri.parse(address);
+        if (new File(path).canWrite()
+                || checkUriPermission(uri, android.os.Process.myPid(), android.os.Process.myUid(),
+                        Intent.FLAG_GRANT_WRITE_URI_PERMISSION) == PackageManager.PERMISSION_GRANTED) {
+            mediaAction(8, 1);
+            return;
+        }
+        runOnUiThread(() -> {
+            try {
+                startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),
+                        Collections.singletonList(uri)).getIntentSender(), RESTORE_AUDIO, null, 0, 0, 0);
+            } catch (Exception ex) {
+                mediaAction(8, 0);
+            }
+        });
+    }
+    @Override public void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == RESTORE_AUDIO) mediaAction(8, resultCode == RESULT_OK ? 1 : 0);
+    }
+    public void restoreReplacement(String id, String path) throws IOException {
+        new LegacyAudioReplacement(this).restore(id, path);
+    }
+    public void finishReplacement(String id, String path) throws IOException {
+        new LegacyAudioReplacement(this).finish(id, path);
     }
 
     public String musicDirectory() {

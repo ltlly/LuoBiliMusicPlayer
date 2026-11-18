@@ -18,6 +18,8 @@ pub(crate) enum Command {
     Download(Vec<String>),
     SetDownloadOption(String, i32),
     ClearCache,
+    #[cfg(target_os = "android")]
+    RecoverAudio,
     ClearCooldown,
     DownloadsTab(i32),
     DownloadAction(String, String),
@@ -289,12 +291,40 @@ impl Application {
                         .queue
                         .seek(value, &mut self.client.settings)
                         .map(|()| self.show_player(true)),
+                    8 if value == 0 => Err(anyhow::anyhow!("未获得音频写入授权，恢复副本已保留")),
+                    8 => crate::android_platform::pending_replacement().and_then(|journal| {
+                        if let Some(journal) = journal {
+                            let resume = self.queue.suspend_file(&journal.id, &journal.path);
+                            let restored = journal.recover(&mut self.library);
+                            self.show_player(true);
+                            restored?;
+                            if resume {
+                                self.queue.play(
+                                    self.queue.index,
+                                    self.queue.position,
+                                    &mut self.client,
+                                    &self.library,
+                                )?;
+                                self.show_player(true);
+                            }
+                        }
+                        self.show(|ui| {
+                            ui.pending_replacement = false;
+                            ui.message = "已恢复旧版音频".into();
+                        });
+                        Ok(())
+                    }),
                     7 => {
                         self.show_player(true);
                         Ok(())
                     }
                     6 if self.page == Page::Library => self.navigate(Page::Library, false),
                     _ => Ok(()),
+                },
+                #[cfg(target_os = "android")]
+                Command::RecoverAudio => match crate::android_platform::pending_replacement() {
+                    Ok(Some(journal)) => journal.request_access(),
+                    result => result.map(|_| ()),
                 },
                 Command::Account => {
                     let text = self
@@ -715,6 +745,11 @@ impl Application {
                 self.scan(force)?;
             }
             Page::Settings => {
+                #[cfg(target_os = "android")]
+                {
+                    let pending = crate::android_platform::pending_replacement()?.is_some();
+                    self.show(|ui| ui.pending_replacement = pending);
+                }
                 let user = match self.client.settings.get("username") {
                     Some(name) => format!(
                         "已登录: {name} (UID: {})",

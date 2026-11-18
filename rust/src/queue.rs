@@ -155,6 +155,24 @@ impl Queue {
         self.playing = true;
         self.save(&mut client.settings)
     }
+    #[cfg(target_os = "android")]
+    pub fn suspend_file(&mut self, id: &str, path: &str) -> bool {
+        let Some(track) = self.tracks.get(self.index) else {
+            return false;
+        };
+        if track.id != id && track.uri.strip_prefix("file://").unwrap_or(&track.uri) != path {
+            return false;
+        }
+        let playing = self.playing;
+        if let Some(mut output) = self.output.take()
+            && let Ok(progress) = output.progress()
+        {
+            self.position = progress.position_ms;
+        }
+        self.loaded = false;
+        self.playing = false;
+        playing
+    }
     pub fn toggle(&mut self, client: &mut Client, lib: &Library) -> Result<()> {
         if !self.loaded {
             return self.play(self.index, self.position, client, lib);
