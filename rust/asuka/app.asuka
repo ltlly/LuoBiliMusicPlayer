@@ -2,7 +2,11 @@ import std/json
 
 let tabs = ["favorites", "library", "downloads", "settings"]
 
+state appForeground = true
+
 app {
+  on foreground { appForeground = true }
+  on background { appForeground = false }
   effect { setColorScheme(if player.themeMode == "DARK" { .dark } else if player.themeMode == "LIGHT" { .light } else { .system }) }
   Window {
     title: "哔哩音乐"
@@ -19,6 +23,7 @@ component Music(live: bool = true) {
   let inset = contentInset(environment().width)
   let wide = environment().width >= 720
   state panel = ""
+  state queueFromPlayer = false
   state query = ""
   state selected: [string] = []
   state selecting = false
@@ -28,6 +33,8 @@ component Music(live: bool = true) {
     if !live { return }
     lbm_start()
     while true {
+      let seconds = lbm_position_seconds().float()
+      if playhead != seconds { playhead = seconds }
       let raw = lbm_snapshot(player.revision)
       if !raw.isEmpty() {
         if let next = try? json.decode<Player>(raw) {
@@ -50,13 +57,20 @@ component Music(live: bool = true) {
     }
   }
   onBack {
-    if !panel.isEmpty() { panel = ""; return true }
+    if !panel.isEmpty() { dismissPanel(); return true }
     if selecting { selecting = false; selected = []; return true }
     if !query.isEmpty() { query = ""; action("search", ""); return true }
     if player.page == "content" { go("favorites"); return true }
     if player.page == "downloadSettings" { go("settings"); return true }
     return false
   }
+  fn showPanel(next: string) {
+    if panel == next { return }
+    queueFromPlayer = next == "queue" && panel == "player"
+    if environment().reduceMotion { panel = next }
+    else { animate(Animation(duration: 230ms, curve: .easeOut), () => { panel = next }) }
+  }
+  fn dismissPanel() { showPanel(if queueFromPlayer { "player" } else { "" }) }
   fn openTab(page: string) {
     panel = ""
     if page != player.page { go(page) }
@@ -90,7 +104,7 @@ component Music(live: bool = true) {
           View { padding: [0,6]; Brand() }
           Navigation(true, panel) { on choose(p) { openTab(p) } }
           View { grow: 1 }
-          Pill("播放队列", "queue", palette.accent, palette.accentWash) { on press { panel = "queue" } }
+          Pill("播放队列", "queue", palette.accent, palette.accentWash) { on press { showPanel("queue") } }
         }
         View { width: 1; background: palette.rule }
       }
@@ -98,14 +112,14 @@ component Music(live: bool = true) {
         grow: 1; shrink: 1
         if panel == "player" || panel == "queue" {
           NowPlaying(panel) {
-            on dismiss { panel = "" }
-            on queue { panel = if panel == "queue" { "player" } else { "queue" } }
+            on dismiss { dismissPanel() }
+            on queue { showPanel(if panel == "queue" { "player" } else { "queue" }) }
           }
         } else {
           if player.page == "favorites" {
-            Collection { on open { panel = "player" }; on queue { panel = "queue" } }
+            Collection { on open { showPanel("player") }; on queue { showPanel("queue") } }
           } else {
-            if !wide { Masthead { on queue { panel = "queue" } } }
+            if !wide { Masthead { on queue { showPanel("queue") } } }
             PageTitle(pageName(player.page), if player.page == "library" { "{player.entries.count()} 首" } else { "" },
               player.page == "library" || player.page == "content" || player.page == "downloads",
               player.page == "content" || player.page == "downloadSettings") {
@@ -178,7 +192,7 @@ component Music(live: bool = true) {
               }
             }
             if !player.trackTitle.isEmpty() {
-              MiniPlayer { on open { panel = "player" } }
+              MiniPlayer { on open { showPanel("player") } }
             }
           }
           if !wide {

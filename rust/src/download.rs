@@ -411,8 +411,8 @@ pub fn rows(
 ) -> Result<Vec<(String, String, String, String)>> {
     let statuses = match tab {
         1 => "'COMPLETED'",
-        2 => "'FAILED','CANCELLED','PAUSED'",
-        _ => "'DOWNLOADING','CONVERTING','QUEUED'",
+        2 => "'FAILED','CANCELLED'",
+        _ => "'DOWNLOADING','CONVERTING','QUEUED','PAUSED'",
     };
     let mut query=library.0.prepare(&format!("SELECT songId,title,artist,status,progress,errorMessage FROM downloads WHERE status IN ({statuses}) ORDER BY startedAt DESC"))?;
     let mut items = Vec::new();

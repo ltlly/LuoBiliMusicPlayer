@@ -8,9 +8,9 @@ use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use url::form_urlencoded;
 
@@ -40,10 +40,21 @@ struct Cookie {
 }
 type Jar = BTreeMap<String, Vec<Cookie>>;
 
+struct FolderPage {
+    folder: i64,
+    page: usize,
+    keyword: String,
+    fetched: Instant,
+    media: Vec<Media>,
+    total: usize,
+}
+
 pub struct Client {
     agent: ureq::Agent,
     api: String,
     passport: String,
+    web: String,
+    pages: VecDeque<FolderPage>,
     jar: Jar,
     wbi: Option<String>,
     pub settings: Settings,
@@ -71,6 +82,8 @@ impl Client {
             agent,
             settings,
             jar,
+            web: "https://www.bilibili.com".into(),
+            pages: VecDeque::new(),
             wbi: None,
             api: api.into(),
             passport: passport.into(),
@@ -117,11 +130,11 @@ impl Client {
             .unwrap_or(default)
     }
 
-    fn get(&mut self, path: &str, params: &Params) -> Result<(u16, Value)> {
+    fn admit(&mut self) -> Result<()> {
         let now = now_ms();
         ensure!(
             self.number("gate_cooldown", 0) <= now,
-            "B站暂时限制请求，冷却后自动重试"
+            "B站暂时限制请求，请稍后重试"
         );
         let gap = if self.settings.get("api_rate_limit_enabled") == Some("true") {
             60_000 / self.number("api_rate_limit_per_minute", 20).clamp(10, 60)
@@ -137,6 +150,46 @@ impl Client {
         self.settings.update(|v| {
             v.insert("gate_last".into(), now_ms().to_string());
         })?;
+        Ok(())
+    }
+
+    fn check_limit(
+        &mut self,
+        status: u16,
+        code: Option<i64>,
+        retry_after: Option<&str>,
+    ) -> Result<()> {
+        if matches!(status, 412 | 429)
+            || (status == 503 && retry_after.is_some())
+            || matches!(code, Some(-352 | -412 | -509 | -799))
+        {
+            let level = self.number("gate_level", 0).saturating_add(1).clamp(1, 4);
+            let server_ms = retry_after
+                .and_then(|s| {
+                    s.trim()
+                        .parse::<u64>()
+                        .map(Duration::from_secs)
+                        .ok()
+                        .or_else(|| {
+                            httpdate::parse_http_date(s)
+                                .ok()?
+                                .duration_since(SystemTime::now())
+                                .ok()
+                        })
+                })
+                .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
+            let until = now_ms().saturating_add(server_ms.max(level * 300_000));
+            self.settings.update(|v| {
+                v.insert("gate_level".into(), level.to_string());
+                v.insert("gate_cooldown".into(), until.to_string());
+            })?;
+            bail!("B站暂时限制请求（HTTP {status}），请稍后重试");
+        }
+        Ok(())
+    }
+
+    fn get(&mut self, path: &str, params: &Params) -> Result<(u16, Value)> {
+        self.admit()?;
         let mut req = self
             .agent
             .get(format!("{}{path}", self.api))
@@ -148,18 +201,13 @@ impl Client {
         }
         let mut res = req.call()?;
         let status = res.status().as_u16();
+        let retry_after = res
+            .headers()
+            .get("Retry-After")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
         let body: Value = res.body_mut().read_json().unwrap_or(Value::Null);
-        if matches!(status, 412 | 429) || matches!(body["code"].as_i64(), Some(-352 | -509)) {
-            let level = (self.number("gate_level", 0) + 1).clamp(1, 4);
-            self.settings.update(|v| {
-                v.insert("gate_level".into(), level.to_string());
-                v.insert(
-                    "gate_cooldown".into(),
-                    (now_ms() + level * 300_000).to_string(),
-                );
-            })?;
-            bail!("B站暂时限制请求（HTTP {status}），冷却后自动重试");
-        }
+        self.check_limit(status, body["code"].as_i64(), retry_after.as_deref())?;
         if status / 100 == 2 && body["code"] == 0 && self.number("gate_level", 0) != 0 {
             self.settings.update(|v| {
                 v.insert("gate_level".into(), "0".into());
@@ -172,20 +220,11 @@ impl Client {
         if self.cookies("api.bilibili.com").any(|c| c.name == "buvid3") {
             return Ok(());
         }
-        let mut res = self
-            .agent
-            .get(format!("{}/x/frontend/finger/spi", self.api))
-            .header("Referer", "https://www.bilibili.com")
-            .call()?;
-        ensure!(res.status().is_success(), "设备 Cookie 请求失败");
-        let data: Value = res.body_mut().read_json()?;
+        let data = success(self.get("/x/frontend/finger/spi", &Params::new())?)?;
         let mut jar = self.jar.clone();
         let list = jar.entry("bilibili.com".into()).or_default();
         for (name, key) in [("buvid3", "b_3"), ("buvid4", "b_4")] {
-            let value = data["data"][key]
-                .as_str()
-                .context("设备 Cookie 缺失")?
-                .to_owned();
+            let value = data[key].as_str().context("设备 Cookie 缺失")?.to_owned();
             list.retain(|c| c.name != name);
             list.push(Cookie {
                 name: name.into(),
@@ -206,7 +245,7 @@ impl Client {
         Ok(())
     }
 
-    fn tv(&self, path: &str, code: Option<&str>) -> Result<Value> {
+    fn tv(&mut self, path: &str, code: Option<&str>) -> Result<Value> {
         let mut params = Params::from([
             ("appkey".into(), TV_KEY.into()),
             ("local_id".into(), "0".into()),
@@ -227,6 +266,7 @@ impl Client {
                 Md5::digest(raw + "59b43e04ad6965f34319062b478f83dd")
             ),
         );
+        self.admit()?;
         let mut res = self
             .agent
             .post(format!(
@@ -237,15 +277,25 @@ impl Client {
             .header("Origin", "https://www.bilibili.com")
             .header("Cookie", self.cookie_header("passport.bilibili.com"))
             .send_form(&params)?;
+        let status = res.status().as_u16();
+        self.check_limit(
+            status,
+            None,
+            res.headers()
+                .get("Retry-After")
+                .and_then(|v| v.to_str().ok()),
+        )?;
         ensure!(
             res.status().is_success(),
             "登录请求失败（HTTP {}）",
             res.status()
         );
-        Ok(res.body_mut().read_json()?)
+        let body: Value = res.body_mut().read_json()?;
+        self.check_limit(status, body["code"].as_i64(), None)?;
+        Ok(body)
     }
 
-    pub fn start_qr(&self) -> Result<(String, String)> {
+    pub fn start_qr(&mut self) -> Result<(String, String)> {
         let r = self.tv("auth_code", None)?;
         ensure!(r["code"] == 0, "生成二维码失败");
         Ok((
@@ -299,6 +349,7 @@ impl Client {
             v.insert("cookies".into(), raw);
         })?;
         self.jar = jar;
+        self.pages.clear();
         Ok(true)
     }
 
@@ -334,6 +385,7 @@ impl Client {
             }
         })?;
         self.jar.clear();
+        self.pages.clear();
         self.wbi = None;
         Ok(())
     }
@@ -384,12 +436,25 @@ impl Client {
         Ok(())
     }
 
+    pub fn refresh_folder(&mut self, folder: i64) {
+        self.pages.retain(|p| p.folder != folder);
+    }
+
     pub fn folder_page(
         &mut self,
         folder: i64,
         page: usize,
         keyword: Option<&str>,
     ) -> Result<(Vec<Media>, usize)> {
+        let word = keyword.unwrap_or_default();
+        if let Some(hit) = self.pages.iter().find(|p| {
+            p.folder == folder
+                && p.page == page
+                && p.keyword == word
+                && p.fetched.elapsed() < Duration::from_secs(300)
+        }) {
+            return Ok((hit.media.clone(), hit.total));
+        }
         let mut p = BTreeMap::from([
             ("media_id".into(), folder.to_string()),
             ("ps".into(), "20".into()),
@@ -400,19 +465,29 @@ impl Client {
             p.insert("keyword".into(), s.into());
         }
         let data = self.signed("/x/v3/fav/resource/list", p)?;
-        let media = if data["medias"].is_null() {
+        let media: Vec<Media> = if data["medias"].is_null() {
             vec![]
         } else {
             serde_json::from_value(data["medias"].clone())?
         };
-        Ok((
-            media,
-            data["info"]["media_count"].as_u64().unwrap_or(0) as usize,
-        ))
+        let total = data["info"]["media_count"].as_u64().unwrap_or(0) as usize;
+        self.pages
+            .retain(|p| p.fetched.elapsed() < Duration::from_secs(300));
+        if self.pages.len() >= 16 {
+            self.pages.pop_front();
+        }
+        self.pages.push_back(FolderPage {
+            folder,
+            page,
+            keyword: word.to_owned(),
+            fetched: Instant::now(),
+            media: media.clone(),
+            total,
+        });
+        Ok((media, total))
     }
 
     pub fn folders(&mut self, mid: i64) -> Result<Vec<Folder>> {
-        self.init_wbi().context("签名初始化失败")?;
         let data = success(self.get(
             "/x/v3/fav/folder/created/list-all",
             &Params::from([("up_mid".into(), mid.to_string())]),
@@ -440,10 +515,7 @@ impl Client {
         let primary = self.get(path, &app)?;
         let playback = path == "/x/player/playurl";
         let code = primary.1["code"].as_i64();
-        if primary.0 / 100 == 2
-            && !matches!(code, Some(-352 | -403 | -412))
-            && !(playback && code == Some(-400))
-        {
+        if primary.0 / 100 != 2 || (code != Some(-403) && !(playback && code == Some(-400))) {
             return success(primary);
         }
         self.init_wbi().context("签名初始化失败")?;
@@ -497,6 +569,8 @@ fn success((status, body): (u16, Value)) -> Result<Value> {
     }
     Ok(body["data"].clone())
 }
+
+mod video_page;
 
 #[cfg(test)]
 mod tests;

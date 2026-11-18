@@ -2,7 +2,7 @@
 use crate::{
     android_platform as platform, api::Client, database::Library, download::Downloads, queue::Queue,
 };
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use jni::{
     JNIEnv,
     objects::{JObject, JString},
@@ -136,7 +136,6 @@ pub(crate) fn handle(
     match req {
         Request::List => return Ok(serde_json::to_value(list(lib)?)?),
         Request::Start => {
-            client.init_wbi().context("签名初始化失败")?;
             identify(lib)?;
             if client
                 .settings

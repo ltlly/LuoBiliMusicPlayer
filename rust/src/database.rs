@@ -143,7 +143,9 @@ pub struct Folder {
     pub cover: Option<String>,
     pub media_count: i64,
     pub attr: i64,
+    #[serde(default)]
     pub ctime: i64,
+    #[serde(default)]
     pub mtime: i64,
 }
 

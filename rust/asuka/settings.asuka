@@ -60,7 +60,7 @@ component Preferences {
             }
           }
         }
-        Text("哔哩音乐 1.6.0") { color: palette.secondary; font: .footnote; alignSelf: .center }
+        Text("哔哩音乐 1.6.1") { color: palette.secondary; font: .footnote; alignSelf: .center }
       } else {
         Card {
           SectionName("保存目录","favorites")
@@ -94,7 +94,7 @@ component Preferences {
               Stepper { value: player.rateLimit.float(); min: 10; max: 60; on change(v) { action("option","api_rate_limit_per_minute","{v.int()}") } }
             }
           }
-          Pill("清除冷却记录","",palette.ink,palette.soft) { on press { action("clearCooldown") } }
+          Pill("清理已过期的冷却记录","",palette.ink,palette.soft) { on press { action("clearCooldown") } }
         }
         Card {
           SectionName("缓存","library")

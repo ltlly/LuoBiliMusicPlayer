@@ -25,7 +25,7 @@ struct AndroidItem {
 }
 
 impl Queue {
-    pub fn restore(settings: &Settings) -> Result<Self> {
+    pub fn restore(settings: &Settings, library: &Library) -> Result<Self> {
         let mut q = Self {
             repeat: 2,
             ..Default::default()
@@ -82,6 +82,18 @@ impl Queue {
                 .unwrap_or(2);
         }
         q.index = q.index.min(q.tracks.len().saturating_sub(1));
+        if let Some(track) = q.tracks.get_mut(q.index) {
+            let seconds: Option<i64> = library.0.query_row(
+                "SELECT COALESCE(
+                    (SELECT NULLIF(duration,0) FROM songs WHERE id=?1),
+                    (SELECT NULLIF(duration,0) FROM cached_playback_urls WHERE bvid=?1),
+                    (SELECT duration FROM cached_favorite_medias WHERE bvid=?1 LIMIT 1))",
+                [&track.id],
+                |r| r.get(0),
+            )?;
+            q.duration = seconds.unwrap_or(0).max(0).saturating_mul(1000);
+            track.duration_ms = q.duration;
+        }
         Ok(q)
     }
 

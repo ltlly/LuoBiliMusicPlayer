@@ -12,8 +12,8 @@ struct Palette {
 fn colorsFor(mode: string, systemDark: bool) -> Palette {
   if mode == "DARK" || (mode != "LIGHT" && systemDark) {
     return Palette(
-      paper: #0A1929, surface: #102537, ink: #F1FBFF, secondary: #A5BFCD,
-      rule: #264153, soft: #1C3648, accent: #87DCFF, accentWash: #193E51)
+      paper: #0C1425, surface: #131F35, ink: #F1FBFF, secondary: #A5BFCD,
+      rule: #2B3B56, soft: #1C3648, accent: #86D7FF, accentWash: #193E51)
   }
   return Palette()
 }

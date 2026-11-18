@@ -21,10 +21,10 @@ use std::{
 #[derive(Copy, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Page {
-    #[default]
     Login,
     Favorites,
     Content,
+    #[default]
     Library,
     Downloads,
     Settings,
@@ -60,6 +60,7 @@ pub(crate) struct Snapshot {
     revision: i64,
     pub page: Page,
     pub login_state: String,
+    pub logged_in: bool,
     pub message: String,
     pub qr: String,
     pub folder_title: String,
@@ -71,7 +72,6 @@ pub(crate) struct Snapshot {
     pub large_cover_url: String,
     pub playing: bool,
     pub local_track: bool,
-    pub position: f32,
     pub duration: f32,
     pub queue: Vec<Entry>,
     pub queue_index: i32,
@@ -94,8 +94,12 @@ pub(crate) struct Snapshot {
 }
 
 #[derive(Default, Clone)]
-pub(crate) struct View(Arc<Mutex<Snapshot>>);
+pub(crate) struct View(Arc<Mutex<Snapshot>>, Arc<std::sync::atomic::AtomicI64>);
 impl View {
+    pub(crate) fn set_position(&self, millis: i64) {
+        self.1
+            .store(millis.max(0) / 1000, std::sync::atomic::Ordering::Relaxed);
+    }
     pub(crate) fn update(&self, f: impl FnOnce(&mut Snapshot)) {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         f(&mut state);
@@ -178,6 +182,13 @@ pub(crate) fn start_worker() -> &'static Sender<Command> {
             Player { view, tx }
         })
         .tx
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn lbm_position_seconds() -> i64 {
+    PLAYER
+        .get()
+        .map_or(0, |p| p.view.1.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 #[unsafe(no_mangle)]

@@ -1,12 +1,12 @@
 LuoBiliMusicPlayer — illustration credits
 
-The stage and record sleeve depict a fan interpretation inspired by Luo Tianyi
-(洛天依). The character artwork was generated locally with Animagine XL 3.1,
-then color-graded and composed for the phone banner, desktop banner and
-square album cover. It is not official character or promotional artwork.
+The concert scene is an original fan illustration of Luo Tianyi (洛天依),
+generated with GPT Image for this player. The phone and wide banners, square
+sleeve and ambient background are crops of the same scene.
 
-Model: Animagine XL 3.1, Cagliostro Research Lab
-https://modelscope.cn/models/AI-ModelScope/animagine-xl-3.1
-Portrait seed: 71112. Source render: 1088 x 896 pixels.
+Character references
+Vsinger profile and official theme colour (#66CCFF): https://vsinger.com/vsinger
+VOCALOID5 product illustration: https://www.vocaloid.com/products/show/v5l_tianyi
+
 The four fallback sleeves, ribbon emblem and application icon were drawn
 for this player. Music and collection artwork come from the user's library.

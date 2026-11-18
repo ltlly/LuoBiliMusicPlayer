@@ -156,10 +156,26 @@ impl Client {
         allow_dolby: bool,
     ) -> Result<(i64, AudioSource, Option<Value>)> {
         let mut detail = None;
+        let mut used_page = false;
         let mut cid = match known.filter(|cid| *cid > 0) {
             Some(cid) => cid,
             None => {
-                let data = self.view(id)?;
+                let data = match self.view(id) {
+                    Ok(d) => d,
+                    Err(e) if ApiError::unavailable(&e) => {
+                        let (data, dash) = self.video_page(id).context(e)?;
+                        if let Some(source) = dash.and_then(|v| select(&v, allow_dolby).ok()) {
+                            return Ok((
+                                data["cid"].as_i64().context("缺少 CID")?,
+                                source,
+                                Some(data),
+                            ));
+                        }
+                        used_page = true;
+                        data
+                    }
+                    Err(e) => return Err(e),
+                };
                 let cid = data["cid"].as_i64().context("缺少 CID")?;
                 detail = Some(data);
                 cid
@@ -177,6 +193,18 @@ impl Client {
                 cid = fresh;
                 response = self.play_url(id, cid);
                 detail = Some(data);
+            }
+        }
+        if !used_page && response.as_ref().is_err_and(ApiError::unavailable) {
+            let (data, dash) = self.video_page(id)?;
+            if let Some(dash) = dash
+                && data["cid"].as_i64() == Some(cid)
+            {
+                return Ok((
+                    data["cid"].as_i64().context("缺少 CID")?,
+                    select(&dash, allow_dolby)?,
+                    Some(data),
+                ));
             }
         }
         Ok((cid, select(&response?["dash"], allow_dolby)?, detail))
@@ -205,7 +233,7 @@ impl Client {
             )
             .optional()?;
         if let Some((_, url, expiry)) = &cached
-            && *expiry > now_ms()
+            && valid_until(url, *expiry) > now_ms()
         {
             return Ok(url.clone());
         }
@@ -228,7 +256,22 @@ impl Client {
         let now = now_ms();
         let url = &audio.urls[0];
         library.0.execute("INSERT OR REPLACE INTO cached_playback_urls(bvid,cid,audioUrl,title,artist,coverUrl,duration,cachedAt,expiresAt)
-            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![track.id,cid,url,track.title,track.artist,track.cover,track.duration_ms/1000,now,now+21_600_000])?;
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![track.id,cid,url,track.title,track.artist,track.cover,track.duration_ms/1000,now,valid_until(url, now+21_600_000)])?;
         Ok(url.clone())
     }
+}
+
+fn valid_until(url: &str, cache_expiry: i64) -> i64 {
+    // CDN deadlines are Unix seconds. Leave time to open the stream.
+    url::Url::parse(url)
+        .ok()
+        .and_then(|url| {
+            url.query_pairs()
+                .find(|(k, _)| k == "deadline")
+                .and_then(|(_, v)| v.parse::<i64>().ok())
+        })
+        .filter(|s| *s > 0)
+        .map_or(cache_expiry, |s| {
+            cache_expiry.min(s.saturating_mul(1000).saturating_sub(30_000))
+        })
 }

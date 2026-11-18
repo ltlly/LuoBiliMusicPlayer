@@ -29,3 +29,15 @@ test "the immersive cover opens the restored track" {
   ui.tap("展开播放器")
   ui.expect("正在播放", "夜色慢行", "上一首", "下一首")
 }
+
+test "closing the queue restores the player that opened it" {
+  player = Player(page: "library", trackTitle: "夏虫", queue: [Entry(title: "夏虫")])
+  let ui = mount(Music(false))
+  ui.tap("展开播放器")
+  ui.tap("队列")
+  ui.expect("清空队列")
+  ui.tap("收起")
+  ui.expect("播放进度", "上一首", "下一首")
+  ui.tap("收起")
+  ui.expect("展开播放器", "音乐库")
+}

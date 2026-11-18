@@ -85,8 +85,8 @@ pub(crate) fn run(
     view: View,
     rx: Receiver<Command>,
 ) -> Result<()> {
-    let queue = crate::queue::Queue::restore(&settings)?;
     let library = Library::open(&db)?;
+    let queue = crate::queue::Queue::restore(&settings, &library)?;
     let cache_dir = crate::cover::legacy_path(&db);
     let downloads = crate::download::Downloads::open(&library, db)?;
     let mut app = Application {
@@ -97,7 +97,7 @@ pub(crate) fn run(
         view,
         client: Client::new(settings)?,
         library,
-        page: Page::Login,
+        page: Page::Library,
         folder: 0,
         title: String::new(),
         items: vec![],
@@ -169,19 +169,21 @@ impl Application {
             .unwrap_or("DARK")
             .to_owned();
         self.show(move |ui| ui.theme_mode = theme);
-        let _ = self.client.ensure_buvid();
-        if self
-            .client
-            .settings
-            .get("access_token")
-            .is_some_and(|s| !s.is_empty())
+        if self.client.logged_in()
+            && self
+                .client
+                .settings
+                .get("user_id")
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(0)
+                <= 0
         {
             let _ = self.client.user_info();
         }
         let init = if self.client.logged_in() {
             self.after_login()
         } else {
-            self.qr()
+            self.navigate(Page::Library, false)
         };
         if let Err(e) = init {
             self.error(e);
@@ -341,7 +343,14 @@ impl Application {
                     })
                     .and_then(|()| self.download_settings(false)),
                 Command::ClearCooldown => self.client.settings.update(|v| {
-                    for key in ["gate_level", "gate_last", "gate_cooldown"] {
+                    if v.get("gate_cooldown")
+                        .and_then(|v| v.parse::<i64>().ok())
+                        .unwrap_or(0)
+                        > now_ms()
+                    {
+                        return;
+                    }
+                    for key in ["gate_level", "gate_cooldown"] {
                         v.insert(key.into(), "0".into());
                     }
                 }),
@@ -427,8 +436,7 @@ impl Application {
                 Command::Logout => self
                     .client
                     .logout()
-                    .and_then(|()| self.navigate(Page::Login, false))
-                    .and_then(|()| self.qr()),
+                    .and_then(|()| self.navigate(Page::Library, false)),
                 Command::Navigate(Page::Login) => {
                     self.navigate(Page::Login, false).and_then(|()| self.qr())
                 }
@@ -641,6 +649,12 @@ impl Application {
         self.download_entries()
     }
     fn show_player(&self, with_queue: bool) {
+        self.view.set_position(self.queue.position);
+        // A clock tick does not change library rows, covers, controls or queue metadata.
+        if !with_queue {
+            return;
+        }
+
         let track = self.queue.tracks.get(self.queue.index);
         let raw = track.map_or("", |t| t.cover.as_str());
         let small = crate::cover::thumbnail(raw, false);
@@ -652,26 +666,22 @@ impl Application {
         });
         let title = track.map_or("", |t| t.title.as_str()).to_owned();
         let artist = track.map_or("", |t| t.artist.as_str()).to_owned();
-        let rows = with_queue.then(|| {
-            self.queue
-                .tracks
-                .iter()
-                .map(|t| (t.title.clone(), t.artist.clone()))
-                .collect::<Vec<_>>()
-        });
-        let (playing, pos, duration, index, repeat, shuffle) = (
+        let (playing, duration, index, repeat, shuffle) = (
             self.queue.playing,
-            self.queue.position,
             self.queue.duration,
             self.queue.index,
             self.queue.repeat,
             self.queue.shuffle,
         );
         #[cfg(target_os = "android")]
-        if with_queue {
-            if let Err(e) =
-                crate::android_platform::playback_changed(&title, &artist, playing, pos, duration)
-            {
+        {
+            if let Err(e) = crate::android_platform::playback_changed(
+                &title,
+                &artist,
+                playing,
+                self.queue.position,
+                duration,
+            ) {
                 self.error(e);
             }
         }
@@ -679,6 +689,16 @@ impl Application {
         if !PLAYER_VISIBLE.load(std::sync::atomic::Ordering::Acquire) {
             return;
         }
+        let entries = self
+            .queue
+            .tracks
+            .iter()
+            .map(|t| Entry {
+                title: t.title.clone(),
+                detail: t.artist.clone(),
+                ..Default::default()
+            })
+            .collect();
         self.show(move |ui| {
             ui.small_cover_url = small;
             ui.large_cover_url = large;
@@ -686,25 +706,11 @@ impl Application {
             ui.track_title = title;
             ui.artist = artist;
             ui.playing = playing;
-            ui.position = pos as f32 / 1000.;
             ui.duration = duration as f32 / 1000.;
             ui.queue_index = index as i32;
             ui.repeat_mode = repeat;
             ui.shuffle = shuffle;
-            if let Some(rows) = rows {
-                let entries = rows
-                    .into_iter()
-                    .map(|(title, detail)| Entry {
-                        status: Default::default(),
-                        key: "".into(),
-                        cover_url: "".into(),
-
-                        title,
-                        detail,
-                    })
-                    .collect::<Vec<_>>();
-                ui.queue = entries;
-            }
+            ui.queue = entries;
         });
     }
     fn play_row(&mut self, key: &str) -> Result<()> {
@@ -788,6 +794,7 @@ impl Application {
     fn qr(&mut self) -> Result<()> {
         self.prompt = None;
         self.show(|ui| ui.login_state = "generating".into());
+        let _ = self.client.ensure_buvid();
         let (url, code) = self.client.start_qr()?;
         let qr = QrCode::new(url.as_bytes())?;
         let size = qr.width();
@@ -828,7 +835,13 @@ impl Application {
                 ui.login_state = "expired".into();
                 ui.message = "二维码已过期".into();
             });
-        } else if self.client.poll_qr(&p.code).unwrap_or(false) {
+        } else if match self.client.poll_qr(&p.code) {
+            Ok(done) => done,
+            Err(e) => {
+                self.prompt = None;
+                return Err(e);
+            }
+        } {
             self.prompt = None;
             thread::sleep(Duration::from_secs(1));
             let _ = self.client.user_info();
@@ -863,7 +876,9 @@ impl Application {
         self.folder_total = 0;
         self.page_number = 1;
         let title = self.title.clone();
+        let logged_in = self.client.logged_in();
         self.show(move |ui| {
+            ui.logged_in = logged_in;
             ui.page = p;
             ui.entries = Vec::new();
             ui.message = "".into();
@@ -872,6 +887,7 @@ impl Application {
             ui.folder_title = title;
         });
         match p {
+            Page::Favorites if !logged_in => {}
             Page::Favorites => {
                 let mid = self
                     .client
@@ -901,6 +917,9 @@ impl Application {
                 self.folder_entries(folders);
             }
             Page::Content => {
+                if force {
+                    self.client.refresh_folder(self.folder);
+                }
                 self.items = self.library.media(self.folder)?;
                 self.media_entries();
                 let cached = std::mem::take(&mut self.items);
@@ -979,7 +998,8 @@ impl Application {
                 return Ok(());
             }
             let needs=self.library.0.query_row("SELECT NOT EXISTS(SELECT 1 FROM cached_favorite_medias) OR (SELECT COUNT(*) FROM songs WHERE id LIKE 'local_%' AND isDownloaded=1)>10",[],|r|r.get::<_,bool>(0))?;
-            if (_force || needs)
+            if _force
+                && needs
                 && let Some(mid) = self
                     .client
                     .settings

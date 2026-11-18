@@ -1,5 +1,5 @@
 import std/json
-import std/base
+import std/math
 
 component MiniPlayer {
   let inset = contentInset(environment().width)
@@ -13,7 +13,7 @@ component MiniPlayer {
         Row {
           grow: 1; shrink: 1; align: .center; gap: 10; role: .button; label: "展开播放器"
           on press { emit open }
-          Art(player.smallCoverUrl, 40.0, "singer-cover.jpg", 6.0)
+          Art(player.smallCoverUrl, 40.0, "singer-cover.jpg", 6.0) { shared: "current-cover" }
           Column {
             grow: 1; shrink: 1; gap: 1
             Text(player.trackTitle) { color: #F1FDFF; font: Font(size: 14).bold(); lines: 1 }
@@ -26,7 +26,7 @@ component MiniPlayer {
       Canvas(g => {
         g.stroke(Path().move(0,1).line(g.width,1), #FFFFFF22, StrokeStyle(width: 2))
         if player.duration > 0 {
-          g.stroke(Path().move(0,1).line(g.width * min(1.0, player.position / player.duration),1), #9AE7DE, StrokeStyle(width: 2))
+          g.stroke(Path().move(0,1).line(g.width * min(1.0, playhead / player.duration),1), #9AE7DE, StrokeStyle(width: 2))
         }
       }) { height: 2 }
     }
@@ -42,7 +42,7 @@ component NowPlaying(panel: string) {
     ImmersivePlayer { on dismiss { emit dismiss }; on queue { emit queue } }
   } else {
     Column {
-      grow: 1; background: palette.paper; padding: [9,0]
+      grow: 1; background: palette.paper; padding: [9,0]; transition: Transition(fade: true, y: 8)
       Row {
         padding: [4,inset]; align: .center; justify: .spaceBetween
         IconAction("down", "收起", palette.ink, #00000000, 44.0) { on press { emit dismiss } }
@@ -99,6 +99,12 @@ component ImmersivePlayer {
   event dismiss
   event queue
   state art = Artwork()
+  state sleeveScale = 1.0
+  task(player.playing, environment().reduceMotion) {
+    let scale = if player.playing || environment().reduceMotion { 1.0 } else { 0.965 }
+    if environment().reduceMotion { sleeveScale = scale }
+    else { animate(Animation(duration: 300ms, curve: .easeInOut), () => { sleeveScale = scale }) }
+  }
   task(player.largeCoverUrl) {
     art = Artwork()
     let url = player.largeCoverUrl
@@ -116,7 +122,7 @@ component ImmersivePlayer {
   let portraitSide = max(164.0, min(height * 0.48, height - 452.0))
   let side = if wide { max(175.0, min(335.0, (environment().width - 200.0) * 0.42)) } else { min(420.0, min(environment().width - inset * 2, portraitSide)) }
   View {
-    grow: 1; background: #113347; clip: true
+    grow: 1; background: #10192E; clip: true; transition: Transition(fade: true, y: 12)
     Image(if art.ambience.isEmpty() { "stage-glow.jpg" } else { art.ambience }) {
       absolute: true; top: 0; left: 0; width: 100%; height: 100%; mode: .fill
     }
@@ -129,7 +135,11 @@ component ImmersivePlayer {
       Row {
         padding: [8, inset]; align: .center; justify: .spaceBetween
         IconAction("down", "收起", #FFFFFF, #00000000, 44.0, 22.0) { on press { emit dismiss } }
-        Text("正在播放") { color: #FFFFFF; font: Font(size: 15).medium() }
+        Row {
+          align: .center; gap: 7
+          PlaybackSignal()
+          Text("正在播放") { color: #F1F8FF; font: Font(size: 15).medium() }
+        }
         IconAction("queue", "队列", #FFFFFF, #00000000, 44.0, 21.0) { on press { emit queue } }
       }
       Scroll {
@@ -141,7 +151,7 @@ component ImmersivePlayer {
             direction: if wide { .row } else { .column }; align: if wide { .center } else { .stretch }
             gap: if wide { 28 } else { max(18.0, min(35.0, environment().height * 0.042)) }
             View {
-              width: side; height: side; alignSelf: .center; radius: 10
+              shared: "current-cover"; transform: Transform(scale: sleeveScale); width: side; height: side; alignSelf: .center; radius: 10
               shadow: Shadow(color: #00101D64, radius: 19, y: 8)
               Image(if art.cover.isEmpty() { "singer-cover.jpg" } else { art.cover }) {
                 width: 100%; height: 100%; mode: .fill; radius: 10
@@ -193,22 +203,10 @@ component TransportPanel {
       if !player.artist.isEmpty() { Text(player.artist) { color: #CBE1E9; font: Font(size: 18); lines: 1 } }
     }
     Column {
-      base.Slider {
-        value: min(player.position, player.duration); max: max(1.0, player.duration); disabled: player.duration <= 0
-        on valueChange(v) { if player.duration > 0 { action("seek", "{v}") } }
-        base.SliderTrack {
-          height: 31; justify: .center
-          View { height: 4; radius: 2; background: #FFFFFF43 }
-          base.SliderRange { justify: .center; View { height: 4; radius: 2; background: #A5E9F1 } }
-          base.SliderThumb {
-            label: "播放进度"; width: 24; height: 28; justify: .center; align: .center
-            View { width: 9; height: 9; radius: 5; background: #FFFFFF }
-          }
-        }
-      }
+      PlaybackSeekBar()
       Row {
         justify: .spaceBetween
-        Text(clock(player.position)) { color: #B8CEDA; font: Font(size: 12) }
+        Text(clock(playhead)) { color: #B8CEDA; font: Font(size: 12) }
         Text(if player.duration > 0 { clock(player.duration) } else { "–:––" }) { color: #B8CEDA; font: Font(size: 12) }
       }
     }
@@ -216,9 +214,64 @@ component TransportPanel {
       align: .center; justify: .spaceBetween
       IconAction("shuffle", if player.shuffle { "随机已开启" } else { "随机播放" }, if player.shuffle { #8FE5ED } else { #B1CDD6 }, #00000000, 39.0, 20.0) { on press { control("shuffle") } }
       IconAction("previous", "上一首", #EEF9FF, #00000000, 44.0, 29.0) { on press { control("previous") } }
-      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #123244, #A2E6F2, 59.0, 27.0) { on press { control("toggle") } }
+      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #123244, #A2DEFF, 59.0, 27.0) { on press { control("toggle") } }
       IconAction("next", "下一首", #EEF9FF, #00000000, 44.0, 29.0) { on press { control("next") } }
       IconAction(if player.repeatMode == 1 { "single" } else { "repeat" }, if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }, if player.repeatMode > 0 { #8FE5ED } else { #B1CDD6 }, #00000000, 39.0, 20.0) { on press { control("repeat") } }
     }
   }
+}
+
+component PlaybackSeekBar {
+  state width = 0.0
+  state preview = -1.0
+  let duration = max(0.0, player.duration)
+  let value = min(duration, max(0.0, if preview >= 0 { preview } else { playhead }))
+  fn at(x: float) -> float = duration * min(1.0, max(0.0, (x - 6.0) / max(1.0, width - 12.0)))
+  fn seek(v: float) {
+    preview = -1
+    if duration > 0 { action("seek", "{min(duration, max(0.0, v))}") }
+  }
+  View {
+    height: 40; role: .slider; label: "播放进度"; focusable: duration > 0; disabled: duration <= 0
+    a11yValue: "{clock(value)} / {clock(duration)}"; a11yRange: ValueRange(min: 0, max: max(1.0, duration), now: value)
+    on layout(f) { if width != f.width { width = f.width } }
+    on pressStart(x,y) { preview = at(x) }
+    on press { if preview >= 0 { seek(preview) } }
+    on pan(g) {
+      if g.state == .cancelled { preview = -1 }
+      else if g.state == .ended { seek(at(g.x)) }
+      else { preview = at(g.x) }
+    }
+    on adjust(n) { seek(value + float(n) * 5) }
+    keys: [Shortcut(key: "left", run: () => seek(value - 5)), Shortcut(key: "right", run: () => seek(value + 5)),
+           Shortcut(key: "home", run: () => seek(0)), Shortcut(key: "end", run: () => seek(duration))]
+    Canvas(g => {
+      let y = g.height / 2
+      let x = 6 + max(0.0, g.width - 12) * value / max(1.0, duration)
+      let line = StrokeStyle(width: 3, cap: .round)
+      g.stroke(Path().move(6,y).line(g.width-6,y), #FFFFFF43, line)
+      g.stroke(Path().move(6,y).line(x,y), #8CDAFF, line)
+      let r = if preview >= 0 { 6.0 } else { 4.5 }
+      g.fill(Path().ellipse(x-r, y-r, 2*r, 2*r), #F0FAFF)
+    }) { width: 100%; height: 100%; a11yHidden: true }
+  }
+}
+
+component PlaybackSignal {
+  let moving = player.playing && appForeground && !environment().reduceMotion
+  state phase = 0.0
+  task(moving) {
+    phase = 0
+    if moving {
+      while true { await sleep(64ms); phase = (phase + 0.19) % (2 * math.pi) }
+    }
+  }
+  Canvas(g => {
+    for i in 0..<4 {
+      let x = 2.0 + i.float() * 4
+      let wave = math.sin(phase + i.float() * 1.37)
+      let h = if moving { 2.8 + 2.2 * wave } else { if i == 1 || i == 2 { 3.8 } else { 1.8 } }
+      g.stroke(Path().move(x,7-h).line(x,7+h), #83D7FF, StrokeStyle(width: 2, cap: .round))
+    }
+  }) { width: 16; height: 14; a11yHidden: true }
 }

@@ -1,6 +1,7 @@
 import std/json
 
 extern fn lbm_start()
+extern fn lbm_position_seconds() -> Int64
 extern fn lbm_snapshot(revision: Int64) -> CString
 extern fn lbm_action(name: CString, arg: CString, value: CString)
 extern fn lbm_cover(url: CString) -> CString
@@ -22,7 +23,8 @@ struct Entry {
 
 struct Player {
   revision: int = -1
-  page: string = "login"
+  page: string = "library"
+  loggedIn: bool = false
   loginState: string = "generating"
   message: string = ""
   qr: string = ""
@@ -35,7 +37,6 @@ struct Player {
   largeCoverUrl: string = ""
   playing: bool = false
   localTrack: bool = false
-  position: float = 0
   duration: float = 0
   queue: [Entry] = []
   queueIndex: int = 0
@@ -58,6 +59,7 @@ struct Player {
 }
 
 state player = Player()
+state playhead = 0.0
 fn action(name: string, arg: string = "", value: string = "") { lbm_action(name, arg, value) }
 fn go(page: string) { action("navigate", page) }
 fn control(kind: string, index: int = 0) { action("transport", kind, "{index}") }

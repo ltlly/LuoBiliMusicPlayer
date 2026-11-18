@@ -64,7 +64,7 @@ component ListeningCover {
       if hasTrack {
         Row {
           align: .center; gap: 7
-          if !player.smallCoverUrl.isEmpty() { Art(player.smallCoverUrl, 34.0, "singer-cover.jpg", 5.0) }
+          if !player.smallCoverUrl.isEmpty() { Art(player.smallCoverUrl, 34.0, "singer-cover.jpg", 5.0) { shared: "current-cover" } }
           else { Glyph("wave", #93E6EF, 16.0) }
           Text(if player.playing { "正在播放" } else { "继续收听" }) { color: #CBF4FC; font: Font(size: 13).medium() }
         }
@@ -100,7 +100,9 @@ component Collection {
           ListeningCover { on open { emit open }; on queue { emit queue } }
           PageTitle("收藏夹", "{count} 个", true) { on refreshPage { action("retry") } }
           if !player.message.isEmpty() { Text(player.message) { margin: [2, inset, 8, inset]; color: palette.accent; font: .footnote; lines: 3 } }
-          if count == 0 { Text("暂无收藏夹") { padding: [28, inset]; color: palette.secondary; font: .subheadline } }
+          if count == 0 && !player.loggedIn {
+            View { padding: [12,inset] ; Pill("登录查看收藏夹","account",palette.accent,palette.accentWash) { on press { go("login") } } }
+          } else if count == 0 { Text("暂无收藏夹") { padding: [28, inset]; color: palette.secondary; font: .subheadline } }
         }
       } else {
         Row {
