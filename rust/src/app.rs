@@ -500,6 +500,16 @@ impl Application {
                     }
                 }
                 Command::RankFilter(value) if self.page == Page::Rank => {
+                    if value {
+                        // The folder list can require network I/O before the first membership batch.
+                        self.show(|ui| {
+                            ui.rank_filtered = true;
+                            ui.rank_busy = true;
+                            ui.rank_verified = false;
+                            ui.entries.clear();
+                            ui.message.clear();
+                        });
+                    }
                     let result = self.ranking.filter(&mut self.client, value, false);
                     self.rank_rows();
                     result
