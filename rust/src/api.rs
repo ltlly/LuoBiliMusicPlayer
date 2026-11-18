@@ -352,7 +352,7 @@ impl Client {
         })
     }
 
-    fn init_wbi(&mut self) -> Result<()> {
+    pub(crate) fn init_wbi(&mut self) -> Result<()> {
         if self.wbi.is_some() {
             return Ok(());
         }
@@ -412,7 +412,7 @@ impl Client {
     }
 
     pub fn folders(&mut self, mid: i64) -> Result<Vec<Folder>> {
-        self.init_wbi()?;
+        self.init_wbi().context("签名初始化失败")?;
         let data = success(self.get(
             "/x/v3/fav/folder/created/list-all",
             &Params::from([("up_mid".into(), mid.to_string())]),
@@ -446,7 +446,7 @@ impl Client {
         {
             return success(primary);
         }
-        self.init_wbi()?;
+        self.init_wbi().context("签名初始化失败")?;
         let mut wbi = params;
         for value in wbi.values_mut() {
             value.retain(|c| !"!'()*".contains(c));

@@ -45,6 +45,9 @@ pub fn context() -> Result<(&'static JavaVM, GlobalRef)> {
 }
 
 pub fn files_dir() -> Result<PathBuf> {
+    if let Some(dir) = FILES.get() {
+        return Ok(dir.clone());
+    }
     activity(|env, obj| {
         let file = env
             .call_method(obj, "getFilesDir", "()Ljava/io/File;", &[])?
@@ -156,18 +159,8 @@ pub struct Replacement {
 }
 
 pub fn pending_replacement() -> Result<Option<Replacement>> {
-    let raw: String = activity(|env, obj| {
-        let text = JString::from(
-            env.call_method(obj, "pendingReplacement", "()Ljava/lang/String;", &[])?
-                .l()?,
-        );
-        Ok(env.get_string(&text)?.into())
-    })?;
-    if raw.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(serde_json::from_str(&raw)?))
-    }
+    let data = quality_call("pending", &serde_json::Value::Null)?;
+    Ok(serde_json::from_value(data)?)
 }
 
 impl Replacement {
@@ -204,12 +197,85 @@ impl Replacement {
             current.as_deref() == Some(&self.path),
             "歌曲路径已变更，请保留旧版恢复副本"
         );
-        self.call("restoreReplacement", &self.id, &self.path)?;
+        let args = serde_json::json!({"id": self.id, "path": self.path});
+        quality_call("restore", &args)?;
         tx.execute(
             "UPDATE songs SET fileSize=?2,isDownloaded=1 WHERE id=?1",
             rusqlite::params![self.id, self.size],
         )?;
         tx.commit()?;
-        self.call("finishReplacement", &self.id, &self.path)
+        quality_call("finishRestore", &args).map(drop)
     }
+}
+
+static QUALITY_HOST: std::sync::OnceLock<GlobalRef> = std::sync::OnceLock::new();
+static FILES: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_bilimusicplayer_QualityTasks_bind(
+    mut env: JNIEnv,
+    host: JObject,
+    dir: JString,
+) {
+    if let (Ok(vm), Ok(object), Ok(path)) = (
+        env.get_java_vm(),
+        env.new_global_ref(host),
+        env.get_string(&dir),
+    ) {
+        let _ = VM.set(vm);
+        let _ = FILES.set(PathBuf::from(String::from(path)));
+        let _ = QUALITY_HOST.set(object);
+    }
+}
+
+pub fn quality_call(method: &str, data: &serde_json::Value) -> Result<serde_json::Value> {
+    let host = QUALITY_HOST.get().context("音质服务尚未初始化")?;
+    let mut env = VM
+        .get()
+        .context("Android 尚未初始化")?
+        .attach_current_thread()?;
+    env.with_local_frame(16, |env| {
+        let op = env.new_string(method)?;
+        let payload = env.new_string(data.to_string())?;
+        let result = env.call_method(
+            host,
+            "perform",
+            "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+            &[JValue::Object(&op), JValue::Object(&payload)],
+        );
+        let value = match result {
+            Ok(v) => JString::from(v.l()?),
+            Err(e) if env.exception_check()? => {
+                let ex = env.exception_occurred()?;
+                env.exception_clear()?;
+                let s = JString::from(
+                    env.call_method(&ex, "toString", "()Ljava/lang/String;", &[])?
+                        .l()?,
+                );
+                bail!(
+                    "{}",
+                    env.get_string(&s)
+                        .map(String::from)
+                        .unwrap_or_else(|_| e.to_string())
+                );
+            }
+            Err(e) => return Err(e.into()),
+        };
+        Ok(serde_json::from_str(&String::from(
+            env.get_string(&value)?,
+        ))?)
+    })
+}
+
+pub fn quality_control(mode: &str) -> Result<()> {
+    activity(|env, ctx| {
+        let mode = env.new_string(mode)?;
+        env.call_method(
+            ctx,
+            "qualityControl",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&mode)],
+        )?
+        .v()
+    })
 }

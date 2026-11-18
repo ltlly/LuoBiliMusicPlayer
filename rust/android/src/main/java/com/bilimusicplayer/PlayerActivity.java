@@ -27,7 +27,10 @@ public final class PlayerActivity extends AsukaActivity {
     private native void unbindActivity();
     @Override protected void onCreate(Bundle state) {
         bindActivity();
+        QualityTasks.get(this);
         super.onCreate(state);
+        upgradeMode = state == null ? null : state.getString("upgradeMode");
+        requestingUpgrade = upgradeMode != null;
     }
     static native void mediaAction(int action, long value);
     private boolean playbackStarted;
@@ -49,9 +52,23 @@ public final class PlayerActivity extends AsukaActivity {
     }
     @Override protected void onResume() {
         super.onResume();
+        quality().prefs.registerOnSharedPreferenceChangeListener(progressListener);
         mediaAction(7, 1);
+        openFromNotification(getIntent());
+    }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        openFromNotification(intent);
+    }
+    private void openFromNotification(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("open_quality_upgrade", false)) {
+            intent.removeExtra("open_quality_upgrade");
+            mediaAction(12, 0);
+        }
     }
     @Override protected void onDestroy() {
+        quality().prefs.unregisterOnSharedPreferenceChangeListener(progressListener);
         stopService(new Intent(this, PlaybackService.class));
         super.onDestroy();
         unbindActivity();
@@ -64,12 +81,56 @@ public final class PlayerActivity extends AsukaActivity {
     }
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(request, permissions, results);
+        if (request == UPGRADE_ACCESS) {
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) prepareUpgrade();
+            else finishGrant(false);
+        }
         if (request==2 && results.length>0 && results[0]==PackageManager.PERMISSION_GRANTED) mediaAction(6,0);
     }
 
     private static final int RESTORE_AUDIO = 41;
-    public String pendingReplacement() throws org.json.JSONException {
-        return new LegacyAudioReplacement(this).pending();
+    private static final int UPGRADE_ACCESS = 42;
+    private QualityTasks quality() { return QualityTasks.get(this); }
+    private final android.content.SharedPreferences.OnSharedPreferenceChangeListener progressListener =
+            (prefs, key) -> { if ("status".equals(key) || "error".equals(key) || "done".equals(key) || "current".equals(key)) mediaAction(10, 0); };
+    private String upgradeMode;
+    private boolean requestingUpgrade;
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("upgradeMode", upgradeMode);
+    }
+    public void qualityControl(String mode) {
+        runOnUiThread(() -> {
+            if ("pause".equals(mode)) { quality().pause(); return; }
+            if (requestingUpgrade) return;
+            requestingUpgrade = true;
+            upgradeMode = mode;
+            if (checkSelfPermission(Manifest.permission.READ_MEDIA_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{Manifest.permission.READ_MEDIA_AUDIO}, UPGRADE_ACCESS);
+            } else prepareUpgrade();
+        });
+    }
+    private void prepareUpgrade() {
+        QualityTasks.EXEC.execute(() -> {
+            try {
+                java.util.List<Uri> needed = quality().prepareUris();
+                runOnUiThread(() -> {
+                    try {
+                        if (needed.isEmpty()) { finishGrant(true); return; }
+                        // Android 16 limits a write request to 2,000 distinct media items.
+                        startIntentSenderForResult(MediaStore.createWriteRequest(getContentResolver(),
+                                needed.subList(0, Math.min(2000, needed.size()))).getIntentSender(),
+                                UPGRADE_ACCESS, null, 0, 0, 0);
+                    } catch (Exception e) { requestingUpgrade = false; quality().error(e); }
+                });
+            } catch (Exception e) { runOnUiThread(() -> requestingUpgrade = false); quality().error(e); }
+        });
+    }
+    private void finishGrant(boolean accepted) {
+        requestingUpgrade = false;
+        String mode = upgradeMode;
+        upgradeMode = null;
+        if (accepted) quality().start("retry".equals(mode)); else quality().permission();
     }
     public void requestReplacementAccess(String path, String address) {
         Uri uri = Uri.parse(address);
@@ -90,15 +151,11 @@ public final class PlayerActivity extends AsukaActivity {
     }
     @Override public void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == UPGRADE_ACCESS) {
+            if (resultCode == RESULT_OK) prepareUpgrade(); else finishGrant(false);
+        }
         if (requestCode == RESTORE_AUDIO) mediaAction(8, resultCode == RESULT_OK ? 1 : 0);
     }
-    public void restoreReplacement(String id, String path) throws IOException {
-        new LegacyAudioReplacement(this).restore(id, path);
-    }
-    public void finishReplacement(String id, String path) throws IOException {
-        new LegacyAudioReplacement(this).finish(id, path);
-    }
-
     public String musicDirectory() {
         return new File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC),
                         "BiliMusic").getAbsolutePath();

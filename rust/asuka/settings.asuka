@@ -1,4 +1,5 @@
 component Preferences {
+  state errorsOpen = false
   Scroll {
     grow: 1
     Column {
@@ -28,6 +29,22 @@ component Preferences {
           selected: if player.themeMode == "DARK" { 2 } else if player.themeMode == "LIGHT" { 1 } else { 0 }
           on change(i) { action("theme", ["SYSTEM", "LIGHT", "DARK"][i]) }
         }
+        if !player.qualityStatus.isEmpty() {
+          Text("已有歌曲音质") { color: .accent; font: .headline }
+          if !player.qualitySummary.isEmpty() { Text(player.qualitySummary) { color: .secondaryLabel; font: .footnote } }
+          if player.qualityFailures {
+            Button(if errorsOpen { "收起失败详情" } else { "查看失败详情" }) { on press { errorsOpen = !errorsOpen } }
+            if errorsOpen { Text(player.qualityErrors) { font: .footnote; color: .secondaryLabel } }
+          }
+          if player.qualityStatus == "running" {
+            Button("暂停升级") { on press { action("quality", "pause") } }
+          } else {
+            Button(if player.qualityStatus == "permission" || player.qualityStatus == "paused" { "继续升级" } else { "升级到最高音质" }) {
+              on press { action("quality", "start") }
+            }
+            if player.qualityFailures { Button("重试失败的歌曲") { on press { action("quality", "retry") } } }
+          }
+        }
         Button("下载设置") { on press { go("downloadSettings") } }
         Text("哔哩音乐 1.6.0") { color: .secondaryLabel; font: .footnote }
       } else {
@@ -55,7 +72,7 @@ component Preferences {
             Stepper { value: player.rateLimit.float(); min: 10; max: 60; on change(v) { action("option", "api_rate_limit_per_minute", "{v.int()}") } }
           }
         }
-        Button("清除封面缓存（{player.cacheSize}）") { on press { action("clearCache") } }
+        Button("清除播放和封面缓存（{player.cacheSize}）") { on press { action("clearCache") } }
         Button("清除冷却记录") { on press { action("clearCooldown") } }
       }
     }

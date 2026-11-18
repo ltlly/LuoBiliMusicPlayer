@@ -40,6 +40,10 @@ struct Player {
   downloadDir: string = ""
   cacheSize: string = ""
   pendingReplacement: bool = false
+  qualityStatus: string = ""
+  qualitySummary: string = ""
+  qualityFailures: bool = false
+  qualityErrors: string = ""
   wifiOnly: bool = false
   rateEnabled: bool = false
   rateLimit: int = 20

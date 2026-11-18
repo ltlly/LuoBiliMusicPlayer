@@ -87,7 +87,7 @@ impl Audio {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct AudioSource {
     pub urls: Vec<String>,
     pub format_id: i64,

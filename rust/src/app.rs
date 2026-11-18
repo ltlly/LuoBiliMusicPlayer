@@ -15,6 +15,14 @@ use std::{
 };
 
 pub(crate) enum Command {
+    Open,
+    #[cfg(target_os = "android")]
+    Quality(
+        crate::quality_android::Request,
+        std::sync::mpsc::Sender<Result<serde_json::Value>>,
+    ),
+    #[cfg(target_os = "android")]
+    QualityControl(String),
     Download(Vec<String>),
     SetDownloadOption(String, i32),
     ClearCache,
@@ -46,6 +54,12 @@ pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_mediaAction(
     action: i32,
     value: i64,
 ) {
+    if action == 12 {
+        let tx = crate::bridge::start_worker();
+        let _ = tx.send(Command::Open);
+        let _ = tx.send(Command::Navigate(Page::Settings));
+        return;
+    }
     if action == 7 {
         PLAYER_VISIBLE.store(value != 0, std::sync::atomic::Ordering::Release);
         if value == 0 {
@@ -140,7 +154,7 @@ impl Application {
             ui.message = "".into();
         });
     }
-    fn events(&mut self, rx: Receiver<Command>) {
+    fn open(&mut self) {
         let theme = self
             .client
             .settings
@@ -166,6 +180,9 @@ impl Application {
             self.error(e);
         }
         self.show_player(true);
+    }
+    fn events(&mut self, rx: Receiver<Command>) {
+        let mut opened = false;
         loop {
             let delay = self
                 .prompt
@@ -175,7 +192,7 @@ impl Application {
                 .or_else(|| self.queue.playing.then_some(Duration::from_millis(250)));
             let delay = [
                 delay,
-                self.downloads.pending.then(|| {
+                (opened && self.downloads.pending).then(|| {
                     self.downloads
                         .next
                         .saturating_duration_since(Instant::now())
@@ -246,6 +263,35 @@ impl Application {
                 }
             };
             let result = match command {
+                Command::Open => {
+                    if !opened {
+                        opened = true;
+                        self.open();
+                    }
+                    Ok(())
+                }
+                #[cfg(target_os = "android")]
+                Command::Quality(request, reply) => {
+                    let updates_player = matches!(
+                        request,
+                        crate::quality_android::Request::Recover
+                            | crate::quality_android::Request::Replace { .. }
+                    );
+                    let result = crate::quality_android::handle(
+                        request,
+                        &mut self.client,
+                        &mut self.library,
+                        &mut self.queue,
+                        &mut self.downloads,
+                    );
+                    let _ = reply.send(result);
+                    if opened && updates_player {
+                        self.show_player(true);
+                    }
+                    Ok(())
+                }
+                #[cfg(target_os = "android")]
+                Command::QualityControl(mode) => crate::android_platform::quality_control(&mode),
                 Command::SetDownloadOption(key, value) => self
                     .client
                     .settings
@@ -314,6 +360,7 @@ impl Application {
                         });
                         Ok(())
                     }),
+                    10 if self.page == Page::Settings => self.quality_state(),
                     7 => {
                         self.show_player(true);
                         Ok(())
@@ -747,6 +794,7 @@ impl Application {
             Page::Settings => {
                 #[cfg(target_os = "android")]
                 {
+                    self.quality_state()?;
                     let pending = crate::android_platform::pending_replacement()?.is_some();
                     self.show(|ui| ui.pending_replacement = pending);
                 }
@@ -761,6 +809,34 @@ impl Application {
             }
             _ => {}
         }
+        Ok(())
+    }
+    #[cfg(target_os = "android")]
+    fn quality_state(&self) -> Result<()> {
+        let state = crate::android_platform::quality_call("state", &serde_json::Value::Null)?;
+        let mut errors = Vec::new();
+        if let Some(items) = state["errors"].as_object() {
+            let mut stmt = self
+                .library
+                .0
+                .prepare("SELECT title FROM songs WHERE id=?1")?;
+            for (id, reason) in items {
+                let title = stmt
+                    .query_row([id], |row| row.get::<_, String>(0))
+                    .unwrap_or_else(|_| id.clone());
+                errors.push(format!(
+                    "{} · {}",
+                    title,
+                    reason.as_str().unwrap_or("无法升级")
+                ));
+            }
+        }
+        self.show(|ui| {
+            ui.quality_errors = errors.join("\n");
+            ui.quality_status = state["status"].as_str().unwrap_or("idle").into();
+            ui.quality_summary = state["summary"].as_str().unwrap_or("").into();
+            ui.quality_failures = state["failed"].as_i64().unwrap_or(0) > 0;
+        });
         Ok(())
     }
     fn scan(&mut self, _force: bool) -> Result<()> {
@@ -873,16 +949,31 @@ impl Application {
         };
         if self.page == Page::Library {
             self.keyword = lower.clone();
-            let rows = self
+            let tracks = self
                 .library
                 .downloaded()?
                 .into_iter()
                 .filter(|t| t.matches(&lower))
+                .collect::<Vec<_>>();
+            #[cfg(target_os = "android")]
+            let labels = crate::android_platform::quality_call(
+                "labels",
+                &serde_json::to_value(tracks.iter().map(|t| &t.uri).collect::<Vec<_>>())?,
+            )?;
+            let rows = tracks
+                .into_iter()
                 .map(|t| {
+                    #[cfg(target_os = "android")]
+                    let detail = labels[&t.uri]
+                        .as_str()
+                        .map(|q| format!("{} · {q}", t.artist))
+                        .unwrap_or(t.artist);
+                    #[cfg(not(target_os = "android"))]
+                    let detail = t.artist;
                     (
                         t.id,
                         t.title,
-                        t.artist,
+                        detail,
                         crate::cover::thumbnail(&t.cover, false),
                     )
                 })

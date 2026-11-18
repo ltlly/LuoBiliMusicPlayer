@@ -65,6 +65,8 @@ pub struct Downloads {
     db: PathBuf,
     running: HashMap<String, thread::JoinHandle<()>>,
     pub pending: bool,
+    #[cfg(target_os = "android")]
+    quality_slot: bool,
     pub next: Instant,
 }
 
@@ -83,11 +85,22 @@ impl Downloads {
         Ok(Self {
             db: path,
             running: HashMap::new(),
+            #[cfg(target_os = "android")]
+            quality_slot: false,
             pending,
             next: Instant::now(),
         })
     }
 
+    #[cfg(target_os = "android")]
+    pub fn quality_slot(&mut self, acquire: bool, limit: usize) -> bool {
+        self.running.retain(|_, job| !job.is_finished());
+        if acquire && (self.quality_slot || self.running.len() >= limit) {
+            return false;
+        }
+        self.quality_slot = acquire;
+        true
+    }
     pub fn wake(&mut self) {
         self.pending = true;
         self.next = Instant::now();
@@ -102,6 +115,8 @@ impl Downloads {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(2)
             .clamp(1, 8);
+        #[cfg(target_os = "android")]
+        let limit = limit.saturating_sub(usize::from(self.quality_slot));
         if self.running.len() >= limit {
             return Ok(());
         }
@@ -166,24 +181,29 @@ impl Downloads {
                 }
             }
         }
-        let urls = if !cfg!(target_os = "android") && !job.supplied.is_empty() {
-            vec![job.supplied]
+        let mut audio = crate::playback::AudioSource {
+            urls: vec![],
+            format_id: 0,
+            bandwidth: 0,
+            rank: 0,
+        };
+        if !cfg!(target_os = "android") && !job.supplied.is_empty() {
+            audio.urls.push(job.supplied);
         } else {
             let known = if cfg!(target_os = "android") {
                 job.cid
             } else {
                 None
             };
-            let (cid, audio, _) = client.resolve_audio(&job.id, known, true)?;
+            let (cid, resolved, _) = client.resolve_audio(&job.id, known, true)?;
             library
                 .0
                 .execute("UPDATE songs SET cid=?2 WHERE id=?1", params![job.id, cid])?;
-            if cfg!(target_os = "android") {
-                audio.urls
-            } else {
-                audio.urls.into_iter().take(1).collect()
+            audio = resolved;
+            if !cfg!(target_os = "android") {
+                audio.urls.truncate(1);
             }
-        };
+        }
         let db = Connection::open(&self.db)?;
         db.busy_timeout(Duration::from_secs(5))?;
         let temp = self.db.parent().context("数据库路径无效")?.to_owned();
@@ -195,7 +215,7 @@ impl Downloads {
                 let id = id.clone();
                 move || {
                     let mut db = db;
-                    if let Err(e) = transfer(&mut db, &id, &urls, &temp, &dir, &name) {
+                    if let Err(e) = transfer(&mut db, &id, &audio, &temp, &dir, &name) {
                         let _ = db.execute("UPDATE downloads SET status='FAILED',errorMessage=?2 WHERE songId=?1 AND status IN ('DOWNLOADING','CONVERTING')", params![id,e.to_string()]);
                     }
                 }
@@ -231,7 +251,7 @@ fn active(db: &Connection, id: &str) -> Result<bool> {
 fn transfer(
     db: &mut Connection,
     id: &str,
-    urls: &[String],
+    audio: &crate::playback::AudioSource,
     temp: &Path,
     dir: &Path,
     name: &str,
@@ -242,7 +262,7 @@ fn transfer(
         .build()
         .into();
     let mut error = anyhow::anyhow!("音频地址为空");
-    for url in urls {
+    for url in &audio.urls {
         if !active(db, id)? {
             return Ok(());
         }
@@ -319,6 +339,19 @@ fn transfer(
             uri
         };
         let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        #[cfg(target_os = "android")]
+        if Path::new(&stored).is_absolute() {
+            let label = match audio.rank {
+                5 => "Hi-Res 无损 · FLAC".into(),
+                4 => "杜比音频 · E-AC-3".into(),
+                _ if audio.bandwidth > 0 => format!("AAC · {} kbps", audio.bandwidth / 1000),
+                _ => "AAC".into(),
+            };
+            crate::android_platform::quality_call(
+                "saveQuality",
+                &serde_json::json!({"path":stored,"label":label,"rank":audio.rank}),
+            )?;
+        }
         complete(&tx, id, &stored, size)?;
         tx.commit()?;
         return Ok(());

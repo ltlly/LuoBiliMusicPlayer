@@ -18,4 +18,7 @@ android {
     sourceSets["main"].res.srcDir("../../app/src/main/res")
 }
 layout.buildDirectory.set(file("../target/asuka/android-gradle"))
-dependencies { implementation("com.bilimusicplayer:bilimusicplayer:1.6.0") }
+dependencies {
+    implementation("com.bilimusicplayer:bilimusicplayer:1.6.0")
+    implementation("androidx.work:work-runtime:2.12.0")
+}

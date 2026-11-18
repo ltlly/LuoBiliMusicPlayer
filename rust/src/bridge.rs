@@ -83,6 +83,10 @@ pub(crate) struct Snapshot {
     pub download_dir: String,
     pub cache_size: String,
     pub pending_replacement: bool,
+    pub quality_status: String,
+    pub quality_summary: String,
+    pub quality_failures: bool,
+    pub quality_errors: String,
     pub wifi_only: bool,
     pub rate_enabled: bool,
     pub rate_limit: i32,
@@ -149,26 +153,31 @@ fn paths() -> Result<(PathBuf, Settings)> {
 
 #[unsafe(no_mangle)]
 extern "C" fn lbm_start() {
-    PLAYER.get_or_init(|| {
-        let view = View::default();
-        let worker = view.clone();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let result = paths().and_then(|(db, settings)| {
-                COVERS.get_or_init(|| {
-                    Mutex::new(crate::cover::Cache::new(crate::cover::legacy_path(&db)))
+    let _ = start_worker().send(Command::Open);
+}
+pub(crate) fn start_worker() -> &'static Sender<Command> {
+    &PLAYER
+        .get_or_init(|| {
+            let view = View::default();
+            let worker = view.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let result = paths().and_then(|(db, settings)| {
+                    COVERS.get_or_init(|| {
+                        Mutex::new(crate::cover::Cache::new(crate::cover::legacy_path(&db)))
+                    });
+                    app::run(db, settings, worker.clone(), rx)
                 });
-                app::run(db, settings, worker.clone(), rx)
+                if let Err(e) = result {
+                    worker.update(|s| {
+                        s.message = e.to_string();
+                        s.login_state = "error".into();
+                    });
+                }
             });
-            if let Err(e) = result {
-                worker.update(|s| {
-                    s.message = e.to_string();
-                    s.login_state = "error".into();
-                });
-            }
-        });
-        Player { view, tx }
-    });
+            Player { view, tx }
+        })
+        .tx
 }
 
 #[unsafe(no_mangle)]
@@ -214,6 +223,8 @@ fn command(name: &str, arg: &str, value: &str) -> Option<Command> {
         "retry" => Command::Retry,
         #[cfg(target_os = "android")]
         "recoverAudio" => Command::RecoverAudio,
+        #[cfg(target_os = "android")]
+        "quality" => Command::QualityControl(arg.into()),
         "account" => Command::Account,
         "logout" => Command::Logout,
         "clearCache" => Command::ClearCache,
