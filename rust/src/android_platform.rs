@@ -88,9 +88,6 @@ pub fn can_download(wifi_only: bool) -> Result<bool> {
         .z()
     })
 }
-pub fn request_music_access() -> Result<()> {
-    activity(|env, ctx| env.call_method(ctx, "requestMusicAccess", "()V", &[])?.v())
-}
 pub fn music_directory() -> Result<PathBuf> {
     activity(|env, ctx| {
         let path = JString::from(

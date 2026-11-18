@@ -13,7 +13,6 @@ import android.media.MediaCodecList;
 import android.media.MediaCodecInfo;
 import android.net.ConnectivityManager;
 import android.net.Uri;
-import android.os.Build;
 import android.os.Environment;
 import android.provider.MediaStore;
 import java.io.File;
@@ -57,7 +56,7 @@ public final class PlayerActivity extends AsukaActivity {
         unbindActivity();
     }
     public boolean requestLibraryAccess() {
-        String permission = Build.VERSION.SDK_INT >= 33 ? Manifest.permission.READ_MEDIA_AUDIO : Manifest.permission.READ_EXTERNAL_STORAGE;
+        String permission = Manifest.permission.READ_MEDIA_AUDIO;
         if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return true;
         runOnUiThread(() -> requestPermissions(new String[]{permission}, 2));
         return false;
@@ -73,19 +72,8 @@ public final class PlayerActivity extends AsukaActivity {
     }
 
     public boolean canDownload(boolean wifiOnly) {
-        if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                != PackageManager.PERMISSION_GRANTED) {
-            return false;
-        }
         ConnectivityManager manager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
         return manager.getActiveNetwork() != null && (!wifiOnly || !manager.isActiveNetworkMetered());
-    }
-
-    public void requestMusicAccess() {
-        if (Build.VERSION.SDK_INT < 29 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE)
-                != PackageManager.PERMISSION_GRANTED) {
-            runOnUiThread(() -> requestPermissions(new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, 1));
-        }
     }
 
     public boolean supportsDolby() {
@@ -98,9 +86,7 @@ public final class PlayerActivity extends AsukaActivity {
         return false;
     }
 
-    // Before scoped storage, Rust can publish the completed file by an atomic rename.
     public String publishTrack(String source, String name) throws IOException {
-        if (Build.VERSION.SDK_INT < 29) return "";
         ContentValues values = new ContentValues();
         values.put(MediaStore.Audio.Media.DISPLAY_NAME, name);
         values.put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4");

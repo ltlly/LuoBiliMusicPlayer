@@ -391,8 +391,6 @@ impl Application {
         Ok(())
     }
     fn enqueue(&mut self, media: &[Media]) -> Result<()> {
-        #[cfg(target_os = "android")]
-        crate::android_platform::request_music_access()?;
         let count = crate::download::enqueue(&mut self.library, media)?;
         self.downloads.wake();
         self.show(move |ui| ui.message = format!("已加入下载队列：{count} 首"));
