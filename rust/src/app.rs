@@ -1,0 +1,1128 @@
+use crate::{
+    api::{Client, now_ms},
+    database::{Library, Media},
+    settings::Settings,
+};
+use anyhow::{Context, Result};
+use qrcode::{Color, QrCode};
+use slint::{ComponentHandle, Model, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    rc::Rc,
+    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    thread,
+    time::{Duration, Instant},
+};
+
+slint::slint! { #[edition = "1.19"] export {PlayerWindow,Entry,Page,Transport} from "../ui/window.slint";}
+
+enum Command {
+    Download(Vec<String>),
+    SetDownloadOption(String, i32),
+    ClearCache,
+    ClearCooldown,
+    DownloadsTab(i32),
+    DownloadAction(String, String),
+    Account,
+    Logout,
+    #[cfg(target_os = "android")]
+    AndroidAction(i32, i64),
+    Retry,
+    Transport(Transport, i32),
+    Seek(f32),
+    Navigate(Page),
+    Choose(String, String),
+    More,
+    Search(String),
+    Theme(String),
+}
+#[cfg(target_os = "android")]
+static PLAYER_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+#[cfg(target_os = "android")]
+static ANDROID_COMMANDS: std::sync::Mutex<Option<Sender<Command>>> = std::sync::Mutex::new(None);
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_mediaAction(
+    _: jni::JNIEnv,
+    _: jni::objects::JClass,
+    action: i32,
+    value: i64,
+) {
+    if action == 7 {
+        PLAYER_VISIBLE.store(value != 0, std::sync::atomic::Ordering::Release);
+        if value == 0 {
+            return;
+        }
+    }
+    if let Ok(sender) = ANDROID_COMMANDS.lock()
+        && let Some(sender) = sender.as_ref()
+    {
+        let _ = sender.send(Command::AndroidAction(action, value));
+    }
+}
+type Rows = Vec<(String, String, String, String)>;
+
+#[cfg(target_os = "windows")]
+fn platform_font() -> Result<String> {
+    let mut fonts = i_slint_common::sharedfontique::system_collection(false);
+    let selected = [
+        "Microsoft YaHei UI",
+        "Microsoft YaHei",
+        "Noto Sans CJK SC",
+        "SimSun",
+        "Segoe UI",
+        "Arial",
+        "Tahoma",
+    ]
+    .into_iter()
+    .find(|family| fonts.family_id(family).is_some())
+    .map(str::to_owned)
+    .or_else(|| fonts.family_names().next().map(str::to_owned))
+    .context("系统未提供可用字体")?;
+    Ok(selected)
+}
+#[cfg(not(target_os = "windows"))]
+fn platform_font() -> Result<String> {
+    Ok(if cfg!(target_os = "macos") {
+        "PingFang SC"
+    } else {
+        "Noto Sans CJK SC"
+    }
+    .to_owned())
+}
+
+pub fn run(db: PathBuf, settings: Settings) -> Result<()> {
+    let family = platform_font()?;
+    let ui = PlayerWindow::new()?;
+    ui.set_app_font(family.into());
+    #[cfg(not(target_os = "android"))]
+    ui.window().set_size(slint::LogicalSize::new(1100., 760.));
+    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
+    let (tx, rx) = mpsc::channel();
+    #[cfg(target_os = "android")]
+    {
+        *ANDROID_COMMANDS.lock().unwrap() = Some(tx.clone());
+    }
+    bind(&ui, &tx);
+    bind_covers(&ui, &db);
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let startup = (|| -> Result<()> {
+            let queue = crate::queue::Queue::restore(&settings)?;
+            let library = Library::open(&db)?;
+            let cache_dir = crate::cover::legacy_path(&db);
+            let downloads = crate::download::Downloads::open(&library, db)?;
+            let mut app = Application {
+                cache_dir,
+                downloads,
+                downloads_tab: 0,
+                queue,
+                ui: weak.clone(),
+                client: Client::new(settings)?,
+                library,
+                page: Page::Login,
+                folder: 0,
+                title: String::new(),
+                items: vec![],
+                total: 0,
+                page_number: 1,
+                folder_total: 0,
+                keyword: String::new(),
+                prompt: None,
+                filling: None,
+            };
+            app.events(rx);
+            Ok(())
+        })();
+        if let Err(e) = startup {
+            let msg = e.to_string();
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                w.set_login_state("error".into());
+                w.set_message(msg.into());
+            });
+        }
+    });
+    let result = ui.run();
+    #[cfg(target_os = "android")]
+    {
+        ANDROID_COMMANDS.lock().unwrap().take();
+    }
+    Ok(result?)
+}
+
+fn bind_covers(ui: &PlayerWindow, db: &std::path::Path) {
+    let legacy = crate::cover::legacy_path(db);
+    let (tx, rx) = mpsc::channel::<String>();
+    let outstanding = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
+    let active = outstanding.clone();
+    let weak = ui.as_weak();
+    thread::spawn(move || {
+        let cache = crate::cover::Cache::new(legacy);
+        for url in rx {
+            let result = cache.load(&url);
+            let pending = active.clone();
+            let _ = weak.upgrade_in_event_loop(move |ui| {
+                pending.lock().unwrap().remove(&url);
+                let Some(image) = result
+                    .ok()
+                    .and_then(|p| slint::Image::load_from_path(&p).ok())
+                else {
+                    return;
+                };
+                if ui.get_small_cover_url().as_str() == url {
+                    ui.set_small_cover(image.clone());
+                }
+                if ui.get_large_cover_url().as_str() == url {
+                    ui.set_large_cover(image.clone());
+                }
+                let rows = ui.get_entries();
+                for i in 0..rows.row_count() {
+                    if let Some(mut r) = rows.row_data(i)
+                        && r.cover_url.as_str() == url
+                    {
+                        r.cover = image.clone();
+                        rows.set_row_data(i, r);
+                    }
+                }
+            });
+        }
+    });
+    ui.on_need_cover(move |url| {
+        let url = url.to_string();
+        if !url.is_empty() && outstanding.lock().unwrap().insert(url.clone()) {
+            let _ = tx.send(url);
+        }
+    });
+}
+
+fn bind(ui: &PlayerWindow, tx: &Sender<Command>) {
+    let sender = tx.clone();
+    ui.on_set_download_option(move |k, v| {
+        let _ = sender.send(Command::SetDownloadOption(k.into(), v));
+    });
+    let sender = tx.clone();
+    ui.on_clear_cache(move || {
+        let _ = sender.send(Command::ClearCache);
+    });
+    let sender = tx.clone();
+    ui.on_clear_cooldown(move || {
+        let _ = sender.send(Command::ClearCooldown);
+    });
+    let sender = tx.clone();
+    let weak = ui.as_weak();
+    ui.on_select_media({
+        let weak = weak.clone();
+        move |id, mode| {
+            let Some(ui) = weak.upgrade() else { return };
+            let model = ui.get_entries();
+            let mut count = 0;
+            for i in 0..model.row_count() {
+                if let Some(mut row) = model.row_data(i) {
+                    let selected = match mode {
+                        1 => true,
+                        2 => false,
+                        _ if row.key == id => !row.selected,
+                        _ => row.selected,
+                    };
+                    if selected != row.selected {
+                        row.selected = selected;
+                        model.set_row_data(i, row);
+                    }
+                    count += i32::from(selected);
+                }
+            }
+            ui.set_selected_count(count);
+        }
+    });
+    ui.on_download(move || {
+        let Some(ui) = weak.upgrade() else { return };
+        let ids = if ui.get_selecting() {
+            let ids: Vec<_> = ui
+                .get_entries()
+                .iter()
+                .filter(|r| r.selected)
+                .map(|r| r.key.to_string())
+                .collect();
+            if ids.is_empty() {
+                return;
+            }
+            ids
+        } else {
+            vec![]
+        };
+        ui.set_selecting(false);
+        ui.invoke_select_media("".into(), 2);
+        let _ = sender.send(Command::Download(ids));
+    });
+    let sender = tx.clone();
+    ui.on_downloads_tab(move |tab| {
+        let _ = sender.send(Command::DownloadsTab(tab));
+    });
+    let sender = tx.clone();
+    ui.on_download_action(move |id, action| {
+        let _ = sender.send(Command::DownloadAction(id.into(), action.into()));
+    });
+    let sender = tx.clone();
+    ui.on_account_status(move || {
+        let _ = sender.send(Command::Account);
+    });
+    let sender = tx.clone();
+    ui.on_logout(move || {
+        let _ = sender.send(Command::Logout);
+    });
+    let sender = tx.clone();
+    ui.on_retry(move || {
+        let _ = sender.send(Command::Retry);
+    });
+    let sender = tx.clone();
+    ui.on_navigate(move |p| {
+        let _ = sender.send(Command::Navigate(p));
+    });
+    let sender = tx.clone();
+    ui.on_choose(move |k, t| {
+        let _ = sender.send(Command::Choose(k.into(), t.into()));
+    });
+    let sender = tx.clone();
+    ui.on_more(move || {
+        let _ = sender.send(Command::More);
+    });
+    let sender = tx.clone();
+    ui.on_theme(move |t| {
+        let _ = sender.send(Command::Theme(t.into()));
+    });
+    let sender = tx.clone();
+    let controls = tx.clone();
+    ui.on_transport(move |a, i| {
+        let _ = controls.send(Command::Transport(a, i));
+    });
+    let seeker = tx.clone();
+    ui.on_seek(move |pos| {
+        let _ = seeker.send(Command::Seek(pos));
+    });
+    let timer = slint::Timer::default();
+    ui.on_search(move |s| {
+        let tx = sender.clone();
+        timer.start(
+            slint::TimerMode::SingleShot,
+            Duration::from_millis(400),
+            move || {
+                let _ = tx.send(Command::Search(s.to_string()));
+            },
+        );
+    });
+}
+
+struct Prompt {
+    code: String,
+    expires: Instant,
+    next: Instant,
+}
+struct Application {
+    cache_dir: PathBuf,
+    downloads: crate::download::Downloads,
+    downloads_tab: i32,
+    queue: crate::queue::Queue,
+    ui: slint::Weak<PlayerWindow>,
+    client: Client,
+    library: Library,
+    page: Page,
+    folder: i64,
+    title: String,
+    items: Vec<Media>,
+    page_number: usize,
+    folder_total: usize,
+    total: usize,
+    keyword: String,
+    prompt: Option<Prompt>,
+    filling: Option<crate::folder_queue::FolderQueue>,
+}
+
+impl Application {
+    fn show(&self, update: impl FnOnce(PlayerWindow) + Send + 'static) {
+        let _ = self.ui.upgrade_in_event_loop(update);
+    }
+    fn entries(&self, rows: Rows, more: bool) {
+        self.show(move |ui| {
+            let rows = rows
+                .into_iter()
+                .map(|(key, title, detail, cover)| Entry {
+                    cover_url: cover.into(),
+                    cover: Default::default(),
+                    selected: false,
+                    status: Default::default(),
+                    key: key.into(),
+                    title: title.into(),
+                    detail: detail.into(),
+                })
+                .collect::<Vec<_>>();
+            ui.set_selecting(false);
+            ui.set_selected_count(0);
+            ui.set_entries(ModelRc::from(Rc::new(VecModel::from(rows))));
+            ui.set_has_more(more);
+            ui.set_message("".into());
+        });
+    }
+    fn events(&mut self, rx: Receiver<Command>) {
+        let theme = self
+            .client
+            .settings
+            .get("theme_mode")
+            .unwrap_or("SYSTEM")
+            .to_owned();
+        self.show(move |ui| ui.set_theme_mode(theme.into()));
+        let _ = self.client.ensure_buvid();
+        if self
+            .client
+            .settings
+            .get("access_token")
+            .is_some_and(|s| !s.is_empty())
+        {
+            let _ = self.client.user_info();
+        }
+        let init = if self.client.logged_in() {
+            self.after_login()
+        } else {
+            self.qr()
+        };
+        if let Err(e) = init {
+            self.error(e);
+        }
+        self.show_player(true);
+        loop {
+            let delay = self
+                .prompt
+                .as_ref()
+                .map(|p| p.next.saturating_duration_since(Instant::now()))
+                .or_else(|| self.filling.as_ref().map(|_| Duration::ZERO))
+                .or_else(|| self.queue.playing.then_some(Duration::from_millis(250)));
+            let delay = [
+                delay,
+                self.downloads.pending.then(|| {
+                    self.downloads
+                        .next
+                        .saturating_duration_since(Instant::now())
+                }),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            let command = if let Some(delay) = delay {
+                match rx.recv_timeout(delay) {
+                    Ok(c) => c,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                    Err(RecvTimeoutError::Timeout) => {
+                        if self.downloads.pending && self.downloads.next <= Instant::now() {
+                            if let Err(e) = self.downloads.tick(&mut self.client, &mut self.library)
+                            {
+                                self.error(e);
+                            }
+                            if self.page == Page::Downloads
+                                && let Err(e) = self.download_entries()
+                            {
+                                self.error(e);
+                            }
+                        }
+                        let before = (self.queue.index, self.queue.playing, self.queue.duration);
+                        let filling = self.filling.is_some() && self.prompt.is_none();
+                        if filling {
+                            if let Some(mut job) = self.filling.take() {
+                                match job.step(
+                                    &mut self.client,
+                                    &mut self.library,
+                                    &mut self.queue.tracks,
+                                ) {
+                                    Ok(false) => self.filling = Some(job),
+                                    Ok(true) => {}
+                                    Err(e) => self.error(e),
+                                }
+                            }
+                            if let Err(e) = self.queue.save(&mut self.client.settings) {
+                                self.error(e);
+                            }
+                        }
+                        let result = if self
+                            .prompt
+                            .as_ref()
+                            .is_some_and(|p| p.next <= Instant::now())
+                        {
+                            self.poll()
+                        } else {
+                            self.queue.tick(&mut self.client, &self.library)
+                        };
+                        if let Err(e) = result {
+                            self.queue.playing = false;
+                            self.error(e);
+                        }
+                        self.show_player(
+                            filling
+                                || before
+                                    != (self.queue.index, self.queue.playing, self.queue.duration),
+                        );
+                        continue;
+                    }
+                }
+            } else {
+                match rx.recv() {
+                    Ok(cmd) => cmd,
+                    Err(_) => break,
+                }
+            };
+            let result = match command {
+                Command::SetDownloadOption(key, value) => self.client.settings.update(|v| {
+                    let setting = match key.as_str() {
+                        "wifi_only" | "api_rate_limit_enabled" => (value != 0).to_string(),
+                        "api_rate_limit_per_minute" => value.clamp(10, 60).to_string(),
+                        "max_concurrent_downloads" => value.clamp(1, 8).to_string(),
+                        _ => return,
+                    };
+                    v.insert(key, setting);
+                }),
+                Command::ClearCooldown => self.client.settings.update(|v| {
+                    for key in ["gate_level", "gate_last", "gate_cooldown"] {
+                        v.insert(key.into(), "0".into());
+                    }
+                }),
+                Command::ClearCache => self.download_settings(true),
+                Command::Download(ids) if self.page == Page::Content => {
+                    let selected: HashSet<_> = ids.into_iter().collect();
+                    let media = self
+                        .items
+                        .iter()
+                        .filter(|m| selected.is_empty() || selected.contains(&m.bvid))
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    self.enqueue(&media)
+                }
+                Command::Download(_) => Ok(()),
+                Command::DownloadsTab(tab) => {
+                    self.downloads_tab = tab;
+                    self.navigate(Page::Downloads, false)
+                }
+                Command::DownloadAction(id, action) => self.download_action(&id, &action),
+                #[cfg(target_os = "android")]
+                Command::AndroidAction(action, value) => match action {
+                    1 if !self.queue.playing => self.transport(Transport::Toggle, 0),
+                    2 if self.queue.playing => self.transport(Transport::Toggle, 0),
+                    3 => self.transport(Transport::Next, 0),
+                    4 => self.transport(Transport::Previous, 0),
+                    5 => self
+                        .queue
+                        .seek(value, &mut self.client.settings)
+                        .map(|()| self.show_player(true)),
+                    7 => {
+                        self.show_player(true);
+                        Ok(())
+                    }
+                    6 if self.page == Page::Library => self.navigate(Page::Library, false),
+                    _ => Ok(()),
+                },
+                Command::Account => {
+                    let text = self
+                        .client
+                        .account_status()
+                        .unwrap_or_else(|e| format!("暂时无法检查：{e}"));
+                    self.show(move |ui| ui.set_account_detail(text.into()));
+                    Ok(())
+                }
+                Command::Logout => self
+                    .client
+                    .logout()
+                    .and_then(|()| self.navigate(Page::Login, false))
+                    .and_then(|()| self.qr()),
+                Command::Navigate(p) => self.navigate(p, false),
+                Command::Retry if self.page == Page::Login => self.qr(),
+                Command::Retry => self.navigate(self.page, true),
+                Command::Choose(key, title) if self.page == Page::Favorites => {
+                    self.open_folder(&key, &title)
+                }
+                Command::Choose(key, _) if matches!(self.page, Page::Library | Page::Content) => {
+                    self.play_row(&key)
+                }
+                Command::Choose(_, _) => Ok(()),
+                Command::Transport(a, i) => self.transport(a, i),
+                Command::Seek(pos) => {
+                    let result = self
+                        .queue
+                        .seek((pos * 1000.) as i64, &mut self.client.settings);
+                    self.show_player(false);
+                    result
+                }
+                Command::Search(s) if matches!(self.page, Page::Content | Page::Library) => {
+                    self.search(s.trim())
+                }
+                Command::Search(s) if self.page == Page::Downloads => {
+                    self.keyword = s.trim().to_lowercase();
+                    self.download_entries()
+                }
+                Command::Search(_) => Ok(()),
+                Command::More if self.page == Page::Content && self.items.len() < self.total => {
+                    self.load_more()
+                }
+                Command::More => Ok(()),
+                Command::Theme(s) => self
+                    .client
+                    .settings
+                    .update(|v| {
+                        v.insert("theme_mode".into(), s.clone());
+                    })
+                    .map(|()| self.show(move |ui| ui.set_theme_mode(s.into()))),
+            };
+            if let Err(e) = result {
+                self.error(e);
+            }
+        }
+    }
+    fn download_settings(&self, clear: bool) -> Result<()> {
+        let dir = crate::download::directory(&self.client)?
+            .to_string_lossy()
+            .into_owned();
+        let prefs = &self.client.settings;
+        let wifi = prefs.get("wifi_only") == Some("true");
+        let enabled = prefs.get("api_rate_limit_enabled") == Some("true");
+        let limit = prefs
+            .get("api_rate_limit_per_minute")
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(20)
+            .clamp(10, 60);
+        let concurrent = prefs
+            .get("max_concurrent_downloads")
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(2)
+            .clamp(1, 8);
+        let size = crate::cover::cache_size(&self.cache_dir, clear)?;
+        let size = if size >= 1 << 20 {
+            format!("{:.2} MB", size as f64 / 1048576.)
+        } else if size >= 1024 {
+            format!("{:.2} KB", size as f64 / 1024.)
+        } else {
+            format!("{size} B")
+        };
+        self.show(move |ui| {
+            ui.set_download_dir(dir.into());
+            ui.set_cache_size(size.into());
+            ui.set_wifi_only(wifi);
+            ui.set_rate_enabled(enabled);
+            ui.set_rate_limit(limit);
+            ui.set_concurrent(concurrent);
+        });
+        Ok(())
+    }
+    fn enqueue(&mut self, media: &[Media]) -> Result<()> {
+        #[cfg(target_os = "android")]
+        crate::android_platform::request_music_access()?;
+        let count = crate::download::enqueue(&mut self.library, media)?;
+        self.downloads.wake();
+        self.show(move |ui| ui.set_message(format!("已加入下载队列：{count} 首").into()));
+        Ok(())
+    }
+    fn download_entries(&self) -> Result<()> {
+        let rows = crate::download::rows(&self.library, self.downloads_tab, &self.keyword)?;
+        self.show(move |ui| {
+            let rows = rows
+                .into_iter()
+                .map(|(id, title, detail, status)| Entry {
+                    key: id.into(),
+                    title: title.into(),
+                    detail: detail.into(),
+                    status: status.into(),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
+            ui.set_entries(ModelRc::from(Rc::new(VecModel::from(rows))));
+        });
+        Ok(())
+    }
+    fn download_action(&mut self, id: &str, action: &str) -> Result<()> {
+        let sql = match action {
+            "cancel" => {
+                "UPDATE downloads SET status='CANCELLED' WHERE songId=?1 AND status IN ('QUEUED','DOWNLOADING')"
+            }
+            "retry" => {
+                "UPDATE downloads SET status='QUEUED',progress=0,downloadedBytes=0,errorMessage=NULL WHERE songId=?1 AND status IN ('FAILED','CANCELLED','PAUSED')"
+            }
+            "delete" => {
+                "DELETE FROM downloads WHERE songId=?1 AND status IN ('COMPLETED','FAILED','CANCELLED')"
+            }
+            _ => return Ok(()),
+        };
+        self.library.0.execute(sql, [id])?;
+        self.downloads.wake();
+        self.download_entries()
+    }
+    fn show_player(&self, with_queue: bool) {
+        let track = self.queue.tracks.get(self.queue.index);
+        let raw = track.map_or("", |t| t.cover.as_str());
+        let small = crate::cover::thumbnail(raw, false);
+        let large = crate::cover::thumbnail(raw, true);
+        let local = track.is_some_and(|t| {
+            t.uri.starts_with("file:")
+                || t.uri.starts_with("content:")
+                || std::path::Path::new(&t.uri).is_absolute()
+        });
+        let title = track.map_or("", |t| t.title.as_str()).to_owned();
+        let artist = track.map_or("", |t| t.artist.as_str()).to_owned();
+        let rows = with_queue.then(|| {
+            self.queue
+                .tracks
+                .iter()
+                .map(|t| (t.title.clone(), t.artist.clone()))
+                .collect::<Vec<_>>()
+        });
+        let (playing, pos, duration, index, repeat, shuffle) = (
+            self.queue.playing,
+            self.queue.position,
+            self.queue.duration,
+            self.queue.index,
+            self.queue.repeat,
+            self.queue.shuffle,
+        );
+        #[cfg(target_os = "android")]
+        if with_queue {
+            if let Err(e) =
+                crate::android_platform::playback_changed(&title, &artist, playing, pos, duration)
+            {
+                self.error(e);
+            }
+        }
+        #[cfg(target_os = "android")]
+        if !PLAYER_VISIBLE.load(std::sync::atomic::Ordering::Acquire) {
+            return;
+        }
+        self.show(move |ui| {
+            if ui.get_small_cover_url() != small.as_str() {
+                ui.set_small_cover(Default::default());
+                ui.set_small_cover_url(small.into());
+            }
+            if ui.get_large_cover_url() != large.as_str() {
+                ui.set_large_cover(Default::default());
+                ui.set_large_cover_url(large.into());
+            }
+            ui.set_local_track(local);
+            ui.set_track_title(title.into());
+            ui.set_artist(artist.into());
+            ui.set_playing(playing);
+            ui.set_position(pos as f32 / 1000.);
+            ui.set_duration(duration as f32 / 1000.);
+            ui.set_queue_index(index as i32);
+            ui.set_repeat_mode(repeat);
+            ui.set_shuffle(shuffle);
+            if let Some(rows) = rows {
+                let entries = rows
+                    .into_iter()
+                    .map(|(title, detail)| Entry {
+                        selected: false,
+                        status: Default::default(),
+                        key: "".into(),
+                        cover_url: "".into(),
+                        cover: Default::default(),
+                        title: title.into(),
+                        detail: detail.into(),
+                    })
+                    .collect::<Vec<_>>();
+                ui.set_queue(ModelRc::from(Rc::new(VecModel::from(entries))));
+            }
+        });
+    }
+    fn play_row(&mut self, key: &str) -> Result<()> {
+        use crate::playback::Track;
+        let rows = if self.page == Page::Library {
+            self.library
+                .downloaded()?
+                .into_iter()
+                .filter(|t| t.matches(&self.keyword))
+                .collect()
+        } else {
+            self.items.iter().map(Track::from_media).collect::<Vec<_>>()
+        };
+        let index = rows
+            .iter()
+            .position(|t| t.id == key)
+            .context("未找到所选歌曲")?;
+        self.filling = None;
+        let index = if self.page == Page::Content && !self.keyword.is_empty() {
+            if let Some(existing) = self.queue.tracks.iter().position(|track| track.id == key) {
+                existing
+            } else {
+                self.queue.tracks.push(rows[index].clone());
+                self.queue.tracks.len() - 1
+            }
+        } else {
+            if self.page == Page::Content && rows.len() < self.total {
+                self.filling = Some(crate::folder_queue::FolderQueue::new(
+                    self.folder,
+                    self.total,
+                    key.into(),
+                ));
+            }
+            self.queue.tracks = rows;
+            index
+        };
+        let result = self.queue.play(index, 0, &mut self.client, &self.library);
+        self.show_player(true);
+        result
+    }
+    fn transport(&mut self, a: Transport, i: i32) -> Result<()> {
+        if matches!(a, Transport::Clear | Transport::Remove) {
+            self.filling = None;
+        }
+        let q = &mut self.queue;
+        let c = &mut self.client;
+        let lib = &self.library;
+        let result = match a {
+            Transport::Toggle => q.toggle(c, lib),
+            Transport::Next => q.skip(1, c, lib),
+            Transport::Previous => q.skip(-1, c, lib),
+            Transport::Jump => q.play(i as usize, 0, c, lib),
+            Transport::Remove => q.remove(i as usize, c, lib),
+            Transport::Clear => q.clear(&mut c.settings),
+            Transport::Repeat => {
+                q.repeat = match q.repeat {
+                    0 => 2,
+                    2 => 1,
+                    _ => 0,
+                };
+                q.save(&mut c.settings)
+            }
+            Transport::Shuffle => {
+                q.shuffle = !q.shuffle;
+                q.save(&mut c.settings)
+            }
+        };
+        self.show_player(true);
+        result
+    }
+    fn error(&self, e: anyhow::Error) {
+        let is_login = self.page == Page::Login;
+        let msg = e.to_string();
+        self.show(move |ui| {
+            ui.set_message(msg.into());
+            if is_login {
+                ui.set_login_state("error".into());
+            }
+        });
+    }
+    fn qr(&mut self) -> Result<()> {
+        self.prompt = None;
+        self.show(|ui| ui.set_login_state("generating".into()));
+        let (url, code) = self.client.start_qr()?;
+        let qr = QrCode::new(url.as_bytes())?;
+        self.show(move |ui| {
+            let width = qr.width();
+            let mut image = SharedPixelBuffer::<Rgb8Pixel>::new(width as u32, width as u32);
+            for (index, pixel) in image.make_mut_slice().iter_mut().enumerate() {
+                let c = if qr[(index % width, index / width)] == Color::Dark {
+                    0
+                } else {
+                    255
+                };
+                *pixel = Rgb8Pixel::new(c, c, c);
+            }
+            ui.set_qr(slint::Image::from_rgb8(image));
+            ui.set_login_state("waiting".into());
+        });
+        let now = Instant::now();
+        self.prompt = Some(Prompt {
+            code,
+            expires: now + Duration::from_secs(180),
+            next: now + Duration::from_secs(4),
+        });
+        Ok(())
+    }
+    fn poll(&mut self) -> Result<()> {
+        let p = self.prompt.as_mut().context("缺少二维码")?;
+        if Instant::now() >= p.expires {
+            self.prompt = None;
+            self.show(|ui| {
+                ui.set_login_state("expired".into());
+                ui.set_message("二维码已过期".into());
+            });
+        } else if self.client.poll_qr(&p.code).unwrap_or(false) {
+            self.prompt = None;
+            thread::sleep(Duration::from_secs(1));
+            let _ = self.client.user_info();
+            self.after_login()?;
+        } else {
+            p.next = Instant::now() + Duration::from_secs(4);
+        }
+        Ok(())
+    }
+    fn after_login(&mut self) -> Result<()> {
+        let folder = self
+            .client
+            .settings
+            .get("last_folder_id")
+            .and_then(|s| s.parse::<i64>().ok());
+        if let (Some(id), Some(title)) = (folder, self.client.settings.get("last_folder_title")) {
+            self.folder = id;
+            self.title = title.to_owned();
+            self.navigate(Page::Content, false)
+        } else {
+            self.navigate(Page::Favorites, false)
+        }
+    }
+    fn navigate(&mut self, p: Page, force: bool) -> Result<()> {
+        self.page = p;
+        self.keyword.clear();
+        self.items.clear();
+        self.total = 0;
+        self.folder_total = 0;
+        self.page_number = 1;
+        let title = self.title.clone();
+        self.show(move |ui| {
+            ui.set_page(p);
+            ui.set_entries(ModelRc::default());
+            ui.set_message("".into());
+            ui.set_has_more(false);
+            ui.set_selecting(false);
+            ui.set_selected_count(0);
+            ui.set_query("".into());
+            ui.set_searching(false);
+            ui.set_folder_title(title.into());
+        });
+        match p {
+            Page::Favorites => {
+                let mid = self
+                    .client
+                    .settings
+                    .get("user_id")
+                    .and_then(|s| s.parse().ok())
+                    .filter(|id| *id != 0)
+                    .context("请先登录")?;
+                let cached = self.library.folders()?;
+                let warm = !force && !cached.is_empty();
+                if warm {
+                    self.folder_entries(cached);
+                    if self
+                        .library
+                        .last_folder_update()?
+                        .is_some_and(|last| now_ms() - last <= 300_000)
+                    {
+                        return Ok(());
+                    }
+                }
+                let folders = match self.client.folders(mid) {
+                    Ok(v) => v,
+                    Err(_) if warm => return Ok(()),
+                    Err(e) => return Err(e),
+                };
+                self.library.store_folders(&folders, now_ms())?;
+                self.folder_entries(folders);
+            }
+            Page::Content => {
+                self.items = self.library.media(self.folder)?;
+                self.media_entries();
+                let cached = std::mem::take(&mut self.items);
+                match self.client.folder_page(self.folder, 1, None) {
+                    Ok((mut fresh, total)) => {
+                        self.library.store_media(self.folder, &fresh, 0, now_ms())?;
+                        fresh.extend(cached.into_iter().skip(20));
+                        self.items = unique(fresh);
+                        self.total = total;
+                        self.folder_total = total;
+                    }
+                    Err(_) if !cached.is_empty() => self.items = cached,
+                    Err(e) => return Err(e),
+                }
+                self.page_number = self.items.len().div_ceil(20).max(1);
+                self.media_entries();
+            }
+            Page::DownloadSettings => self.download_settings(false)?,
+            Page::Downloads => self.download_entries()?,
+            Page::Library => {
+                self.search("")?;
+                self.scan(force)?;
+            }
+            Page::Settings => {
+                let user = match self.client.settings.get("username") {
+                    Some(name) => format!(
+                        "已登录: {name} (UID: {})",
+                        self.client.settings.get("user_id").unwrap_or("")
+                    ),
+                    None => "未登录".into(),
+                };
+                self.show(move |ui| ui.set_account(user.into()));
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    fn scan(&mut self, _force: bool) -> Result<()> {
+        #[cfg(target_os = "android")]
+        {
+            if !crate::android_platform::request_library_access()? {
+                return Ok(());
+            }
+            let needs=self.library.0.query_row("SELECT NOT EXISTS(SELECT 1 FROM cached_favorite_medias) OR (SELECT COUNT(*) FROM songs WHERE id LIKE 'local_%' AND isDownloaded=1)>10",[],|r|r.get::<_,bool>(0))?;
+            if (_force || needs)
+                && let Some(mid) = self
+                    .client
+                    .settings
+                    .get("user_id")
+                    .and_then(|s| s.parse().ok())
+                && let Ok(folders) = self.client.folders(mid)
+            {
+                for folder in folders {
+                    let mut job =
+                        crate::folder_queue::FolderQueue::new(folder.id, 0, String::new());
+                    let mut tracks = vec![];
+                    while matches!(
+                        job.step(&mut self.client, &mut self.library, &mut tracks),
+                        Ok(false)
+                    ) {
+                        thread::sleep(Duration::from_millis(500));
+                    }
+                }
+            }
+        }
+        let dir = crate::download::directory(&self.client)?;
+        let count =
+            crate::library_scan::scan(&mut self.library, &dir, cfg!(target_os = "android"))?;
+        self.search("")?;
+        if _force {
+            self.show(move |ui| {
+                ui.set_message(if count == 0 {
+                    "未找到新的本地文件".into()
+                } else {
+                    format!("已恢复 {count} 首本地歌曲").into()
+                })
+            });
+        }
+        Ok(())
+    }
+    fn folder_entries(&self, folders: Vec<crate::database::Folder>) {
+        self.entries(
+            folders
+                .into_iter()
+                .map(|f| {
+                    (
+                        f.id.to_string(),
+                        f.title,
+                        format!("{} 首音频", f.media_count),
+                        crate::cover::thumbnail(f.cover.as_deref().unwrap_or(""), true),
+                    )
+                })
+                .collect(),
+            false,
+        );
+    }
+    fn open_folder(&mut self, key: &str, title: &str) -> Result<()> {
+        self.folder = key.parse()?;
+        self.title = title.into();
+        self.client.settings.update(|v| {
+            v.insert("last_folder_id".into(), key.into());
+            v.insert("last_folder_title".into(), title.into());
+        })?;
+        self.navigate(Page::Content, false)
+    }
+    fn media_entries(&self) {
+        self.entries(
+            self.items
+                .iter()
+                .map(|m| {
+                    (
+                        m.bvid.clone(),
+                        m.title.clone(),
+                        m.artist().into(),
+                        crate::cover::thumbnail(&m.cover, false),
+                    )
+                })
+                .collect(),
+            self.items.len() < self.total,
+        );
+    }
+    fn load_more(&mut self) -> Result<()> {
+        let page = self.page_number + 1;
+        let keyword = self.keyword.clone();
+        let (fresh, total) = self.client.folder_page(
+            self.folder,
+            page,
+            (!keyword.is_empty()).then_some(keyword.as_str()),
+        )?;
+        if keyword.is_empty() {
+            self.library
+                .store_media(self.folder, &fresh, (page - 1) * 20, now_ms())?;
+        }
+        self.items.extend(fresh);
+        self.items = unique(std::mem::take(&mut self.items));
+        self.total = total;
+        self.page_number = page;
+        self.media_entries();
+        Ok(())
+    }
+    fn search(&mut self, s: &str) -> Result<()> {
+        let lower = s.to_lowercase();
+        let matches = |title: &str, artist: &str| {
+            title.to_lowercase().contains(&lower) || artist.to_lowercase().contains(&lower)
+        };
+        if self.page == Page::Library {
+            self.keyword = lower.clone();
+            let rows = self
+                .library
+                .downloaded()?
+                .into_iter()
+                .filter(|t| t.matches(&lower))
+                .map(|t| {
+                    (
+                        t.id,
+                        t.title,
+                        t.artist,
+                        crate::cover::thumbnail(&t.cover, false),
+                    )
+                })
+                .collect();
+            self.entries(rows, false);
+            return Ok(());
+        }
+        if s == self.keyword && !self.items.is_empty() {
+            return Ok(());
+        }
+        self.keyword = s.into();
+        let cached = self.library.media(self.folder)?;
+        let complete = !cached.is_empty() && cached.len() >= self.folder_total;
+        let filtered = cached
+            .into_iter()
+            .filter(|m| matches(&m.title, m.artist()))
+            .collect::<Vec<_>>();
+        if s.is_empty() || complete {
+            self.items = filtered;
+            self.total = if s.is_empty() {
+                self.folder_total
+            } else {
+                self.items.len()
+            };
+            self.page_number = self.items.len().div_ceil(20).max(1);
+        } else {
+            match self.client.folder_page(self.folder, 1, Some(s)) {
+                Ok((rows, total)) => {
+                    self.items = unique(rows);
+                    self.total = total;
+                }
+                Err(_) if !filtered.is_empty() => {
+                    self.items = filtered;
+                    self.total = self.items.len();
+                }
+                Err(e) => return Err(e),
+            }
+            self.page_number = 1;
+        }
+        self.media_entries();
+        Ok(())
+    }
+}
+
+fn unique(mut rows: Vec<Media>) -> Vec<Media> {
+    let mut seen = HashSet::new();
+    rows.retain(|m| seen.insert(m.bvid.clone()));
+    rows
+}
+
+#[cfg(not(target_os = "android"))]
+pub fn desktop() -> Result<()> {
+    let dir = crate::settings::desktop_dir()?;
+    let settings = Settings::open(dir.join("settings.properties"), || {
+        Ok(crate::settings::Values::new())
+    })?;
+    run(dir.join("bili_music_database"), settings)
+}

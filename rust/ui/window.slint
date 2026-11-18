@@ -1,0 +1,467 @@
+import {RecordSleeve} from "record.slint";
+import {Icon, IconButton, Glyph} from "icons.slint";
+import { Button, LineEdit, ListView, VerticalBox, HorizontalBox, ProgressIndicator, ScrollView, CheckBox, Palette, Slider } from "std-widgets.slint";
+
+export struct Entry { key: string, title: string, detail: string, cover-url: string, cover: image, status: string, selected: bool }
+export enum Transport { toggle, next, previous, jump, remove, clear, repeat, shuffle }
+export enum Page { login, favorites, content, library, settings, appearance, downloads, download-settings }
+
+component NavItem inherits Rectangle {
+    in property<string> label;
+    in property<Glyph> glyph;
+    in property<bool> selected;
+    in property<bool> side;
+    in property<color> ink;
+    in property<color> highlight;
+    callback activated();
+    accessible-role:button;accessible-label:label;accessible-action-default=>{root.activated();}
+    horizontal-stretch:1;
+    border-radius:13px;
+    background:root.side && (root.selected || hit.has-hover) ? root.highlight : transparent;
+    if root.side: HorizontalLayout {
+        padding-left:14px;padding-right:14px;spacing:12px;
+        Icon {width:21px;height:21px;glyph:root.glyph;tint:root.ink;}
+        Text {text:root.label;color:root.ink;font-size:15px;font-weight:root.selected ? 700:500;vertical-alignment:center;}
+        Rectangle {horizontal-stretch:1;}
+    }
+    if !root.side: VerticalLayout {alignment:center;spacing:3px;
+        Rectangle {height:29px;
+            Rectangle {width:48px;height:28px;x:(parent.width - self.width)/2;border-radius:14px;
+                background:root.selected ? root.highlight : transparent;
+                Icon {width:19px;height:19px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;glyph:root.glyph;tint:root.ink;}
+            }
+        }
+        Text {text:root.label;color:root.ink;font-size:11px;font-weight:root.selected ? 700:500;horizontal-alignment:center;}
+    }
+    hit := TouchArea {clicked=>{root.activated();}}
+}
+
+component Brand inherits Rectangle {
+    in property<color> ink;
+    HorizontalLayout {spacing:9px;alignment:start;
+        Rectangle {width:34px;height:34px;border-radius:11px;background:#bddfc5;
+            for i in 4: Rectangle {
+                width:3px;height:[10px,21px,15px,8px][i];border-radius:2px;
+                x:7px + i*5.5px;y:(parent.height - self.height)/2;background:#20463d;
+            }
+        }
+        Text {text:"BiliMusic";font-family:"Arial";font-weight:700;font-size:23px;color:root.ink;vertical-alignment:center;}
+    }
+}
+
+component SettingsRow inherits Rectangle {
+    in property <string> title; in property <string> subtitle; in property <Glyph> glyph;
+    in property <color> ink; in property <color> muted; in property <color> tile; in property <color> tint;
+    callback clicked();
+    height:66px; border-radius:16px; background:tile;
+    accessible-role:button; accessible-label:title; accessible-action-default=>{root.clicked();}
+    HorizontalLayout { padding-left:14px; padding-right:14px; spacing:14px; alignment:start;
+        Rectangle {width:38px; height:38px; border-radius:10px; background:root.tint.transparentize(86%);
+            Icon {width:20px;height:20px;x:9px;y:9px;glyph:root.glyph;tint:root.tint;} }
+        VerticalLayout {spacing:2px;alignment:center;horizontal-stretch:1;
+            Text {text:root.title;color:root.ink;font-size:16px;}
+            Text {text:root.subtitle;color:root.muted;font-size:12px;overflow:elide;}
+        }
+        Text {text:"›";color:root.muted;font-size:24px;vertical-alignment:center;}
+    }
+    TouchArea {clicked=>{root.clicked();}}
+}
+
+export component PlayerWindow inherits Window {
+    preferred-width: 1100px; preferred-height: 760px; min-width: 200px; min-height: 250px;
+    title: "BiliMusicPlayer";
+    in property <string> app-font;
+    default-font-family: app-font;
+    icon: @image-url("../../desktopApp/src/main/resources/icon.png");
+    in-out property <Page> page: Page.login;
+    in property <string> theme-mode: "SYSTEM";
+    property <bool> dark: theme-mode == "DARK" || (theme-mode == "SYSTEM" && Palette.color-scheme == ColorScheme.dark);
+    property <color> ink: dark ? #e8eee8 : #23362f;
+    property <color> muted: dark ? #a8b8ae : #626f65;
+    property <color> surface: dark ? #22332d : #fffef8;
+    property <color> accent: dark ? #a7dfc4 : #276956;
+    property <color> line: dark ? #35483f : #d8dfd4;
+    property <color> selected-tint: dark ? #344f42 : #dceadf;
+    background: dark ? #17231e : #f3f4ed;
+    in property <string> track-title;
+    in property <string> small-cover-url;
+    in property <string> large-cover-url;
+    in property <image> small-cover;
+    in property <image> large-cover;
+    in property <bool> local-track;
+    changed small-cover-url=>{if root.page != Page.login {root.need-cover(root.small-cover-url);}}
+    changed large-cover-url=>{if root.expanded {root.need-cover(root.large-cover-url);}}
+    changed expanded=>{if root.expanded {root.need-cover(root.large-cover-url);}}
+    in property <string> artist;
+    in property <bool> playing;
+    in property <float> position;
+    in property <float> duration;
+    in property <int> repeat-mode;
+    in property <bool> shuffle;
+    in property <[Entry]> queue;
+    in property <int> queue-index;
+    in-out property <bool> expanded;
+    in-out property <bool> show-queue;
+    callback transport(Transport,int);
+    callback seek(float);
+    in property <image> qr;
+    in property <string> login-state: "generating";
+    in property <string> message;
+    in property <string> folder-title;
+    in property <string> account;
+    in property <string> app-version;
+    in-out property <string> account-detail;
+    private property <string> dialog;
+    callback download();
+    callback select-media(string,int);
+    in-out property <int> selected-count;
+    in-out property <bool> selecting;
+    callback downloads-tab(int);
+    callback download-action(string,string);
+    private property <int> download-tab;
+    private property <string> record-id;
+    in-out property <bool> wifi-only;
+    in-out property <bool> rate-enabled;
+    in-out property <int> rate-limit;
+    in-out property <int> concurrent;
+    in property <string> cache-size;
+    in property <string> download-dir;
+    callback set-download-option(string,int);
+    callback clear-cache();
+    callback clear-cooldown();
+    callback account-status();
+    callback logout();
+    in property <[Entry]> entries;
+    in property <bool> has-more;
+    in-out property <bool> searching;
+    in-out property <string> query;
+    callback navigate(Page);
+    callback need-cover(string);
+    callback retry();
+    callback choose(string,string);
+    callback more();
+    callback search(string);
+    callback theme(string);
+    property <bool> rail;
+    property <bool> show-previous;
+    changed width => {rail=self.width >= 740px;show-previous=self.width >= 400px;}
+    init => {rail=self.width >= 740px;show-previous=self.width >= 400px;}
+    property <[string]> tabs: ["收藏夹","音乐库","设置"];
+    property <[Page]> destinations: [Page.favorites,Page.library,Page.settings];
+    property <Page> tab: page == Page.content ? Page.favorites : (page == Page.appearance || page == Page.download-settings) ? Page.settings : page == Page.downloads ? Page.library : page;
+    property <length> safe-width: self.width - self.safe-area-insets.left - self.safe-area-insets.right;
+    property <length> safe-height: self.height - self.safe-area-insets.top - self.safe-area-insets.bottom;
+    forward-focus: key-handler;
+    key-handler := FocusScope {
+    width:root.width; height:root.height;
+    key-pressed(event) => {
+        if event.text != Key.Back && event.text != Key.Escape { return reject; }
+        if root.dialog!="" {root.dialog="";return accept;}
+        if root.show-queue {root.show-queue=false;return accept;}
+        if root.expanded {root.expanded=false;return accept;}
+        if root.selecting {root.selecting=false;root.select-media("",2);return accept;}
+        if root.searching {root.query="";root.searching=false;root.search("");return accept;}
+        if root.page==Page.content || root.page==Page.appearance || root.page==Page.download-settings || root.page==Page.downloads {
+            root.navigate(root.tab);return accept;
+        }
+        return reject;
+    }
+    Rectangle {
+        x:root.safe-area-insets.left; y:root.safe-area-insets.top;
+        width:root.safe-width; height:root.safe-height;
+    HorizontalLayout {
+        width: parent.width; height: parent.height;
+        if root.page != Page.login && root.rail: Rectangle {
+            width:196px;background:root.dark ? #182a23 : #e7ede4;
+            Rectangle {x:parent.width - 1px;width:1px;height:parent.height;background:root.line;}
+            VerticalLayout {padding:18px;padding-top:30px;spacing:6px;
+                Brand {height:38px;ink:root.ink;}
+                Rectangle {height:26px;}
+                for label[i] in root.tabs: NavItem {
+                    height:46px;side:true;label:label;glyph:[Glyph.favorite,Glyph.library,Glyph.settings][i];
+                    ink:root.tab==root.destinations[i] ? root.accent : root.muted;
+                    selected:root.tab==root.destinations[i];highlight:root.selected-tint;
+                    activated=>{root.navigate(root.destinations[i]);}
+                }
+                Rectangle {vertical-stretch:1;}
+            }
+        }
+        VerticalLayout {
+            if !root.rail && (root.page == Page.favorites || root.page == Page.login): Rectangle {
+                height:46px; Brand {x:20px;y:8px;width:160px;height:30px;ink:root.ink;}
+            }
+            HorizontalLayout {
+                height:root.rail ? 88px : 66px;padding-left:root.rail ? 30px : 20px;padding-right:14px;spacing:4px;
+                if root.page == Page.content || root.page == Page.appearance || root.page == Page.download-settings: IconButton {
+                    glyph:Glyph.back; tint:root.ink; label:"返回"; clicked=> {root.navigate(root.tab);}
+                }
+                if !root.searching: Text { color: root.ink; font-size:root.rail ? 32px : 27px;font-weight:700;vertical-alignment:center;overflow:elide;horizontal-stretch:1;min-width:0px;
+                    text: root.page == Page.login ? "登录哔哩哔哩" : root.page == Page.favorites ? "我的收藏夹" :
+                        (root.page == Page.library || root.page == Page.downloads) ? "我的音乐库" : root.page == Page.settings ? "设置" :
+                        root.page == Page.download-settings ? "下载设置" : root.page == Page.appearance ? "外观设置" : root.folder-title; }
+                if root.searching: LineEdit { text <=> root.query; placeholder-text:"搜索歌曲或艺术家";
+                    edited(s)=> {root.search(s);} }
+                if root.page == Page.content && root.entries.length > 0: IconButton {
+                    glyph:Glyph.select; tint:root.ink; label:root.selecting ? "退出多选" : "多选";clicked=>{
+                        root.selecting=!root.selecting;
+                        if !root.selecting {root.select-media("",2);}
+                    }
+                }
+                if root.selecting: Button {text:"全选";clicked=>{root.select-media("",1);}}
+                if root.page == Page.content && root.entries.length > 0 && (!root.selecting || root.selected-count>0): IconButton {
+                    glyph:Glyph.download; tint:root.ink;label:root.selecting ? "下载选中" : "全部下载";clicked=>{root.download();}
+                }
+                if root.page == Page.library || root.page == Page.downloads || root.page == Page.content: IconButton {
+                    glyph:root.searching ? Glyph.back : Glyph.search; tint:root.ink; label:root.searching ? "关闭" : "搜索";
+                    clicked=> { root.searching = !root.searching; if (!root.searching) {root.query="";root.search("");} }
+                }
+                if root.page == Page.library: IconButton {glyph:Glyph.refresh;tint:root.ink;label:"扫描本地文件";clicked=>{root.retry();}}
+                if root.page == Page.favorites: IconButton {glyph:Glyph.refresh; tint:root.ink; label:"刷新"; clicked=>{root.retry();}}
+            }
+            if root.page == Page.login: VerticalLayout {
+                alignment:center; spacing:16px; padding:16px;
+                if root.login-state == "waiting": Text {
+                    text:"使用哔哩哔哩App扫码"; font-size:24px; font-weight:700; color:root.ink; horizontal-alignment:center;
+                }
+                if root.login-state == "waiting": Rectangle {
+                    width: 324px; height:self.width; background:white; border-radius:12px;
+                    Image { source:root.qr; x:12px; y:12px; width:parent.width - 24px; height:self.width; image-rendering:pixelated; }
+                }
+                if root.login-state == "generating": ProgressIndicator {indeterminate:true; width:48px;}
+                Text { text: root.login-state == "waiting" ? "打开哔哩哔哩App扫描此二维码以登录" :
+                    root.login-state == "generating" ? "正在生成二维码..." : root.message;
+                    horizontal-alignment:center; color:root.muted; wrap:word-wrap; }
+                if root.login-state == "error" || root.login-state == "expired": Button {
+                    text: root.login-state == "expired" ? "生成新二维码" : "重试"; clicked=>{root.retry();}
+                }
+            }
+            if root.page == Page.settings: ScrollView {
+                VerticalLayout { padding:16px;spacing:6px;
+                    Text {text:"账户";color:root.accent;font-size:14px;}
+                    SettingsRow {title:"账户";subtitle:root.account;glyph:Glyph.person;ink:root.ink;muted:root.muted;tile:root.surface;tint:root.accent;
+                        clicked=>{root.dialog="账号信息";root.account-detail="正在检查登录状态…";root.account-status();}}
+                    SettingsRow {title:"退出登录";subtitle:"退出当前账户";glyph:Glyph.logout;ink:#c33537;muted:root.muted;tile:root.surface;tint:#c33537;
+                        clicked=>{root.dialog="退出登录";}}
+                    Rectangle {height:14px;}
+                    Text {text:"通用";color:root.accent;font-size:14px;}
+                    SettingsRow {title:"下载设置";subtitle:"音频质量和存储位置";glyph:Glyph.download;ink:root.ink;muted:root.muted;tile:root.surface;tint:root.accent;
+                        clicked=>{root.navigate(Page.download-settings);}}
+                    SettingsRow {title:"外观";subtitle:"主题和显示选项";glyph:Glyph.palette;ink:root.ink;muted:root.muted;tile:root.surface;tint:root.accent;
+                        clicked=>{root.navigate(Page.appearance);}}
+                    Rectangle {height:14px;}
+                    Text {text:"关于";color:root.accent;font-size:14px;}
+                    SettingsRow {title:"关于";subtitle:"版本 " + root.app-version;glyph:Glyph.info;ink:root.ink;muted:root.muted;tile:root.surface;tint:root.accent;
+                        clicked=>{root.dialog="关于";}}
+                }
+            }
+            if root.page == Page.download-settings: ScrollView {
+                VerticalLayout {padding:16px;spacing:12px;
+                    CheckBox {text:"仅在 Wi-Fi 等非计费网络下载";checked <=> root.wifi-only;toggled=>{root.set-download-option("wifi_only",self.checked ? 1:0);}}
+                    Text {text:"存储位置";color:root.accent;}
+                    Text {text:"下载路径";color:root.ink;font-size:16px;}
+                    Text {text:root.download-dir;color:root.muted;wrap:word-wrap;}
+                    Text {text:"缓存管理";color:root.accent;}
+                    HorizontalBox { Text {text:"缓存大小   已使用: " + root.cache-size;color:root.ink;vertical-alignment:center;}
+                        Button {text:"清除"; clicked=>{root.dialog="清除缓存";}} }
+                    Text {text:"并发下载";color:root.accent;}
+                    Text {text:"同时下载数量   " + root.concurrent;color:root.ink;}
+                    Slider {minimum:1;maximum:8;value:root.concurrent;released(v)=>{root.concurrent=round(v);root.set-download-option("max_concurrent_downloads",root.concurrent);}}
+                    Text {text:"API限速";color:root.accent;}
+                    CheckBox {text:"限制请求频率";checked <=> root.rate-enabled;toggled=>{root.set-download-option("api_rate_limit_enabled",self.checked ? 1:0);}}
+                    Text {text:root.rate-enabled ? "每分钟最大请求数   " + root.rate-limit + " 次/分" : "每分钟最大请求数   限速已关闭";color:root.ink;}
+                    Slider {minimum:10;maximum:60;enabled:root.rate-enabled;value:root.rate-limit;released(v)=>{root.rate-limit=round(v / 5)*5;root.set-download-option("api_rate_limit_per_minute",root.rate-limit);}}
+                    Button {text:"解除请求冷却";clicked=>{root.clear-cooldown();}}
+                    Text {text:"音频质量";color:root.accent;}
+                    Text {text:"下载质量";color:root.ink;font-size:16px;}
+                    Text {text:"默认最高可用：Hi-Res 无损 → 杜比 → AAC";color:root.muted;wrap:word-wrap;}
+                }
+            }
+            if root.page == Page.appearance: VerticalBox {
+                Text {text:"主题"; color:root.accent;}
+                for label[i] in ["跟随系统","浅色模式","深色模式"]: Button {
+                    property <string> mode:["SYSTEM","LIGHT","DARK"][i];
+                    text: label + (root.theme-mode == self.mode ? "   ✓" : ""); clicked=>{root.theme(self.mode);}
+                }
+                Rectangle {}
+            }
+            if root.page == Page.library || root.page == Page.downloads: HorizontalLayout {
+                height:48px;
+                Button {text:"本地歌曲";checkable:true;checked:root.page==Page.library;clicked=>{root.navigate(Page.library);}}
+                Button {text:"下载队列";checkable:true;checked:root.page==Page.downloads;clicked=>{root.downloads-tab(root.download-tab);}}
+            }
+            if root.page == Page.downloads: VerticalLayout {
+                HorizontalLayout {height:48px;
+                    for label[i] in ["活动中","已完成","失败"]: Button {text:label;checkable:true;checked:i==root.download-tab;
+                        clicked=>{root.download-tab=i;root.downloads-tab(i);}}
+                }
+                if root.entries.length == 0: Text {text:"暂无下载任务";color:root.muted;horizontal-alignment:center;vertical-alignment:center;}
+                ListView {
+                    for entry in root.entries: HorizontalBox {
+                        VerticalLayout {horizontal-stretch:1;
+                            Text {text:entry.title;color:root.ink;overflow:elide;}
+                            Text {text:entry.detail;color:root.muted;font-size:13px;wrap:word-wrap;}
+                        }
+                        if entry.status=="QUEUED" || entry.status=="DOWNLOADING": Button {
+                            text:"取消";clicked=>{root.download-action(entry.key,"cancel");}}
+                        if entry.status=="FAILED" || entry.status=="CANCELLED" || entry.status=="PAUSED": Button {
+                            text:"重试";clicked=>{root.download-action(entry.key,"retry");}}
+                        if entry.status=="COMPLETED" || entry.status=="CANCELLED" || entry.status=="FAILED": Button {
+                            text:"删除记录";clicked=>{root.record-id=entry.key;root.dialog="删除记录";}}
+                    }
+                }
+            }
+            if root.page == Page.content || root.page == Page.library || root.page == Page.favorites: VerticalLayout {
+                if root.message != "" || root.entries.length == 0: Text { text: root.message != "" ? root.message :
+                    root.page == Page.library ? "您的音乐库是空的" : root.page == Page.favorites ? "未找到收藏夹" : "未找到匹配的歌曲";
+                    color:root.muted; horizontal-alignment:center; vertical-alignment:center; wrap:word-wrap; }
+                if root.page == Page.favorites && root.entries.length > 0: cards := ListView {
+                    property<length> margin:root.rail ? 30px : 20px;
+                    property<length> gap:16px;
+                    property<int> columns:max(1,floor((self.width - self.margin * 2 + self.gap) / 245px));
+                    property<length> card-width:(self.width - self.margin * 2 - (self.columns - 1) * self.gap) / self.columns;
+                    for row in ceil(root.entries.length / cards.columns): Rectangle {
+                        height:cards.card-width * 0.58 + 92px;
+                        for col in cards.columns: card := Rectangle {
+                            property<int> index:row * cards.columns + col;
+                            property<Entry> entry:root.entries[self.index];
+                            visible:self.index<root.entries.length;
+                            x:cards.margin + col * (cards.card-width + cards.gap);
+                            width:cards.card-width;height:parent.height - cards.gap;
+                            background:root.surface;border-radius:18px;clip:true;
+                            border-width:1px;border-color:root.line;
+                            changed entry=>{if self.visible && self.entry.cover.width==0 {root.need-cover(self.entry.cover-url);}}
+                            init=>{if self.visible {root.need-cover(self.entry.cover-url);}}
+                            art := Rectangle {height:card.width * 0.58;width:parent.width;
+                                if card.entry.cover.width>0: Image {source:card.entry.cover;image-fit:ImageFit.cover;}
+                                if card.entry.cover.width==0: RecordSleeve {variant:card.index;}
+                            }
+                            VerticalLayout {x:17px;y:art.height;width:parent.width - 67px;height:parent.height - art.height;alignment:center;spacing:3px;
+                                Text {text:card.entry.title;color:root.ink;font-size:19px;font-weight:700;overflow:elide;}
+                                Text {text:card.entry.detail;color:root.muted;font-size:13px;}
+                            }
+                            Rectangle {width:31px;height:self.width;border-radius:16px;x:parent.width - self.width - 15px;
+                                y:art.height + (parent.height - art.height - self.height)/2;background:root.selected-tint;
+                                Icon {width:16px;height:16px;x:8px;y:8px;glyph:Glyph.arrow;tint:root.accent;}
+                            }
+                            accessible-role:button;accessible-label:entry.title;accessible-action-default=>{root.choose(card.entry.key,card.entry.title);}
+                            TouchArea {clicked=>{root.choose(card.entry.key,card.entry.title);}}
+                        }
+                    }
+                }
+                if root.page != Page.favorites && root.entries.length > 0: ListView {
+                    for entry in root.entries: Rectangle {
+                        height:72px; background:entry.selected && root.selecting ? root.accent.transparentize(82%) : transparent;
+                        property <string> url:entry.cover-url;
+                        changed url=>{root.need-cover(self.url);}
+                        init=>{root.need-cover(self.url);}
+                        Rectangle {x:16px;y:8px;width:56px;height:56px;border-radius:8px;background:root.surface;clip:true;
+                            if entry.cover.width > 0: Image {source:entry.cover;image-fit:ImageFit.cover;}
+                            if entry.cover.width == 0: Icon {width:24px;height:24px;x:16px;y:16px;glyph:Glyph.note;tint:root.accent.transparentize(60%);}
+                        }
+                        VerticalLayout { padding-left:88px; padding-right:16px; alignment:center; spacing:4px;
+                            Text {text:entry.title; color:root.ink; font-size:16px; overflow:elide;}
+                            Text {text:entry.detail; color:root.muted; font-size:14px; overflow:elide;}
+                        }
+                        TouchArea {clicked=>{if root.selecting {root.select-media(entry.key,0);} else {root.choose(entry.key,entry.title);}}}
+                    }
+                }
+                if root.has-more: Button {text:"加载更多";clicked=>{root.more();}}
+            }
+            if root.page != Page.login && root.queue.length > 0: Rectangle {
+                height:70px;background:root.dark ? #233d34 : #26493e;
+                Rectangle {height:2px;width:parent.width * min(1,root.position / max(1,root.duration));background:#f1be95;}
+                HorizontalLayout {padding-left:16px;padding-right:14px; spacing:8px;
+                    Rectangle {width:44px;height:44px;background:#547264;border-radius:8px;clip:true;
+                        if root.small-cover.width > 0: Image {source:root.small-cover;image-fit:ImageFit.cover;}
+                        if root.small-cover.width==0: RecordSleeve {variant:root.queue-index;}
+                        TouchArea {clicked=>{root.expanded=true;}}
+                    }
+                    Rectangle { horizontal-stretch:1;
+                        VerticalLayout {alignment:center;
+                            Text {text:root.track-title; color:#f4f6ed;font-weight:600; overflow:elide;}
+                            Text {text:root.artist; color:#c1d6c8; font-size:12px; overflow:elide;}
+                        }
+                        TouchArea {clicked=>{root.expanded=true;}}
+                    }
+                    if root.show-previous: IconButton {glyph:Glyph.previous;tint:#e8f2e8;label:"上一首";clicked=>{root.transport(Transport.previous,0);}}
+                    IconButton {background:#cbe4cc;border-radius:24px;glyph:root.playing ? Glyph.pause : Glyph.play;tint:#254736;label:root.playing ? "暂停" : "播放";clicked=>{root.transport(Transport.toggle,0);}}
+                    IconButton {glyph:Glyph.next;tint:#e8f2e8;label:"下一首";clicked=>{root.transport(Transport.next,0);}}
+                }
+            }
+            if root.page != Page.login && !root.rail: HorizontalLayout {
+                height:64px;
+                for label[i] in root.tabs: NavItem {label:label;glyph:[Glyph.favorite,Glyph.library,Glyph.settings][i];ink:root.tab==root.destinations[i] ? root.accent : root.muted; selected:root.tab == root.destinations[i];
+                    highlight:root.selected-tint; activated=>{root.navigate(root.destinations[i]);}}
+            }
+        }
+    }
+    }
+    if root.expanded && root.queue.length > 0: Rectangle {
+        x:root.safe-area-insets.left; y:root.safe-area-insets.top;
+        width:root.safe-width; height:root.safe-height; background:root.background;
+        TouchArea {}
+        VerticalBox {
+            HorizontalBox { Button {text:"返回";clicked=>{root.expanded=false;root.show-queue=false;}}
+                Text {text:root.show-queue ? "播放队列" : "正在播放";color:root.ink;horizontal-alignment:center;vertical-alignment:center;}
+                Button {text:root.show-queue ? "关闭" : "队列";clicked=>{root.show-queue=!root.show-queue;}}
+            }
+            if root.show-queue: ListView {
+                for row[i] in root.queue: HorizontalBox {
+                    Button {text:row.title + "  " + row.detail;horizontal-stretch:1;clicked=>{root.transport(Transport.jump,i);}}
+                    Button {text:"移除";clicked=>{root.transport(Transport.remove,i);}}
+                }
+            }
+            if root.show-queue: Button {text:"清空队列";clicked=>{root.expanded=false;root.show-queue=false;root.transport(Transport.clear,0);}}
+            if !root.show-queue: VerticalBox {
+                Rectangle { vertical-stretch:1;
+                    Rectangle {
+                        width:min(parent.width * 0.92,parent.height * 0.92,440px);height:self.width;
+                        x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;
+                        background:root.surface;border-radius:28px;clip:true;
+                        if root.large-cover.width>0: Image {source:root.large-cover;image-fit:ImageFit.cover;}
+                        if root.large-cover.width==0: Icon {width:64px;height:64px;x:(parent.width - self.width)/2;y:(parent.height - self.height)/2;glyph:Glyph.note;tint:root.accent.transparentize(60%);}
+                    }
+                }
+                Text {text:root.track-title;font-size:24px;font-weight:600;color:root.ink;overflow:elide;horizontal-alignment:center;}
+                Text {text:root.artist;color:root.muted;horizontal-alignment:center;}
+                Text {text:root.local-track ? "本地播放" : "在线播放";color:root.accent;font-size:13px;horizontal-alignment:center;}
+                Slider {height:32px;minimum:0; maximum:max(1,root.duration); value:root.position; released(v)=>{root.seek(v);} }
+                HorizontalBox {Text {text:floor(root.position / 60) + ":" + (mod(floor(root.position),60)<10 ? "0" : "") + mod(floor(root.position),60); color:root.muted;}
+                    Rectangle {} Text {text:floor(root.duration / 60) + ":" + (mod(floor(root.duration),60)<10 ? "0" : "") + mod(floor(root.duration),60);color:root.muted;}}
+                HorizontalBox {alignment:center;
+                    Button {text:"随机";checkable:true;checked:root.shuffle;clicked=>{root.transport(Transport.shuffle,0);}}
+                    Button {text:"上一首";clicked=>{root.transport(Transport.previous,0);}}
+                    Button {text:root.playing ? "暂停" : "播放";clicked=>{root.transport(Transport.toggle,0);}}
+                    Button {text:"下一首";clicked=>{root.transport(Transport.next,0);}}
+                    Button {text:root.repeat-mode==1 ? "单曲" : root.repeat-mode==2 ? "循环" : "顺序";clicked=>{root.transport(Transport.repeat,0);}}
+                }
+            }
+        }
+    }
+    if root.dialog != "": Rectangle {
+        width:100%; height:100%; background:#0008;
+        TouchArea { clicked=>{root.dialog="";} }
+        Rectangle {
+            width:min(parent.width - 48px, 420px); height:dialog-layout.preferred-height + 40px;
+            x:(parent.width - self.width) / 2; y:(parent.height - self.height) / 2;
+            background:root.surface; border-radius:20px;
+            TouchArea {}
+            dialog-layout := VerticalLayout {
+                padding:20px; spacing:12px;
+                Text {text:root.dialog; font-size:20px; font-weight:600; color:root.ink;}
+                Text {text:root.dialog == "账号信息" ? root.account-detail :
+                    root.dialog == "清除缓存" ? "确定要清除所有缓存吗？已下载歌曲、登录信息和音质升级记录会保留。" :
+                    root.dialog == "删除记录" ? "确定删除这条下载记录吗？已下载的文件会保留。" :
+                    root.dialog == "退出登录" ? "确定要退出登录吗？退出后需要重新扫码登录。" :
+                    "B站音乐播放器\n版本: " + root.app-version + "\n一款与哔哩哔哩收藏夹同步的音乐播放器";
+                    color:root.ink;wrap:word-wrap;}
+                HorizontalLayout { alignment:end; spacing:8px;
+                    if root.dialog == "退出登录" || root.dialog == "删除记录" || root.dialog == "清除缓存": Button {text:"取消"; clicked=>{root.dialog="";}}
+                    Button {text:root.dialog == "退出登录" ? "退出" : root.dialog == "账号信息" ? "关闭" : "确定";
+                        clicked=>{if root.dialog == "清除缓存" {root.clear-cache();} if root.dialog == "退出登录" {root.logout();} if root.dialog == "删除记录" { root.download-action(root.record-id,"delete"); } root.dialog="";}}
+                }
+            }
+        }
+    }
+    }
+}
