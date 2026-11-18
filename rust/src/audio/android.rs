@@ -1,44 +1,30 @@
-//! Android framework audio output. The activity context resolves MediaStore
-//! content URIs directly so a library imported in place retains its grants.
+//! Media3 performs playback and uses the same 100 MiB streaming cache as the legacy APK.
 use super::Progress;
 use anyhow::{Result, bail};
 use jni::{
     JNIEnv, JavaVM,
-    objects::{GlobalRef, JObject, JValue},
+    objects::{GlobalRef, JLongArray, JObject, JString, JValue},
 };
-use std::time::Instant;
 
 pub struct Output {
     vm: &'static JavaVM,
-    context: GlobalRef,
     player: GlobalRef,
-    started: bool,
-    playing: bool,
-    since: Instant,
 }
 impl Output {
     pub fn new() -> Result<Self> {
         let (vm, platform) = crate::android_platform::player_context()?;
         let mut env = vm.attach_current_thread()?;
-        let application = env
+        let player = env
             .call_method(
                 &platform,
-                "getApplicationContext",
-                "()Landroid/content/Context;",
+                "newAudioOutput",
+                "()Lcom/bilimusicplayer/StreamingOutput;",
                 &[],
             )?
             .l()?;
-        let context = env.new_global_ref(application)?;
-        let player = env.new_object("android/media/MediaPlayer", "()V", &[])?;
-        let player = env.new_global_ref(player)?;
-        drop(env);
         Ok(Self {
             vm,
-            context,
-            player,
-            started: false,
-            playing: false,
-            since: Instant::now(),
+            player: env.new_global_ref(player)?,
         })
     }
     fn call<T>(
@@ -46,104 +32,57 @@ impl Output {
         f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>,
     ) -> Result<T> {
         let mut env = self.vm.attach_current_thread()?;
-        match f(&mut env, self.player.as_obj()) {
+        env.with_local_frame(12, |env| match f(env, self.player.as_obj()) {
             Ok(value) => Ok(value),
-            Err(e) => {
-                if env.exception_check()? {
-                    env.exception_clear()?;
-                }
-                bail!("Android 音频错误（{e}）");
+            Err(e) if env.exception_check()? => {
+                let ex = env.exception_occurred()?;
+                env.exception_clear()?;
+                let msg = JString::from(
+                    env.call_method(&ex, "toString", "()Ljava/lang/String;", &[])?
+                        .l()?,
+                );
+                bail!(
+                    "Android 音频错误（{}）",
+                    String::from(env.get_string(&msg)?)
+                );
             }
-        }
-    }
-    pub fn load(&mut self, uri: &str) -> Result<()> {
-        self.started = false;
-        self.call(|env, player| {
-            env.call_method(player, "reset", "()V", &[])?;
-            let parsed = env.new_string(uri)?;
-            let parsed = env
-                .call_static_method(
-                    "android/net/Uri",
-                    "parse",
-                    "(Ljava/lang/String;)Landroid/net/Uri;",
-                    &[JValue::Object(&parsed)],
-                )?
-                .l()?;
-            let headers = env.new_object("java/util/HashMap", "()V", &[])?;
-            for (k, v) in [
-                ("Referer", "https://www.bilibili.com"),
-                ("User-Agent", "Mozilla/5.0"),
-            ] {
-                let k = env.new_string(k)?;
-                let v = env.new_string(v)?;
-                env.call_method(
-                    &headers,
-                    "put",
-                    "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
-                    &[JValue::Object(&k), JValue::Object(&v)],
-                )?;
-            }
-            env.call_method(
-                player,
-                "setDataSource",
-                "(Landroid/content/Context;Landroid/net/Uri;Ljava/util/Map;)V",
-                &[
-                    JValue::Object(self.context.as_obj()),
-                    JValue::Object(&parsed),
-                    JValue::Object(&headers),
-                ],
-            )?;
-            env.call_method(player, "prepare", "()V", &[])?;
-            env.call_method(player, "start", "()V", &[])?;
-            Ok(())
-        })?;
-        self.started = true;
-        self.playing = true;
-        self.since = Instant::now();
-        Ok(())
-    }
-    pub fn seek(&mut self, ms: i64) -> Result<()> {
-        self.call(|e, p| {
-            e.call_method(p, "seekTo", "(JI)V", &[JValue::Long(ms), JValue::Int(3)])
-                .map(|_| ())
+            Err(e) => Err(e.into()),
         })
     }
+    pub fn load(&mut self, uri: &str) -> Result<()> {
+        self.call(|env, p| {
+            let uri = env.new_string(uri)?;
+            env.call_method(p, "load", "(Ljava/lang/String;)V", &[JValue::Object(&uri)])?
+                .v()
+        })
+    }
+    pub fn seek(&mut self, ms: i64) -> Result<()> {
+        self.call(|env, p| env.call_method(p, "seek", "(J)V", &[JValue::Long(ms)])?.v())
+    }
     pub fn pause(&mut self, paused: bool) -> Result<()> {
-        self.call(|e, p| {
-            e.call_method(p, if paused { "pause" } else { "start" }, "()V", &[])
-                .map(|_| ())
-        })?;
-        self.playing = !paused;
-        Ok(())
+        self.call(|env, p| {
+            env.call_method(p, "pause", "(Z)V", &[JValue::Bool(paused.into())])?
+                .v()
+        })
     }
     pub fn stop(&mut self) -> Result<()> {
-        self.call(|e, p| e.call_method(p, "reset", "()V", &[]).map(|_| ()))?;
-        self.started = false;
-        self.playing = false;
-        Ok(())
+        self.call(|env, p| env.call_method(p, "stop", "()V", &[])?.v())
     }
     pub fn progress(&mut self) -> Result<Progress> {
-        if !self.started {
-            return Ok(Progress::default());
-        }
         self.call(|env, p| {
-            let position = env.call_method(p, "getCurrentPosition", "()I", &[])?.i()? as i64;
-            let duration = env.call_method(p, "getDuration", "()I", &[])?.i()? as i64;
-            let playing = env.call_method(p, "isPlaying", "()Z", &[])?.z()?;
+            let values = JLongArray::from(env.call_method(p, "progress", "()[J", &[])?.l()?);
+            let mut state = [0; 3];
+            env.get_long_array_region(&values, 0, &mut state)?;
             Ok(Progress {
-                position_ms: position,
-                duration_ms: duration,
-                ended: self.playing
-                    && !playing
-                    && duration > 0
-                    && position >= duration - 200
-                    && self.since.elapsed().as_millis() > 200,
+                position_ms: state[0],
+                duration_ms: state[1],
+                ended: state[2] != 0,
             })
         })
     }
 }
 impl Drop for Output {
     fn drop(&mut self) {
-        let _ = self.call(|e, p| e.call_method(p, "release", "()V", &[]).map(|_| ()));
+        let _ = self.call(|env, p| env.call_method(p, "release", "()V", &[])?.v());
     }
 }

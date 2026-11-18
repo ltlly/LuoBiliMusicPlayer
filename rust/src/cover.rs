@@ -116,9 +116,9 @@ pub fn legacy_path(db: &Path) -> PathBuf {
 
 pub fn cache_size(legacy: &Path, clear: bool) -> Result<u64> {
     let mut dirs = vec![legacy.to_owned(), legacy.with_file_name("rust-covers")];
-    if cfg!(target_os = "android") {
-        dirs.push(legacy.with_file_name("exoplayer_cache"))
-    }
+    #[cfg(target_os = "android")]
+    let mut size = crate::android_platform::playback_cache(clear)?;
+    #[cfg(not(target_os = "android"))]
     let mut size = 0;
     while let Some(dir) = dirs.pop() {
         if !dir.symlink_metadata().is_ok_and(|m| m.is_dir()) {

@@ -31,7 +31,8 @@ public final class PlayerPlatform {
 
     private static volatile boolean playbackStarted;
     static void serviceStopped() { playbackStarted = false; }
-    public Context getApplicationContext() { return context; }
+    public StreamingOutput newAudioOutput() throws Exception { return new StreamingOutput(context); }
+    public long playbackCache(boolean clear) { return StreamingOutput.cacheBytes(context, clear); }
     public void playbackChanged(String title, String artist, boolean playing, long position, long duration) {
         if (!playing && !playbackStarted) return;
         if (title.isEmpty()) {

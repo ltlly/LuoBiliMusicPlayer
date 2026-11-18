@@ -72,7 +72,9 @@ component Preferences {
             Stepper { value: player.rateLimit.float(); min: 10; max: 60; on change(v) { action("option", "api_rate_limit_per_minute", "{v.int()}") } }
           }
         }
-        Button("清除播放和封面缓存（{player.cacheSize}）") { on press { action("clearCache") } }
+        Button("清除播放和封面缓存（{player.cacheSize}）") {
+          on press { alert("清除播放和封面缓存？", actions: [.button(title: "取消", role: .cancel), .button(title: "清除", role: .destructive, run: () => action("clearCache"))]) }
+        }
         Button("清除冷却记录") { on press { action("clearCooldown") } }
       }
     }

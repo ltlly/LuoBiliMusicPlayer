@@ -384,3 +384,11 @@ pub fn player_context() -> Result<(&'static JavaVM, GlobalRef)> {
         PLATFORM.get().context("播放服务尚未初始化")?.clone(),
     ))
 }
+
+pub fn playback_cache(clear: bool) -> Result<u64> {
+    platform(|env, obj| {
+        env.call_method(obj, "playbackCache", "(Z)J", &[JValue::Bool(clear.into())])?
+            .j()
+    })
+    .map(|n| n.max(0) as u64)
+}
