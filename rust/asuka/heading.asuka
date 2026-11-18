@@ -21,6 +21,11 @@ component PageTitle(title: string, count: string = "", refresh: bool = false, ba
     Text(title) { shrink: 1; color: palette.ink; font: Font(size: 25).semibold(); lines: 1 }
     if !count.isEmpty() { Text(count) { color: palette.secondary; font: Font(size: 13); lines: 1 } }
     View { grow: 1 }
+    if @platform == .windows {
+      if player.page == "rankWeb" {
+        Pill("在浏览器打开", "right", palette.accent, palette.accentWash) { on press { openURL("https://www.evocalrank.com/#/") } }
+      }
+    }
     if refresh { IconAction("refresh", "刷新", palette.secondary, #00000000, 42.0, 17.0) { on press { emit refreshPage } } }
   }
 }

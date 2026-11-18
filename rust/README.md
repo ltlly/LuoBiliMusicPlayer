@@ -46,6 +46,8 @@ python android/build.py --gradle /path/to/gradle-8.14.3/bin/gradle
 
 ### Windows x64
 
+在 Windows 内嵌浏览榜单官网需要 Microsoft Edge WebView2 Runtime。也可以点官网页右上角的「在浏览器打开」，通过系统默认浏览器查看。
+
 使用 Rust GNU target、MinGW-w64 和 Asuka。Linux 交叉编译还需要 Zig。打包时传入与旧版相同的 MediaMP Windows x64 运行库 JAR。
 
 ```sh
