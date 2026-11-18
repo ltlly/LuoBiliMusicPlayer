@@ -70,7 +70,7 @@ component Music(live: bool = true) {
   fn showPanel(next: string) {
     if panel == next { return }
     queueFromPlayer = next == "queue" && panel == "player"
-    if environment().reduceMotion { panel = next }
+    if @platform == .windows || environment().reduceMotion { panel = next }
     else { animate(Animation(duration: 230ms, curve: .easeOut), () => { panel = next }) }
   }
   fn dismissPanel() { showPanel(if queueFromPlayer { "player" } else { "" }) }

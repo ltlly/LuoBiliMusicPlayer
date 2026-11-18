@@ -1,0 +1,42 @@
+--- a/src/host.h
++++ b/src/host.h
+@@ -90,7 +90,7 @@
+ typedef struct {
+ 	uint64_t *keys;
+ 	void **vals;
+-	uint32_t cap, len;
++	uint32_t cap, len, used;  // used counts live and deleted slots
+ } wh_map;
+ 
+ void *wh_map_get(const wh_map *m, uint64_t k);
+--- a/src/util.c
++++ b/src/util.c
+@@ -106,7 +106,7 @@
+ 	m->keys = wh_alloc(cap * sizeof *m->keys);
+ 	m->vals = wh_alloc(cap * sizeof *m->vals);
+ 	m->cap = cap;
+-	m->len = 0;
++	m->len = m->used = 0;
+ 	for (uint32_t i = 0; i < oc; i++)
+ 		if (ok[i] && ok[i] != TOMB) wh_map_put(m, ok[i], ov[i]);
+ 	free(ok);
+@@ -115,7 +115,10 @@
+ 
+ void wh_map_put(wh_map *m, uint64_t k, void *v) {
+ 	if (k == 0 || k == TOMB) return;
+-	if ((m->len + 1) * 4 >= m->cap * 3) rehash(m, m->cap ? m->cap * 2 : 64);
++	// Keep an empty slot to terminate every probe, even after many removals.
++	if (!m->cap) rehash(m, 64);
++	else if ((m->used + 1) * 4 >= m->cap * 3)
++		rehash(m, (m->len + 1) * 4 >= m->cap * 3 ? m->cap * 2 : m->cap);
+ 	uint32_t tomb = UINT32_MAX;
+ 	for (uint32_t i = slot(m, k);; i = (i + 1) & (m->cap - 1)) {
+ 		if (m->keys[i] == k) {
+@@ -125,6 +128,7 @@
+ 		if (m->keys[i] == TOMB && tomb == UINT32_MAX) tomb = i;
+ 		if (m->keys[i] == 0) {
+ 			if (tomb != UINT32_MAX) i = tomb;
++			else m->used++;
+ 			m->keys[i] = k;
+ 			m->vals[i] = v;
+ 			m->len++;

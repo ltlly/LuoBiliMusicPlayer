@@ -1,6 +1,6 @@
 # B站音乐播放器
 
-本分支的新版使用 Rust 和 Asuka，维护 Android 13 及以上和 Windows x64。构建方法和覆盖安装说明见 [Rust 版说明](rust/README.md)。
+本分支的新版使用 Rust 和 Asuka，维护 Android 13 及以上和 Windows x64。Android 使用单个 APK，Windows 使用内嵌播放引擎和网页运行库的单个 EXE。构建方法和覆盖安装说明见 [Rust 版说明](rust/README.md)。
 
 > **🤖 本项目全部代码均由 Claude Code (Opus 4.6) 生成**
 

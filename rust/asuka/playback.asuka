@@ -103,7 +103,7 @@ component ImmersivePlayer {
   state sleeveScale = 1.0
   task(player.playing, environment().reduceMotion) {
     let scale = if player.playing || environment().reduceMotion { 1.0 } else { 0.965 }
-    if environment().reduceMotion { sleeveScale = scale }
+    if @platform == .windows || environment().reduceMotion { sleeveScale = scale }
     else { animate(Animation(duration: 300ms, curve: .easeInOut), () => { sleeveScale = scale }) }
   }
   task(player.largeCoverUrl) {

@@ -12,7 +12,7 @@ Android 播放沿用 Media3 1.11.1、100 MiB 音频缓存及原缓存索引。�
 
 Android 通过 WorkManager 唤醒持久化的下载队列。退出界面或系统回收进程后，满足网络条件即可继续下载。
 
-「周刊榜单」收录 EVocalRank 最新一期的主榜、副榜、推荐与历史曲目，用视频编号合并重复项。点顶部期号卡可在应用内浏览官网。原生榜单缓存六小时，可离线查看。登录后点「未收藏」会按收藏夹取回视频编号，由本机比对。全部收藏夹核对完毕后显示筛选结果，五分钟内再次筛选可直接使用缓存。每行的「视频操作」可打开对应 B 站视频，或在登录后提交一次点赞、投币与收藏。三连反馈按 B 站返回的各项结果显示。[榜单官网](https://www.evocalrank.com/#/)
+「周刊榜单」收录 EVocalRank 最新一期的主榜、副榜、推荐与历史曲目，用视频编号合并重复项。点顶部期号卡可在应用内浏览官网。原生榜单缓存六小时，可离线查看。登录后点「未收藏」会按收藏夹取回视频编号，由本机比对。全部收藏夹核对完毕后显示筛选结果，五分钟内再次筛选可直接使用缓存。点歌名从该曲开始播放，点「播放未收藏」从当前筛选结果的第一首开始。每行的「视频操作」可打开对应 B 站视频，或在登录后提交一次点赞、投币与收藏。三连反馈按 B 站返回的各项结果显示。[榜单官网](https://www.evocalrank.com/#/)
 
 设置中的「自动清理失效视频」默认关闭，可按账号开启。应用在前台浏览收藏夹或设置时分批检查，每轮完成后间隔一天。确认是 B 站标记失效的视频后，会从自己的收藏夹中移除，并清理对应本地音频、下载记录和播放队列。受系统管理的旧媒体文件可能需要 Android 授权。
 
@@ -42,21 +42,23 @@ Linux 原生验证需要 GTK 4.14、libadwaita 1.5 或更高版本。播放时�
 python android/build.py --gradle /path/to/gradle-8.14.3/bin/gradle
 ```
 
-脚本先把 Asuka 界面和 Rust 链接成 AAR，再编译包含 MediaSession、MediaStore 和权限处理的宿主，最后使用仓库原签名生成 `target/asuka/BiliMusicPlayer-1.7.0.apk`。签名密码可由终端输入或通过环境变量 `BILI_STORE_PASSWORD`、`BILI_KEY_PASSWORD` 提供。覆盖安装使用 `adb -s <本机模拟器序列号> install -r <APK>`。
+脚本先把 Asuka 界面和 Rust 链接成 AAR，再编译包含 MediaSession、MediaStore 和权限处理的宿主，最后使用仓库原签名生成 `target/asuka/BiliMusicPlayer-1.7.1.apk`。签名密码可由终端输入或通过环境变量 `BILI_STORE_PASSWORD`、`BILI_KEY_PASSWORD` 提供。覆盖安装使用 `adb -s <本机模拟器序列号> install -r <APK>`。
 
 ### Windows x64
 
-在 Windows 内嵌浏览榜单官网需要 Microsoft Edge WebView2 Runtime。也可以点官网页右上角的「在浏览器打开」，通过系统默认浏览器查看。
+Windows x64 发布一个可直接双击的 EXE。音频解码器、Asuka 资源和微软 WebView2 Fixed Version 均封装在内。首次启动会把内置文件解包到当前用户的本地缓存，当前版本解包后约占 746 MiB，再次启动时复用。移动或改名 EXE 后仍使用原有音乐库和设置。程序缓存位于 `%LOCALAPPDATA%\BiliMusicPlayer\bin`，旧版退出后可在下次启动时自动回收。应用内的周刊官网使用随包浏览器运行库。浏览榜单源站和播放在线歌曲仍需网络。
 
-使用 Rust GNU target、MinGW-w64 和 Asuka。Linux 交叉编译还需要 Zig。打包时传入与旧版相同的 MediaMP Windows x64 运行库 JAR。
+构建机使用 Python 3.11 或更高版本、Git、Rust GNU target、MinGW-w64 和 Asuka 0.2.9。把该版本源码中的 `platform/windows` 目录传给构建脚本，它会在临时目录内修正 Windows 控件反复创建和释放时可能发生的卡死。在 Linux 上交叉编译还需要 Zig。把与旧版一致的 MediaMP Windows x64 运行库 JAR 作为构建输入。以下命令下载并校验指定版本的 WebView2，已保存的运行库可离线复用。
 
 ```sh
-python asuka/build_core.py windows-x64
-asuka build -p windows -o target/asuka asuka
-python desktop/package_windows.py --app target/asuka/windows-amd64/BiliMusicPlayer \
+python desktop/package_windows.py \
+  --asuka-host /path/to/asuka-0.2.9/platform/windows \
   --runtime /path/to/mediamp-mpv-runtime-windows-x64.jar \
-  --output target/asuka/windows-amd64/BiliMusicPlayer-1.7.0.zip
+  --webview-runtime "$(python desktop/get_webview2.py)" \
+  --output target/dist/windows-x64/BiliMusicPlayer-1.7.1.exe
 ```
+
+内置 WebView2 使用 Microsoft Defender SmartScreen 检查网站安全，可能向微软发送安全检查信息。[WebView2 固定版本条款](https://developer.microsoft.com/microsoft-edge/api/eula/webview2?locale=en-us&fixed=true) · [微软隐私说明](https://learn.microsoft.com/zh-cn/microsoft-edge/privacy-whitepaper#smartscreen)
 
 ### macOS（暂缓）
 
