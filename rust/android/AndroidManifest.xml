@@ -14,7 +14,8 @@
         <service android:name=".QualityAccessService" android:exported="false" android:foregroundServiceType="dataSync"/>
         <service android:name=".PlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
         <activity android:launchMode="singleTop" android:name=".PlayerActivity" android:exported="false"
-            android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|density|uiMode">
+            android:resizeableActivity="true"
+            android:configChanges="orientation|keyboardHidden|screenSize|smallestScreenSize|screenLayout|density|uiMode">
         </activity>
         <activity-alias android:name=".MainActivity" android:targetActivity=".PlayerActivity" android:exported="true">
             <intent-filter>

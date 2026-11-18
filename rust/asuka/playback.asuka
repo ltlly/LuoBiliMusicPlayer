@@ -111,7 +111,10 @@ component ImmersivePlayer {
   }
   let wide = environment().width >= 720
   let inset = if wide { 32.0 } else { max(20.0, min(38.0, environment().width * 0.07)) }
-  let side = if wide { max(175.0, min(335.0, (environment().width - 200.0) * 0.42)) } else { min(420.0, min(environment().width - inset * 2, max(184.0, environment().height * 0.48))) }
+  let height = environment().height
+  // Reserve space for a two-line title, transport buttons and bottom navigation on shorter screens.
+  let portraitSide = max(164.0, min(height * 0.48, height - 452.0))
+  let side = if wide { max(175.0, min(335.0, (environment().width - 200.0) * 0.42)) } else { min(420.0, min(environment().width - inset * 2, portraitSide)) }
   View {
     grow: 1; background: #113347; clip: true
     Image(if art.ambience.isEmpty() { "stage-glow.jpg" } else { art.ambience }) {
