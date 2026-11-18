@@ -1,61 +1,34 @@
+import std/json
+import std/base
+
 component MiniPlayer {
   let inset = contentInset(environment().width)
   event open
   Column {
     padding: [5, inset, 8, inset]
     View {
-      radius: 15; clip: true; background: #272731
+      radius: 15; clip: true; background: #28242B
       Row {
         align: .center; padding: [8, 11]; gap: 10
         Row {
           grow: 1; shrink: 1; align: .center; gap: 10; role: .button; label: "展开播放器"
           on press { emit open }
-          Art(player.smallCoverUrl, 40.0, "sleeve-tape.jpg", 6.0)
+          Art(player.smallCoverUrl, 40.0, "mountain-cover.jpg", 6.0)
           Column {
             grow: 1; shrink: 1; gap: 1
-            Text(player.trackTitle) { color: #FFFBF2; font: Font(size: 14).bold(); lines: 1 }
-            Text(player.artist) { color: #C1BFCA; font: Font(size: 12); lines: 1 }
+            Text(player.trackTitle) { color: #FFFAFE; font: Font(size: 14).bold(); lines: 1 }
+            Text(player.artist) { color: #C2B9C2; font: Font(size: 12); lines: 1 }
           }
         }
-        IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #27232C, orange, 37.0, 17.0) { on press { control("toggle") } }
+        IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #27232C, #F5B0BE, 37.0, 17.0) { on press { control("toggle") } }
         IconAction("next", "下一首", #F4EEE3, #FFFFFF13, 34.0, 16.0) { on press { control("next") } }
       }
       Canvas(g => {
         g.stroke(Path().move(0,1).line(g.width,1), #FFFFFF22, StrokeStyle(width: 2))
         if player.duration > 0 {
-          g.stroke(Path().move(0,1).line(g.width * min(1.0, player.position / player.duration),1), orange, StrokeStyle(width: 2))
+          g.stroke(Path().move(0,1).line(g.width * min(1.0, player.position / player.duration),1), #F5B0BE, StrokeStyle(width: 2))
         }
       }) { height: 2 }
-    }
-  }
-}
-
-component TransportPanel {
-  let palette = colorsFor(player.themeMode, environment().dark)
-  let wide = environment().width >= 720
-  Column {
-    grow: if wide { 1 } else { 0 }; shrink: 1; gap: if wide { 24 } else { 14 }; justify: .center
-    Column {
-      gap: 4
-      Text(player.trackTitle) { color: palette.ink; font: Font(size: if wide { 31.0 } else { 26.0 }).bold(); lines: 2 }
-      if !player.artist.isEmpty() { Text(player.artist) { color: palette.secondary; font: Font(size: 15).medium(); lines: 1 } }
-    }
-    Column {
-      gap: 3
-      Slider { min: 0; max: max(1.0, player.duration); value: if player.duration > 0 { min(player.duration, player.position) } else { 0.0 }; label: "播放进度"; on change(v) { if player.duration > 0 { action("seek", "{v}") } } }
-      Row {
-        justify: .spaceBetween
-        Text(clock(player.position)) { color: palette.secondary; font: Font(size: 12).family("monospace") }
-        Text(if player.duration > 0 { clock(player.duration) } else { "–:––" }) { color: palette.secondary; font: Font(size: 12).family("monospace") }
-      }
-    }
-    Row {
-      justify: .spaceBetween; align: .center
-      IconAction("shuffle", if player.shuffle { "随机已开启" } else { "随机播放" }, if player.shuffle { palette.violet } else { palette.secondary }, if player.shuffle { palette.violetWash } else { #00000000 }, 37.0, 19.0) { on press { control("shuffle") } }
-      IconAction("previous","上一首",palette.ink,palette.soft,42.0,21.0) { on press { control("previous") } }
-      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #FFF9ED, #4941C4, 64.0, 28.0) { on press { control("toggle") } }
-      IconAction("next","下一首",palette.ink,palette.soft,42.0,21.0) { on press { control("next") } }
-      IconAction(if player.repeatMode == 1 { "single" } else { "repeat" }, if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }, if player.repeatMode > 0 { palette.violet } else { palette.secondary }, if player.repeatMode > 0 { palette.violetWash } else { #00000000 }, 37.0, 19.0) { on press { control("repeat") } }
     }
   }
 }
@@ -65,97 +38,178 @@ component NowPlaying(panel: string) {
   let inset = contentInset(environment().width)
   event dismiss
   event queue
-  let wide = environment().width >= 720
-  let side = if wide { min(285.0, max(198.0, (environment().width - 250.0) * 0.41)) } else { min(301.0, max(145.0, min(environment().width - 70.0, environment().height * 0.39))) }
-  Column {
-    grow: 1; background: palette.paper; padding: if wide { [16, 0] } else { [7, 0] }
-    Row {
-      padding: [5, inset]; align: .center; justify: .spaceBetween
-      IconAction("down", "收起", palette.ink, palette.soft) { on press { emit dismiss } }
-      Text(if panel == "queue" { "播放队列" } else { "正在播放" }) { color: palette.ink; font: Font(size: 17).bold() }
-      if panel != "queue" || !player.trackTitle.isEmpty() {
-        IconAction(if panel == "queue" { "wave" } else { "queue" }, if panel == "queue" { "播放器" } else { "队列" }, palette.violet, palette.violetWash) { on press { emit queue } }
-      } else { View { width: 40 } }
-    }
-    if player.queue.isEmpty() && player.trackTitle.isEmpty() {
-      Column {
-        grow: 1; align: .center; justify: .center; gap: 12
-        Glyph("queue", palette.violet, 29.0)
-        Text("队列为空") { color: palette.ink; font: .headline }
-        Pill("返回", "back", palette.violet, palette.violetWash) { on press { emit dismiss } }
-      }
-    } else if panel == "queue" {
+  if panel == "player" && !player.trackTitle.isEmpty() {
+    ImmersivePlayer { on dismiss { emit dismiss }; on queue { emit queue } }
+  } else {
+    Column {
+      grow: 1; background: palette.paper; padding: [9,0]
       Row {
-        padding: [10, inset]; align: .center; justify: .spaceBetween
-        Text("{player.queue.count()} 首歌曲") { color: palette.secondary; font: .subheadline }
-        if !player.queue.isEmpty() {
-          Pill("清空队列", "minus", palette.ink, palette.soft) {
-            on press { alert("清空播放队列？", actions: [.button(title: "取消", role: .cancel), .button(title: "清空", role: .destructive, run: () => control("clear"))]) }
-          }
-        }
+        padding: [4,inset]; align: .center; justify: .spaceBetween
+        IconAction("down", "收起", palette.ink, #00000000, 44.0) { on press { emit dismiss } }
+        Text("播放队列") { color: palette.ink; font: Font(size: 18).medium() }
+        if !player.trackTitle.isEmpty() {
+          IconAction("wave", "播放器", palette.accent, #00000000, 44.0) { on press { emit queue } }
+        } else { View { width: 44 } }
       }
-      List {
-        grow: 1
-        for (i,entry) in player.queue.enumerated() key i {
-          Row {
-            margin: [2, inset]; padding: [9,11]; radius: 12; gap: 11; align: .center
-            background: if i == player.queueIndex { palette.violetWash } else { palette.surface }
-            Row {
-              grow: 1; shrink: 1; align: .center; gap: 10; role: .button; label: entry.title; on press { control("jump",i) }
-              View {
-                width: 28; align: .center; justify: .center
-                if i == player.queueIndex { Glyph("wave",palette.violet,19.0) } else { Text("{i+1}") { color: palette.secondary; font: .footnote } }
-              }
-              Column {
-                grow: 1; shrink: 1; gap: 3
-                Text(entry.title) { color: palette.ink; font: .headline; lines: 1 }
-                Text(entry.detail) { color: palette.secondary; font: .footnote; lines: 1 }
-              }
+      if player.queue.isEmpty() && player.trackTitle.isEmpty() {
+        Column {
+          grow: 1; align: .center; justify: .center; gap: 12
+          Glyph("queue", palette.accent, 29.0)
+          Text("队列为空") { color: palette.ink; font: .headline }
+          Pill("返回", "back", palette.accent, palette.accentWash) { on press { emit dismiss } }
+        }
+      } else if panel == "queue" {
+        Row {
+          padding: [10, inset]; align: .center; justify: .spaceBetween
+          Text("{player.queue.count()} 首歌曲") { color: palette.secondary; font: .subheadline }
+          if !player.queue.isEmpty() {
+            Pill("清空队列", "minus", palette.ink, palette.soft) {
+              on press { alert("清空播放队列？", actions: [.button(title: "取消", role: .cancel), .button(title: "清空", role: .destructive, run: () => control("clear"))]) }
             }
-            IconAction("minus", "移除歌曲", palette.secondary, #00000000, 37.0, 15.0) { on press { control("remove",i) } }
+          }
+        }
+        List {
+          appearance: .bare; grow: 1
+          for (i,entry) in player.queue.enumerated() key i {
+            Row {
+              margin: [2, inset]; padding: [9,11]; radius: 8; gap: 11; align: .center
+              background: if i == player.queueIndex { palette.accentWash } else { palette.paper }
+              Row {
+                grow: 1; shrink: 1; align: .center; gap: 10; role: .button; label: entry.title; on press { control("jump",i) }
+                View {
+                  width: 28; align: .center; justify: .center
+                  if i == player.queueIndex { Glyph("wave",palette.accent,19.0) } else { Text("{i+1}") { color: palette.secondary; font: .footnote } }
+                }
+                Column {
+                  grow: 1; shrink: 1; gap: 3
+                  Text(entry.title) { color: palette.ink; font: .headline; lines: 1 }
+                  Text(entry.detail) { color: palette.secondary; font: .footnote; lines: 1 }
+                }
+              }
+              IconAction("minus", "移除歌曲", palette.secondary, #00000000, 37.0, 15.0) { on press { control("remove",i) } }
+            }
           }
         }
       }
-    } else {
+    }
+  }
+}
+
+component ImmersivePlayer {
+  event dismiss
+  event queue
+  state art = Artwork()
+  task(player.largeCoverUrl) {
+    art = Artwork()
+    let url = player.largeCoverUrl
+    if !url.isEmpty() {
+      let raw = await spawn { lbm_player_art(url) }
+      if player.largeCoverUrl == url {
+        if let result = try? json.decode<Artwork>(raw) { art = result }
+      }
+    }
+  }
+  let wide = environment().width >= 720
+  let inset = if wide { 32.0 } else { max(20.0, min(38.0, environment().width * 0.07)) }
+  let side = if wide { max(175.0, min(335.0, (environment().width - 200.0) * 0.42)) } else { min(420.0, min(environment().width - inset * 2, max(184.0, environment().height * 0.48))) }
+  View {
+    grow: 1; background: #241F2B; clip: true
+    Image(if art.ambience.isEmpty() { "mountain-mist.jpg" } else { art.ambience }) {
+      absolute: true; top: 0; left: 0; width: 100%; height: 100%; mode: .fill
+    }
+    View {
+      absolute: true; top: 0; left: 0; width: 100%; height: 100%
+      gradient: Gradient(stops: [Stop(color: #100E192F, at: 0), Stop(color: #13101961, at: 0.42), Stop(color: #111015DA, at: 0.81), Stop(color: #111014FA, at: 1)])
+    }
+    Column {
+      grow: 1
+      Row {
+        padding: [8, inset]; align: .center; justify: .spaceBetween
+        IconAction("down", "收起", #FFFFFF, #00000000, 44.0, 22.0) { on press { emit dismiss } }
+        Text("正在播放") { color: #FFFFFF; font: Font(size: 15).medium() }
+        IconAction("queue", "队列", #FFFFFF, #00000000, 44.0, 21.0) { on press { emit queue } }
+      }
       Scroll {
         grow: 1
         Column {
-          gap: 32; padding: if wide { [30, 26] } else { [max(18.0, (environment().height - 655.0) * 0.25), 27, 27, 27] }
+          padding: if wide { [26, inset, 26, inset] } else { [max(9.0, min(39.0, (environment().height - 610.0) * 0.13)), inset, 24, inset] }
+          gap: 34
           View {
             direction: if wide { .row } else { .column }; align: if wide { .center } else { .stretch }
-            gap: if wide { 28 } else { 24 }
+            gap: if wide { 28 } else { max(18.0, min(35.0, environment().height * 0.042)) }
             View {
-              alignSelf: .center; radius: 15
-              shadow: Shadow(color: #18103825, radius: 12, y: 5)
-              Art(player.largeCoverUrl, side, "sleeve-tape.jpg", 15.0)
+              width: side; height: side; alignSelf: .center; radius: 10
+              shadow: Shadow(color: #06030C58, radius: 19, y: 8)
+              Image(if art.cover.isEmpty() { "mountain-cover.jpg" } else { art.cover }) {
+                width: 100%; height: 100%; mode: .fill; radius: 10
+              }
             }
             TransportPanel()
           }
           if wide && !player.queue.isEmpty() {
             Column {
-              gap: 3
+              gap: 0
               Row {
-                align: .center; justify: .spaceBetween; padding: [0, 0, 8, 0]
-                Text("播放队列") { color: palette.ink; font: Font(size: 18).bold() }
-                Pill("查看全部", "queue", palette.violet, palette.violetWash) { on press { emit queue } }
+                justify: .spaceBetween; align: .center
+                Text("播放队列") { color: #FFF9FC; font: Font(size: 20).medium() }
+                Pill("查看全部", "queue", #F7D6DE, #FFFFFF12) { on press { emit queue } }
               }
               for i in player.queueIndex..<min(player.queue.count(), player.queueIndex + 3) key i {
                 Row {
-                  align: .center; gap: 12; minHeight: 46; padding: [7, 12]; radius: 9
-                  background: if i == player.queueIndex { palette.violetWash } else { palette.surface }
-                  role: .button; label: player.queue[i].title; on press { control("jump", i) }
-                  View { width: 24; align: .center; justify: .center
-                    if i == player.queueIndex { Glyph("wave", palette.violet, 18.0) }
-                    else { Text("{i+1}") { color: palette.secondary; font: .footnote } }
+                  align: .center; gap: 12; minHeight: 42; role: .button; label: player.queue[i].title
+                  on press { control("jump", i) }; pressed { background: #FFFFFF14 }
+                  View { width: 22; align: .center
+                    if i == player.queueIndex { Glyph("wave", #FFB8CB, 17.0) }
+                    else { Text("{i+1}") { color: #ACA4AE; font: .footnote } }
                   }
-                  Text(player.queue[i].title) { grow: 1; shrink: 1; color: palette.ink; font: Font(size: 14).semibold(); lines: 1 }
-                  Text(player.queue[i].detail) { shrink: 1; color: palette.secondary; font: .footnote; lines: 1 }
+                  Text(player.queue[i].title) { grow: 1; shrink: 1; color: #F9F5F7; font: Font(size: 15); lines: 1 }
+                  Text(player.queue[i].detail) { shrink: 1; color: #C9BEC8; font: .footnote; lines: 1 }
                 }
               }
             }
           }
         }
       }
+    }
+  }
+}
+
+component TransportPanel {
+  let wide = environment().width >= 720
+  Column {
+    grow: if wide { 1 } else { 0 }; shrink: 1; gap: if wide { 18 } else { 12 }
+    Column {
+      gap: 3
+      Text(player.trackTitle) { color: #FDFAFC; font: Font(size: if wide { 33.0 } else { 32.0 }).medium(); lines: 2 }
+      if !player.artist.isEmpty() { Text(player.artist) { color: #E3D9E2; font: Font(size: 18); lines: 1 } }
+    }
+    Column {
+      base.Slider {
+        value: min(player.position, player.duration); max: max(1.0, player.duration); disabled: player.duration <= 0
+        on valueChange(v) { if player.duration > 0 { action("seek", "{v}") } }
+        base.SliderTrack {
+          height: 31; justify: .center
+          View { height: 4; radius: 2; background: #FFFFFF43 }
+          base.SliderRange { justify: .center; View { height: 4; radius: 2; background: #FCF6FB } }
+          base.SliderThumb {
+            label: "播放进度"; width: 24; height: 28; justify: .center; align: .center
+            View { width: 9; height: 9; radius: 5; background: #FFFFFF }
+          }
+        }
+      }
+      Row {
+        justify: .spaceBetween
+        Text(clock(player.position)) { color: #D2C8D1; font: Font(size: 12) }
+        Text(if player.duration > 0 { clock(player.duration) } else { "–:––" }) { color: #D2C8D1; font: Font(size: 12) }
+      }
+    }
+    Row {
+      align: .center; justify: .spaceBetween
+      IconAction("shuffle", if player.shuffle { "随机已开启" } else { "随机播放" }, if player.shuffle { #FFB8CB } else { #C9C0CA }, #00000000, 39.0, 20.0) { on press { control("shuffle") } }
+      IconAction("previous", "上一首", #FFF9FD, #00000000, 44.0, 29.0) { on press { control("previous") } }
+      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #201B24, #FEFCFD, 59.0, 27.0) { on press { control("toggle") } }
+      IconAction("next", "下一首", #FFF9FD, #00000000, 44.0, 29.0) { on press { control("next") } }
+      IconAction(if player.repeatMode == 1 { "single" } else { "repeat" }, if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }, if player.repeatMode > 0 { #FFB8CB } else { #C9C0CA }, #00000000, 39.0, 20.0) { on press { control("repeat") } }
     }
   }
 }

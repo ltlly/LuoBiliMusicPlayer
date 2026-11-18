@@ -202,6 +202,18 @@ unsafe extern "C" fn lbm_cover(url: *const c_char) -> *const c_char {
     output(file.map_or_else(String::new, |p| p.to_string_lossy().into_owned()))
 }
 
+#[unsafe(no_mangle)]
+unsafe extern "C" fn lbm_player_art(url: *const c_char) -> *const c_char {
+    let url = unsafe { input(url) };
+    let artwork = COVERS.get().and_then(|cache| {
+        let cache = cache.lock().ok()?;
+        let cover = cache.load(url).ok()?;
+        let ambience = cache.ambience(url, &cover).unwrap_or_default();
+        serde_json::to_string(&serde_json::json!({ "cover": cover, "ambience": ambience })).ok()
+    });
+    output(artwork.unwrap_or_default())
+}
+
 fn command(name: &str, arg: &str, value: &str) -> Option<Command> {
     Some(match name {
         "navigate" => {

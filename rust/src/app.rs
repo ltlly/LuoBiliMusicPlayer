@@ -166,7 +166,7 @@ impl Application {
             .client
             .settings
             .get("theme_mode")
-            .unwrap_or("SYSTEM")
+            .unwrap_or("DARK")
             .to_owned();
         self.show(move |ui| ui.theme_mode = theme);
         let _ = self.client.ensure_buvid();

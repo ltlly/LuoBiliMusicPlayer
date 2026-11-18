@@ -19,7 +19,6 @@ component Music(live: bool = true) {
   let inset = contentInset(environment().width)
   let wide = environment().width >= 720
   state panel = ""
-  let showHero = player.page == "favorites" && panel.isEmpty() && environment().height >= 535
   state query = ""
   state selected: [string] = []
   state selecting = false
@@ -87,44 +86,40 @@ component Music(live: bool = true) {
       grow: 1
       if wide {
         Column {
-          width: if environment().width < 850 { 152 } else { 177 }; padding: [23, 12]; gap: 24
+          width: if environment().width < 850 { 146 } else { 164 }; padding: [26, 13]; gap: 28; background: palette.surface
           View { padding: [0,6]; Brand() }
           Navigation(true, panel) { on choose(p) { openTab(p) } }
           View { grow: 1 }
-          Pill("播放队列", "queue", palette.violet, palette.violetWash) { on press { panel = "queue" } }
+          Pill("播放队列", "queue", palette.accent, palette.accentWash) { on press { panel = "queue" } }
         }
         View { width: 1; background: palette.rule }
       }
       Column {
-        grow: 1; shrink: 1; padding: if wide { [12,0,6,0] } else { 0 }
+        grow: 1; shrink: 1
         if panel == "player" || panel == "queue" {
           NowPlaying(panel) {
             on dismiss { panel = "" }
             on queue { panel = if panel == "queue" { "player" } else { "queue" } }
           }
         } else {
-          if !wide { Masthead { on queue { panel = "queue" } } }
-          if showHero { ListeningCard { on open { panel = "player" } } }
-          if !showHero || !player.trackTitle.isEmpty() {
-            PageTitle(pageName(player.page),
-              if player.page == "favorites" { "{player.entries.count()} 个" } else if player.page == "library" { "{player.entries.count()} 首" } else { "" },
-              player.page == "favorites" || player.page == "library" || player.page == "content" || player.page == "downloads",
+          if player.page == "favorites" {
+            Collection { on open { panel = "player" }; on queue { panel = "queue" } }
+          } else {
+            if !wide { Masthead { on queue { panel = "queue" } } }
+            PageTitle(pageName(player.page), if player.page == "library" { "{player.entries.count()} 首" } else { "" },
+              player.page == "library" || player.page == "content" || player.page == "downloads",
               player.page == "content" || player.page == "downloadSettings") {
               on returnPage { go(if player.page == "content" { "favorites" } else { "settings" }) }
               on refreshPage { action("retry") }
             }
-          } else {
-            Row { padding: [1,inset]; justify: .end; IconAction("refresh","刷新",palette.secondary,palette.soft,36.0,17.0) { on press { action("retry") } } }
-          }
-          if !player.message.isEmpty() {
-            Text(player.message) { color: palette.violet; font: .footnote; padding: [4,inset]; lines: 3 }
-          }
-          if player.page == "login" {
-            LoginPane()
-          } else if player.page == "settings" || player.page == "downloadSettings" {
-            Preferences()
-          } else {
-            if player.page != "favorites" {
+            if !player.message.isEmpty() {
+              Text(player.message) { color: palette.accent; font: .footnote; padding: [4,inset]; lines: 3 }
+            }
+            if player.page == "login" {
+              LoginPane()
+            } else if player.page == "settings" || player.page == "downloadSettings" {
+              Preferences()
+            } else {
               Row {
                 margin: [2,inset,5,inset]; padding: [2,11]; gap: 8; radius: 12
                 border: 1; borderColor: palette.rule; background: palette.surface; align: .center
@@ -137,58 +132,54 @@ component Music(live: bool = true) {
                   }
                 }
               }
-            }
-            if player.page == "downloads" {
-              Segmented(["进行中", "已完成", "失败"]) {
-                margin: [3,inset]; selected: tab
-                on change(i) { tab = i; selected = []; selecting = false; action("downloadsTab", "{i}") }
+              if player.page == "downloads" {
+                Segmented(["进行中", "已完成", "失败"]) {
+                  margin: [3,inset]; selected: tab
+                  on change(i) { tab = i; selected = []; selecting = false; action("downloadsTab", "{i}") }
+                }
               }
-            }
-            if player.page != "favorites" && !player.entries.isEmpty() {
-              Row {
-                gap: 6; wrap: true; padding: [4,inset,7,inset]
-                if selecting {
-                  Pill("全选","check",palette.violet,palette.violetWash) { on press { selected = player.entries.map(e => e.key) } }
-                  if !selected.isEmpty() {
-                    if player.page == "content" {
-                      Pill("下载 ({selected.count()})", "downloads", palette.ink, palette.soft) { on press { sendDownload(selected) } }
-                    } else {
-                      Pill("删除 ({selected.count()})", "minus", palette.ink, palette.soft) { on press { confirmRemoval() } }
+              if !player.entries.isEmpty() {
+                Row {
+                  gap: 6; wrap: true; padding: [4,inset,7,inset]
+                  if selecting {
+                    Pill("全选","check",palette.accent,palette.accentWash) { on press { selected = player.entries.map(e => e.key) } }
+                    if !selected.isEmpty() {
+                      if player.page == "content" {
+                        Pill("下载 ({selected.count()})", "downloads", palette.ink, palette.soft) { on press { sendDownload(selected) } }
+                      } else {
+                        Pill("删除 ({selected.count()})", "minus", palette.ink, palette.soft) { on press { confirmRemoval() } }
+                      }
+                    }
+                    Pill("取消","",palette.ink,palette.soft) { on press { selecting = false; selected = [] } }
+                  } else {
+                    Pill(if player.page == "downloads" { "选择记录" } else { "选择歌曲" }, "check", palette.ink, palette.soft) { on press { selecting = true } }
+                    if player.page == "content" { Pill("下载全部","downloads",palette.accent,palette.accentWash) { on press { sendDownload([]) } } }
+                    if player.page == "library" { Pill("清理未匹配歌曲","",palette.secondary,palette.soft) { on press { confirmRemoval(true) } } }
+                  }
+                }
+              }
+              if player.entries.isEmpty() {
+                Column {
+                  grow: 1; align: .center; justify: .center; gap: 9
+                  View { width: 50; height: 50; radius: 16; background: palette.accentWash; align: .center; justify: .center; Glyph(if query.isEmpty() { player.page } else { "search" },palette.accent,22.0) }
+                  Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.page == "downloads" { "暂无下载" } else { "暂无歌曲" }) { color: palette.secondary; font: .subheadline }
+                }
+              } else {
+                List {
+                  grow: 1; margin: [2,inset,4,inset]
+                  appearance: .bare
+                  for (i,e) in player.entries.enumerated() key e.key {
+                    EntryRow(e, i, selecting, selected.contains(e.key)) {
+                      on choose { if selecting { select(e.key) } else { action("choose", e.key, e.title) } }
                     }
                   }
-                  Pill("取消","",palette.ink,palette.soft) { on press { selecting = false; selected = [] } }
-                } else {
-                  Pill(if player.page == "downloads" { "选择记录" } else { "选择歌曲" }, "check", palette.ink, palette.soft) { on press { selecting = true } }
-                  if player.page == "content" { Pill("下载全部","downloads",palette.violet,palette.violetWash) { on press { sendDownload([]) } } }
-                  if player.page == "library" { Pill("清理未匹配歌曲","",palette.secondary,palette.soft) { on press { confirmRemoval(true) } } }
                 }
+                if player.hasMore { Pill("加载更多","down",palette.accent,palette.accentWash) { on press { action("more") } } }
               }
             }
-            if player.entries.isEmpty() {
-              Column {
-                grow: 1; align: .center; justify: .center; gap: 9
-                View { width: 50; height: 50; radius: 16; background: palette.violetWash; align: .center; justify: .center; Glyph(if query.isEmpty() { player.page } else { "search" },palette.violet,22.0) }
-                Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.page == "downloads" { "暂无下载" } else if player.page == "favorites" { "暂无收藏夹" } else { "暂无歌曲" }) { color: palette.secondary; font: .subheadline }
-              }
-            } else {
-              List {
-                grow: 1; margin: [2,inset,4,inset]
-                columns: if player.page == "favorites" && player.entries.count() > 1 && environment().width >= 340 {
-                  if environment().width >= 1210 { 3 } else { 2 }
-                } else { 1 }; gap: 10
-                for (i,e) in player.entries.enumerated() key e.key {
-                  if player.page == "favorites" {
-                    FolderCard(e, i, player.entries.count() == 1) { on open { action("choose",e.key,e.title) } }
-                  } else { EntryRow(e, i, selecting, selected.contains(e.key)) {
-                    on choose { if selecting { select(e.key) } else { action("choose", e.key, e.title) } }
-                  } }
-                }
-              }
-              if player.hasMore { Pill("加载更多","down",palette.violet,palette.violetWash) { on press { action("more") } } }
+            if !player.trackTitle.isEmpty() {
+              MiniPlayer { on open { panel = "player" } }
             }
-          }
-          if !showHero && !player.trackTitle.isEmpty() {
-            MiniPlayer { on open { panel = "player" } }
           }
           if !wide {
             View { height: 1; background: palette.rule }
@@ -200,30 +191,24 @@ component Music(live: bool = true) {
   }
 }
 
-component FolderCard(e: Entry, index: int, single: bool) {
+component FolderTile(e: Entry, index: int, single: bool) {
   let palette = colorsFor(player.themeMode, environment().dark)
   event open
   View {
-    direction: if single { .row } else { .column }
-    radius: 14; clip: true; background: palette.surface; border: 1; borderColor: palette.rule
-    role: .button; label: e.title; on press { emit open }; pressed { opacity: 0.8 }
+    direction: if single { .row } else { .column }; align: if single { .center } else { .stretch }
+    grow: 1; basis: 0; shrink: 1; gap: if single { 16 } else { 4 }
+    role: .button; label: e.title; on press { emit open }; pressed { opacity: 0.77 }
     View {
-      width: if single { 40% } else { 100% }
-      height: if single { 134 } else if environment().width >= 720 { 122 } else { 102 }
-      CoverImage(e.coverUrl, printedSleeve(index), 0.0)
+      width: if single { 102 } else { 100% }; aspectRatio: if single { 1.03 } else if environment().width >= 720 { 1.88 } else { 1.52 }
+      radius: 9; clip: true; background: palette.surface
+      CoverImage(e.coverUrl, albumFallback(index), 9.0)
     }
-    Row {
-      grow: if single { 1 } else { 0 }; shrink: 1; align: .center; gap: 6
-      padding: if single { 16 } else { [10,11] }
-      Column {
-        grow: 1; shrink: 1; gap: 3
-        Text(e.title) { color: palette.ink; font: Font(size: if single { 20.0 } else { 15.0 }).bold(); lines: 2 }
-        Text(e.detail) { color: palette.secondary; font: Font(size: 12); lines: 1 }
-      }
-      if single {
-        View { width: 31; height: 31; radius: 16; background: palette.violetWash; align: .center; justify: .center; Glyph("open",palette.violet,14.0) }
-      }
+    Column {
+      grow: if single { 1 } else { 0 }; shrink: 1; gap: 4; padding: [3,0,0,0]
+      Text(e.title) { color: palette.ink; font: Font(size: if single { 21.0 } else { 16.0 }).medium(); lines: 2 }
+      Text(e.detail) { color: palette.secondary; font: Font(size: 12); lines: 1 }
     }
+    if single { Glyph("right", palette.secondary, 18.0) }
   }
 }
 
@@ -232,20 +217,20 @@ component EntryRow(e: Entry, index: int, selecting: bool, checked: bool) {
   event choose
   let downloads = player.page == "downloads"
   Row {
-    background: if checked { palette.violetWash } else { palette.surface }; border: 1; borderColor: if checked { palette.violet } else { palette.rule }
-    radius: 12; padding: 8; gap: 10; align: .center
+    background: if checked { palette.accentWash } else { palette.paper }
+    radius: 6; padding: [7, 2]; gap: 12; align: .center
     Row {
       grow: 1; shrink: 1; align: .center; gap: 12; role: .button; label: e.title
       on press { emit choose }
       pressed { opacity: 0.7 }
-      Art(e.coverUrl, 44.0, printedSleeve(index), 7.0)
+      Art(e.coverUrl, 48.0, albumFallback(index), 5.0)
       Column {
         grow: 1; shrink: 1; gap: 4
-        Text(e.title) { color: palette.ink; font: Font(size: 15).bold(); lines: 2 }
+        Text(e.title) { color: palette.ink; font: Font(size: 16).medium(); lines: 2 }
         Text(e.detail) { color: palette.secondary; font: Font(size: 12); lines: if downloads { 2 } else { 1 } }
       }
       if selecting {
-        View { width: 22; height: 22; radius: 11; border: 1; borderColor: if checked { palette.violet } else { palette.rule }; background: if checked { palette.violet } else { palette.surface }; align: .center; justify: .center
+        View { width: 22; height: 22; radius: 11; border: 1; borderColor: if checked { palette.accent } else { palette.rule }; background: if checked { palette.accent } else { palette.surface }; align: .center; justify: .center
           if checked { Glyph("check",palette.surface,14.0) }
         }
       } else if !downloads { Glyph("right", palette.secondary, 14.0) }
@@ -281,8 +266,8 @@ component LoginPane {
           }
           Text("请使用哔哩哔哩客户端扫码") { color: palette.ink; font: .headline }
         } else if player.loginState == "error" || player.loginState == "expired" {
-          Glyph("refresh",palette.violet,32.0)
-          Pill("重新获取二维码","refresh",palette.violet,palette.violetWash) { on press { action("retry") } }
+          Glyph("refresh",palette.accent,32.0)
+          Pill("重新获取二维码","refresh",palette.accent,palette.accentWash) { on press { action("retry") } }
         } else {
           Activity()
           Text("正在获取二维码") { color: palette.secondary }

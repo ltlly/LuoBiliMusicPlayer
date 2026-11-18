@@ -11,7 +11,7 @@ component Preferences {
           Card {
             SectionName("恢复旧版音频","wave")
             Text("音质升级曾中断，原音频有一份恢复副本。") { color: palette.secondary }
-            Pill("使用副本恢复歌曲","back",palette.violet,palette.violetWash) { on press { action("recoverAudio") } }
+            Pill("使用副本恢复歌曲","back",palette.accent,palette.accentWash) { on press { action("recoverAudio") } }
           }
         }
         Card {
@@ -20,7 +20,7 @@ component Preferences {
           if !player.accountDetail.isEmpty() { Text(player.accountDetail) { color: palette.secondary; font: .footnote } }
           Row {
             gap: 7; wrap: true
-            Pill("检查登录状态","refresh",palette.violet,palette.violetWash) { on press { action("account") } }
+            Pill("检查登录状态","refresh",palette.accent,palette.accentWash) { on press { action("account") } }
             if player.account == "未登录" {
               Pill("扫码登录","",palette.ink,palette.soft) { on press { go("login") } }
             } else {
@@ -33,7 +33,7 @@ component Preferences {
         Row {
           padding: [15,17]; gap: 9; align: .center; background: palette.surface; border: 1; borderColor: palette.rule; radius: 15
           role: .button; label: "下载设置"; on press { go("downloadSettings") }; pressed { opacity: 0.7 }
-          Glyph("downloads",palette.violet,18.0)
+          Glyph("downloads",palette.accent,18.0)
           Text("下载设置") { grow: 1; color: palette.ink; font: Font(size: 16).bold() }
           Glyph("right",palette.secondary,14.0)
         }
@@ -53,9 +53,9 @@ component Preferences {
               if errorsOpen { Text(player.qualityErrors) { color: palette.secondary; font: .footnote } }
             }
             if player.qualityStatus == "running" {
-              Pill("暂停升级","pause",palette.violet,palette.violetWash) { on press { action("quality","pause") } }
+              Pill("暂停升级","pause",palette.accent,palette.accentWash) { on press { action("quality","pause") } }
             } else {
-              Pill(if player.qualityStatus == "permission" || player.qualityStatus == "paused" { "继续升级" } else { "升级到最高音质" },"downloads",palette.violet,palette.violetWash) { on press { action("quality","start") } }
+              Pill(if player.qualityStatus == "permission" || player.qualityStatus == "paused" { "继续升级" } else { "升级到最高音质" },"downloads",palette.accent,palette.accentWash) { on press { action("quality","start") } }
               if player.qualityFailures { Pill("重试失败的歌曲","refresh",palette.ink,palette.soft) { on press { action("quality","retry") } } }
             }
           }

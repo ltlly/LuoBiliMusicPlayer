@@ -5,6 +5,13 @@ extern fn lbm_snapshot(revision: Int64) -> CString
 extern fn lbm_action(name: CString, arg: CString, value: CString)
 extern fn lbm_cover(url: CString) -> CString
 
+extern fn lbm_player_art(url: CString) -> CString
+
+struct Artwork {
+  cover: string = ""
+  ambience: string = ""
+}
+
 struct Entry {
   key: string = ""
   title: string = ""
@@ -34,7 +41,7 @@ struct Player {
   queueIndex: int = 0
   repeatMode: int = 0
   shuffle: bool = false
-  themeMode: string = "SYSTEM"
+  themeMode: string = "DARK"
   account: string = ""
   accountDetail: string = ""
   downloadDir: string = ""

@@ -20,7 +20,7 @@ test "an empty queue returns to the collection" {
   ui.expect("日落之后")
 }
 
-test "the listening card opens the restored track" {
+test "the immersive cover opens the restored track" {
   player = Player(page: "favorites", trackTitle: "夜色慢行", artist: "岛屿来信",
     entries: [Entry(key: "1", title: "日落之后"), Entry(key: "2", title: "潮汐唱片")],
     queue: [Entry(title: "夜色慢行")])

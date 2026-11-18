@@ -1,0 +1,16 @@
+Fallback photography distributed with BiliMusicPlayer
+
+Fuji san — amaral (mountain-dusk.jpg, mountain-cover.jpg, mountain-mist.jpg)
+Blue flower — Elena Stravoravdi (garden.jpg)
+Mirror — Uday Nakade (afterglow.jpg)
+Northan lights — mizuno (aurora.jpg)
+Optical Fibers in Dark — Elena Stravoravdi (fiber.jpg)
+
+These photographs and the adaptations listed above are licensed under
+Creative Commons Attribution-ShareAlike 4.0 International.
+https://creativecommons.org/licenses/by-sa/4.0/
+
+Source: Ubuntu community wallpapers, Jammy and Noble collections.
+https://launchpad.net/ubuntu-wallpapers
+Adaptations for this player include cropping, color grading, resizing,
+a sky extension for the wide cover, and blurring for the player background.
