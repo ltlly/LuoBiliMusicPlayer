@@ -23,7 +23,7 @@ component PageTitle(title: string, count: string = "", refresh: bool = false, ba
     View { grow: 1 }
     if @platform == .windows {
       if player.page == "rankWeb" {
-        Pill("在浏览器打开", "right", palette.accent, palette.accentWash) { on press { openURL("https://www.evocalrank.com/#/") } }
+        Pill("在浏览器打开", "right", palette.accent, palette.accentWash) { on press { openURL(rankWebsiteUrl) } }
       }
     }
     if refresh { IconAction("refresh", "刷新", palette.secondary, #00000000, 42.0, 17.0) { on press { emit refreshPage } } }
@@ -38,13 +38,13 @@ component ListeningCover {
   event open
   event queue
   View {
-    height: height; clip: true; background: #173C51
+    height: height; clip: true; background: #102237
     Image(if wide { "stage-wide.jpg" } else { "stage-mobile.jpg" }) {
       absolute: true; top: 0; left: 0; width: 100%; height: 100%; mode: .fill
     }
     View {
       absolute: true; top: 0; left: 0; width: 100%; height: 100%
-      gradient: Gradient(stops: [Stop(color: #081A2EEC, at: 0), Stop(color: #092138C0, at: 0.26), Stop(color: #09223A42, at: 0.52), Stop(color: #07243400, at: 0.74)], startX: 0, startY: 0.5, endX: 1, endY: 0.5)
+      gradient: Gradient(stops: [Stop(color: #102237FF, at: 0), Stop(color: #102237EF, at: 0.32), Stop(color: #10223750, at: 0.55), Stop(color: #10223700, at: 0.76)], startX: 0, startY: 0.5, endX: 1, endY: 0.5)
     }
     View {
       absolute: true; top: 0; left: 0; width: 100%; height: 100%
@@ -53,7 +53,7 @@ component ListeningCover {
     if hasTrack {
       View {
         absolute: true; top: 0; left: 0; width: 100%; height: 100%
-        role: .button; label: "展开播放器"; on press { emit open }
+        role: .button; label: "展开播放器"; on press { emit open }; pressed { opacity: 1 }
       }
     }
     if !wide {
@@ -65,7 +65,7 @@ component ListeningCover {
     }
     Column {
       absolute: true; bottom: if wide { 26 } else { 18 }; left: inset
-      width: if wide { 51% } else { 68% }; gap: 5
+      width: if wide { 54% } else { 72% }; gap: 7
       if hasTrack {
         Row {
           align: .center; gap: 7
@@ -75,16 +75,11 @@ component ListeningCover {
         }
       }
       Text(if hasTrack { player.trackTitle } else { "我的音乐" }) {
-        color: #F3FBFF; font: Font(size: if wide { 43.0 } else { 32.0 }).semibold(); lines: 2
+        color: #F3FBFF; font: Font(size: if wide { 32.0 } else { 25.0 }).semibold(); lines: 2
       }
       if hasTrack && !player.artist.isEmpty() { Text(player.artist) { color: #CBE4EE; font: Font(size: 15); lines: 1 } }
       if hasTrack {
-        Row {
-          padding: [6,0,0,0]; align: .center; gap: 6
-          IconAction("previous", "上一首", #EBFCFF, #18394C99, 48.0, 17.0) { on press { control("previous") } }
-          Pill(if player.playing { "暂停" } else { "播放" }, if player.playing { "pause" } else { "play" }, #0B3344, #B3EFF2) { on press { control("toggle") } }
-          IconAction("next", "下一首", #EBFCFF, #18394C99, 48.0, 17.0) { on press { control("next") } }
-        }
+        View { padding: [5,0,0,0]; TrackButtons(true) }
       }
     }
   }
@@ -108,7 +103,7 @@ component Collection {
           if !player.message.isEmpty() { Text(player.message) { margin: [2, inset, 8, inset]; color: palette.accent; font: .footnote; lines: 3 } }
           if count == 0 && !player.loggedIn {
             View { padding: [12,inset] ; Pill("登录查看收藏夹","account",palette.accent,palette.accentWash) { on press { go("login") } } }
-          } else if count == 0 { Text("暂无收藏夹") { padding: [28, inset]; color: palette.secondary; font: .subheadline } }
+          } else if count == 0 { Text(if player.pageLoading { "正在读取收藏夹…" } else { "暂无收藏夹" }) { padding: [28, inset]; color: palette.secondary; font: .subheadline } }
         }
       } else {
         Row {

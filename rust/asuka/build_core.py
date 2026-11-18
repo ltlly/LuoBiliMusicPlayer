@@ -31,12 +31,14 @@ for platform in args.platform:
         env["CC_" + target.replace("-", "_")] = str(compilers[0] / compiler)
         env["AR_" + target.replace("-", "_")] = str(compilers[0] / "llvm-ar")
     command = ["cargo", "build", "--locked", "--lib", "--target", target]
+    profile = "debug"
     if not args.debug:
-        command.append("--release")
+        profile = "distribution" if platform == "windows-x64" or platform.startswith("android-") else "release"
+        command.extend(["--profile", profile])
     subprocess.run(command, cwd=ROOT, env=env, check=True)
     out = ROOT / "asuka/native" / platform
     out.mkdir(parents=True, exist_ok=True)
-    archive = Path(env.get("CARGO_TARGET_DIR", ROOT / "target")) / target / ("debug" if args.debug else "release") / "libbili_music_player.a"
+    archive = Path(env.get("CARGO_TARGET_DIR", ROOT / "target")) / target / profile / "libbili_music_player.a"
     shutil.copyfile(archive, out / archive.name)
     if platform == "windows-x64":
         compiler = os.environ.get("CC_x86_64_pc_windows_gnu", "x86_64-w64-mingw32-gcc")

@@ -1,0 +1,39 @@
+--- a/src/paint.c
++++ b/src/paint.c
+@@ -391,11 +391,36 @@
+ 	wh_paint_clip_corners(n, hwnd, dc);
+ }
+ 
++// Higher transparent siblings draw this subtree into their own HWND. Their
++// snapshots must be invalidated when an overlapped background changes.
++static void redraw_above(HWND changed) {
++	if (!IsWindowVisible(changed)) return;
++	RECT dirty;
++	GetWindowRect(changed, &dirty);
++	for (HWND child = changed; GetWindowLongPtrW(child, GWL_STYLE) & WS_CHILD; child = GetParent(child)) {
++		HWND parent = GetParent(child);
++		RECT clip;
++		if (!parent || !GetClientRect(parent, &clip)) break;
++		MapWindowPoints(parent, NULL, (POINT *)&clip, 2);
++		if (!IntersectRect(&dirty, &dirty, &clip)) break;
++		for (HWND s = GetWindow(child, GW_HWNDPREV); s; s = GetWindow(s, GW_HWNDPREV)) {
++			node *over = wh_node_of(s);
++			if (!over || over->hwnd != s || wh_opaque(over) || !IsWindowVisible(s)) continue;
++			RECT rect, hit;
++			GetWindowRect(s, &rect);
++			if (!IntersectRect(&hit, &dirty, &rect)) continue;
++			MapWindowPoints(NULL, s, (POINT *)&hit, 2);
++			RedrawWindow(s, &hit, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
++		}
++	}
++}
++
+ // wh_redraw repaints n and its children (they draw n behind them).
+ void wh_redraw(node *n) {
+ 	if (!n->hwnd) return;
+ 	RedrawWindow(n->hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
++	redraw_above(n->hwnd);
+ 	wh_pictures_stale(n->hwnd);
+ }
+ 
+ static bool overlaps(RECT a, RECT b) { return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom; }

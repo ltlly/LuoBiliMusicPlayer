@@ -49,12 +49,19 @@ impl Output {
             Err(e) => Err(e.into()),
         })
     }
-    pub fn load(&mut self, uri: &str) -> Result<()> {
+    pub fn load(&mut self, uri: &str, position_ms: i64) -> Result<()> {
         self.call(|env, p| {
             let uri = env.new_string(uri)?;
             env.call_method(p, "load", "(Ljava/lang/String;)V", &[JValue::Object(&uri)])?
                 .v()
-        })
+        })?;
+        if position_ms > 0
+            && let Err(error) = self.seek(position_ms)
+        {
+            let _ = self.stop();
+            return Err(error);
+        }
+        Ok(())
     }
     pub fn seek(&mut self, ms: i64) -> Result<()> {
         self.call(|env, p| env.call_method(p, "seek", "(J)V", &[JValue::Long(ms)])?.v())

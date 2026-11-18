@@ -114,11 +114,17 @@ impl Output {
         );
         Ok(())
     }
-    pub fn load(&mut self, uri: &str) -> Result<()> {
+    pub fn load(&mut self, uri: &str, position_ms: i64) -> Result<()> {
         self.property(c"http-header-fields", c"Referer: https://www.bilibili.com")?;
         self.property(
             c"user-agent",
             c"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )?;
+        // loadfile returns before the demuxer is ready to accept a seek command.
+        // Set the start time for every track, including zero after a resumed track.
+        self.property(
+            c"start",
+            &CString::new((position_ms.max(0) as f64 / 1000.0).to_string())?,
         )?;
         self.command(&[c"loadfile", &CString::new(uri)?, c"replace"])?;
         self.pause(false)

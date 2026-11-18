@@ -1,12 +1,12 @@
 # 哔哩音乐 · Rust / Asuka
 
-Asuka 0.2.9 负责原生界面。宽窗口显示侧栏，手机使用底部导航。Rust 工作线程负责 B 站请求、SQLite、旧设置、播放队列和下载。Asuka 轮询的是进程内的状态版本，检查界面变化不会触发 HTTP 请求。
+Asuka 0.2.9 负责原生界面。宽窗口显示侧栏，手机使用底部导航。Rust 工作线程负责 B 站请求、SQLite、旧设置、播放队列和下载。Rust 在页面准备好时通知 Asuka。播放进度独立更新，切换本地页面和检查界面状态不产生 HTTP 请求。
 
 当前维护 Android 和 Windows x64。macOS 暂缓打包和验收。
 
 Android 最低为 13（API 33），目标为 Android 16（API 36）。应用沿用 `com.bilimusicplayer`、原启动入口、签名和数据路径。桌面沿用 `BiliMusicPlayer` 用户数据目录。模拟运行时可以用 `BILIMUSIC_DATA_DIR` 指向一份独立的桌面数据副本。
 
-Android 播放沿用 Media3 1.11.1、100 MiB 音频缓存及原缓存索引。打开音乐库会先读取本地资源。收藏夹内的列表和搜索结果在当前登录会话内缓存五分钟，手动刷新会重新取数。播放时依次使用本地音频、有效的播放地址和在线解析。缓存地址会提前避开 CDN 链接的到期时间。
+Android 播放沿用 Media3 1.11.1、100 MiB 音频缓存及原缓存索引。音乐库先显示 SQLite 中的曲目，再在后台检查是否有新文件。回到看过的标签页时先显示已有内容。收藏夹内的列表和搜索结果在当前登录会话内缓存五分钟，手动刷新会重新取数。播放时依次使用本地音频、有效的播放地址和在线解析。缓存地址会提前避开 CDN 链接的到期时间。
 
 播放解析接口遇到 HTTP 500、502、503 或 504 时，可以读取一次对应 BV 号的公开视频网页。播放器只解析页面所带的视频资料和音轨 JSON。页面只有 CID 时，仍需要播放接口提供音轨。网页与播放 API 共用请求间隔和冷却，HTTP 429、412、带 Retry-After 的 503 以及风控响应会停止网络回退。
 
@@ -42,23 +42,25 @@ Linux 原生验证需要 GTK 4.14、libadwaita 1.5 或更高版本。播放时�
 python android/build.py --gradle /path/to/gradle-8.14.3/bin/gradle
 ```
 
-脚本先把 Asuka 界面和 Rust 链接成 AAR，再编译包含 MediaSession、MediaStore 和权限处理的宿主，最后使用仓库原签名生成 `target/asuka/BiliMusicPlayer-1.7.1.apk`。签名密码可由终端输入或通过环境变量 `BILI_STORE_PASSWORD`、`BILI_KEY_PASSWORD` 提供。覆盖安装使用 `adb -s <本机模拟器序列号> install -r <APK>`。
+脚本把 Asuka 界面和 Rust 链接成 AAR，再编译包含 MediaSession、MediaStore 和权限处理的宿主。默认给当前 ARM64 手机生成 `target/asuka/BiliMusicPlayer-1.7.3-arm64-v8a.apk`。x86_64 模拟器使用 `--abi x86_64`，需要同时分发给三种架构时使用 `--abi universal`。正式包会裁剪未使用的 Java 代码、资源和原生调试符号。签名密码可由终端输入或通过环境变量 `BILI_STORE_PASSWORD`、`BILI_KEY_PASSWORD` 提供。使用原签名后，可用 `adb -s <设备序列号> install -r <APK>` 保留数据覆盖安装。
 
 ### Windows x64
 
-Windows x64 发布一个可直接双击的 EXE。音频解码器、Asuka 资源和微软 WebView2 Fixed Version 均封装在内。首次启动会把内置文件解包到当前用户的本地缓存，当前版本解包后约占 746 MiB，再次启动时复用。移动或改名 EXE 后仍使用原有音乐库和设置。程序缓存位于 `%LOCALAPPDATA%\BiliMusicPlayer\bin`，旧版退出后可在下次启动时自动回收。应用内的周刊官网使用随包浏览器运行库。浏览榜单源站和播放在线歌曲仍需网络。
+Windows x64 发布一个可直接双击的 EXE，内置 mpv、FFmpeg 音频解码器和界面资源。首次启动将程序文件解压到 `%LOCALAPPDATA%\BiliMusicPlayer\bin`，后续启动直接复用。旧版退出后，新版会回收旧版本的解包目录。移动或改名 EXE 后仍使用原有音乐库和设置。
 
-构建机使用 Python 3.11 或更高版本、Git、Rust GNU target、MinGW-w64 和 Asuka 0.2.9。把该版本源码中的 `platform/windows` 目录传给构建脚本，它会在临时目录内修正 Windows 控件反复创建和释放时可能发生的卡死。在 Linux 上交叉编译还需要 Zig。把与旧版一致的 MediaMP Windows x64 运行库 JAR 作为构建输入。以下命令下载并校验指定版本的 WebView2，已保存的运行库可离线复用。
+周刊官网优先使用 Windows 已安装的 WebView2。系统缺少该组件或网页进程退出时，应用返回内置周刊榜单，仍可筛选、点歌，再次点击封面则用默认浏览器打开官网。应用启动时不会下载浏览器运行库。
+
+构建机使用 Python 3.11 或更高版本、Git、Rust GNU target、MinGW-w64 和 Asuka 0.2.9。在 Linux 上交叉编译还需要 Zig。打包器静态链接 x86_64 MinGW 版 liblzma；若装在单独的前缀，设置环境变量 `MINGW_LZMA_PREFIX`。将 Asuka 0.2.9 源码中的 `platform/windows` 目录传给打包脚本，由它在临时副本里应用本项目的 Windows 宿主修补。
+
+音频运行库可在 Linux 构建机用 Python 3.12 或更高版本、Meson、Ninja、NASM、GNU Make、pkg-config、Jinja2 和 Vulkan 头文件生成。脚本从中国大陆镜像下载锁定版本的源码，逐项核对 SHA-256，后续构建复用本地缓存。音频版权说明随程序分发。
 
 ```sh
+python desktop/build_windows_audio.py --output target/windows-audio
 python desktop/package_windows.py \
   --asuka-host /path/to/asuka-0.2.9/platform/windows \
-  --runtime /path/to/mediamp-mpv-runtime-windows-x64.jar \
-  --webview-runtime "$(python desktop/get_webview2.py)" \
-  --output target/dist/windows-x64/BiliMusicPlayer-1.7.1.exe
+  --audio-runtime target/windows-audio \
+  --output target/dist/windows-x64/BiliMusicPlayer-1.7.3.exe
 ```
-
-内置 WebView2 使用 Microsoft Defender SmartScreen 检查网站安全，可能向微软发送安全检查信息。[WebView2 固定版本条款](https://developer.microsoft.com/microsoft-edge/api/eula/webview2?locale=en-us&fixed=true) · [微软隐私说明](https://learn.microsoft.com/zh-cn/microsoft-edge/privacy-whitepaper#smartscreen)
 
 ### macOS（暂缓）
 

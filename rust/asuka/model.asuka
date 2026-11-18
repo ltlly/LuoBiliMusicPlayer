@@ -2,11 +2,21 @@ import std/json
 
 extern fn lbm_start()
 extern fn lbm_position_seconds() -> Int64
-extern fn lbm_snapshot(revision: Int64) -> CString
+extern fn lbm_snapshot(revision: Int64, seconds: Int64) -> CString
 extern fn lbm_action(name: CString, arg: CString, value: CString)
+extern fn lbm_local_rows(page: CString, tab: Int32) -> CString
 extern fn lbm_cover(url: CString) -> CString
 
 extern fn lbm_player_art(url: CString) -> CString
+
+// Cover downloads use the shared spawn pool. Page changes have their own waiting thread.
+worker ViewUpdates {
+  pub fn next(revision: int, seconds: int) -> string = lbm_snapshot(revision, seconds)
+}
+
+worker LocalPages {
+  pub fn read(page: string, tab: int) -> string = lbm_local_rows(page, tab)
+}
 
 struct Artwork {
   cover: string = ""
@@ -24,7 +34,11 @@ struct Entry {
 
 struct Player {
   revision: int = -1
+  navigation: int = 0
+  entriesVersion: int = 0
+  queueVersion: int = 0
   page: string = "library"
+  pageLoading: bool = false
   loggedIn: bool = false
   rankFiltered: bool = false
   rankBusy: bool = false
@@ -72,7 +86,46 @@ struct Player {
 state player = Player()
 state playhead = 0.0
 fn action(name: string, arg: string = "", value: string = "") { lbm_action(name, arg, value) }
-fn go(page: string) { action("navigate", page) }
+struct TabRows {
+  entries: [Entry]
+  title: string
+  date: string
+  filtered: bool
+  verified: bool
+}
+state tabRows: [string: TabRows] = [:]
+state navigationRequest = 0
+state requestedPage = ""
+state rankQuery = ""
+fn rememberTab(p: Player, query: string) {
+  if !query.isEmpty() || p.pageLoading || !p.message.isEmpty() { return }
+  if p.page == "rank" && (!rankQuery.isEmpty() || p.rankLoading || p.rankBusy) { return }
+  if p.page == "library" || p.page == "downloads" || p.page == "favorites" || p.page == "rank" {
+    tabRows[p.page] = TabRows(entries: p.entries, title: p.folderTitle, date: p.rankDate, filtered: p.rankFiltered, verified: p.rankVerified)
+  }
+}
+fn go(page: string) {
+  navigationRequest += 1
+  requestedPage = page
+  if page == "settings" || (page == "downloadSettings" && !player.downloadDir.isEmpty()) {
+    player.page = page
+    player.message = ""
+    player.pageLoading = false
+  } else if let saved = tabRows[page] {
+    player.page = page
+    player.entries = saved.entries
+    player.folderTitle = saved.title
+    player.rankDate = saved.date
+    player.rankFiltered = saved.filtered
+    player.rankVerified = saved.verified
+    player.rankBusy = false
+    player.rankLoading = false
+    player.hasMore = false
+    player.pageLoading = false
+    player.message = ""
+  }
+  action("navigate", page, "{navigationRequest}")
+}
 fn control(kind: string, index: int = 0) { action("transport", kind, "{index}") }
 fn clock(seconds: float) -> string {
   let s = max(0, seconds.int())

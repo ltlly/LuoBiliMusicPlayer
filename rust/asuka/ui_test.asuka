@@ -49,6 +49,14 @@ test "the weekly chart exposes its source, filter and per-video actions" {
   ui.expect("榜单官网", "未收藏", "第 745 期", "测试歌曲", "视频操作")
 }
 
+test "the weekly chart remains usable without an embedded browser" {
+  player = Player(page: "rank", loggedIn: true, entries: [Entry(key: "BV17x411w7KC", title: "测试歌曲")])
+  rankInBrowser = true
+  let ui = mount(Music(false))
+  ui.expect("在浏览器打开官网", "未收藏", "测试歌曲", "视频操作")
+  rankInBrowser = false
+}
+
 test "a partial collection index is distinct from an empty result" {
   player = Player(page: "rank", loggedIn: true, rankFiltered: true, rankVerified: false)
   let ui = mount(Music(false))
@@ -61,4 +69,28 @@ test "playing the uncollected list selects the first visible song" {
   let ui = mount(Music(false))
   ui.tap("播放未收藏")
   ui.expect("正在准备播放…")
+}
+
+test "video actions open and dismiss inside the player" {
+  player = Player(page: "rank", loggedIn: true, entries: [Entry(key: "BV17x411w7KC", title: "未收藏的歌曲", status: "01")])
+  let ui = mount(Music(false))
+  ui.tap("视频操作")
+  ui.expect("在哔哩哔哩打开", "一键三连（含投币）", "取消")
+  ui.tap("取消")
+  ui.expect("未收藏的歌曲", "视频操作")
+}
+
+test "reopening the library displays its local rows on the tap" {
+  rememberTab(Player(page: "library", entries: [Entry(key: "saved", title: "已下载的歌曲")]), "")
+  player = Player(page: "settings", loggedIn: true)
+  let ui = mount(Music(false))
+  ui.tap("音乐库")
+  ui.expect("已下载的歌曲", "音乐库")
+}
+
+test "settings opens while the previous tab is still refreshing" {
+  player = Player(page: "favorites", pageLoading: true, loggedIn: true, account: "测试账户")
+  let ui = mount(Music(false))
+  ui.tap("设置")
+  ui.expect("测试账户", "外观主题", "下载设置")
 }

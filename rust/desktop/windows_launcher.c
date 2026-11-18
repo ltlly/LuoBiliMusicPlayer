@@ -1,19 +1,12 @@
-// A GUI-subsystem launcher. Only the first launch of a given payload opens its CAB resource.
+// A GUI-subsystem launcher. Only the first launch of a given payload decodes its embedded XZ stream.
 #include <windows.h>
 #include <shlobj.h>
-#include <aclapi.h>
-#include <sddl.h>
 #include <bcrypt.h>
-#include <fdi.h>
+#include <lzma.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <wchar.h>
 #include "bundle.h"
-
-static const BYTE *cab;
-static DWORD cab_size;
-static const wchar_t *staging;
-static DWORD failure;
 
 static wchar_t *concat(const wchar_t *a, const wchar_t *b) {
     size_t n = wcslen(a) + wcslen(b) + 1;
@@ -41,9 +34,19 @@ static BOOL regular(const wchar_t *root, const wchar_t *name) {
 }
 
 static BOOL prepared(const wchar_t *root) {
-    return directory(root) && regular(root, L"\\asuka-app.json") && regular(root, L"\\BiliMusicPlayer.exe") && regular(root, L"\\libmpv-2.dll")
-        && regular(root, L"\\WebView2\\msedgewebview2.exe")
-        && regular(root, L"\\WebView2\\EBWebView\\x64\\EmbeddedBrowserWebView.dll");
+    if (!directory(root)) return FALSE;
+    wchar_t *prefix = concat(root, L"\\");
+    BOOL ok = TRUE;
+    for (size_t i = 0; ok && i < ARRAYSIZE(members); ++i) {
+        wchar_t *path = concat(prefix, members[i].name);
+        WIN32_FILE_ATTRIBUTE_DATA data;
+        ok = GetFileAttributesExW(path, GetFileExInfoStandard, &data)
+             && !(data.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
+             && (((ULONGLONG)data.nFileSizeHigh << 32) | data.nFileSizeLow) == members[i].size;
+        free(path);
+    }
+    free(prefix);
+    return ok;
 }
 
 // Only used on our unpublished staging directory, or a damaged version cache.
@@ -76,135 +79,84 @@ static BOOL remove_tree(const wchar_t *root, BOOL keep_marker) {
     return ok && RemoveDirectoryW(root);
 }
 
-// Fixed Version 120+ requires these rights for Windows 10 renderer AppContainers.
-// Set them before extraction, so only the fixed-runtime tree inherits the access.
-static BOOL allow_webview_sandbox(wchar_t *path) {
-    const wchar_t *sids[] = {L"S-1-15-2-1", L"S-1-15-2-2"};
-    PSID identities[2] = {NULL, NULL};
-    EXPLICIT_ACCESSW grant[2] = {0};
-    PACL old_acl = NULL, new_acl = NULL;
-    PSECURITY_DESCRIPTOR descriptor = NULL;
-    DWORD err = GetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                     NULL, NULL, &old_acl, NULL, &descriptor);
-    for (int i = 0; i < 2 && err == ERROR_SUCCESS; ++i) {
-        if (!ConvertStringSidToSidW(sids[i], &identities[i])) { err = GetLastError(); break; }
-        grant[i].grfAccessPermissions = FILE_GENERIC_READ | FILE_GENERIC_EXECUTE;
-        grant[i].grfAccessMode = GRANT_ACCESS;
-        grant[i].grfInheritance = SUB_CONTAINERS_AND_OBJECTS_INHERIT;
-        grant[i].Trustee.TrusteeForm = TRUSTEE_IS_SID;
-        grant[i].Trustee.ptstrName = (LPWSTR)identities[i];
-    }
-    if (!err) err = SetEntriesInAclW(2, grant, old_acl, &new_acl);
-    if (!err) err = SetNamedSecurityInfoW(path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                           NULL, NULL, new_acl, NULL);
-    LocalFree(new_acl); LocalFree(descriptor);
-    LocalFree(identities[0]); LocalFree(identities[1]);
-    if (err) SetLastError(err);
-    return !err;
-}
-
-typedef struct { HANDLE output; LONG position; } CabStream;
-
-static FNALLOC(cab_alloc) { return malloc(cb); }
-static FNFREE(cab_free) { free(pv); }
-static FNOPEN(cab_open) {
-    (void)oflag; (void)pmode;
-    if (strcmp(pszFile, "payload.cab")) return -1;
-    CabStream *s = calloc(1, sizeof(*s));
-    return s ? (INT_PTR)s : -1;
-}
-static FNREAD(cab_read) {
-    CabStream *s = (CabStream *)hf;
-    if (cb > cab_size - (DWORD)s->position) cb = cab_size - (DWORD)s->position;
-    memcpy(pv, cab + s->position, cb);
-    s->position += cb;
-    return cb;
-}
-static FNSEEK(cab_seek) {
-    CabStream *s = (CabStream *)hf;
-    LONGLONG base = seektype == SEEK_SET ? 0 : seektype == SEEK_CUR ? (LONGLONG)s->position : (LONGLONG)cab_size;
-    LONGLONG next = base + dist;
-    if (next < 0 || next > cab_size) return -1;
-    return s->position = (LONG)next;
-}
-static FNWRITE(cab_write) {
-    CabStream *s = (CabStream *)hf;
-    DWORD n = 0;
-    if (WriteFile(s->output, pv, cb, &n, NULL) && n == cb) return n;
-    failure = GetLastError();
-    return (UINT)-1;
-}
-static FNCLOSE(cab_close) {
-    CabStream *s = (CabStream *)hf;
-    BOOL ok = !s->output || CloseHandle(s->output);
-    free(s);
-    return ok ? 0 : -1;
-}
-
-static HANDLE new_member(const char *name) {
-    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, NULL, 0);
-    if (!count) return INVALID_HANDLE_VALUE;
-    wchar_t *path = concat(staging, L"\\");
-    size_t prefix = wcslen(path);
-    wchar_t *full = realloc(path, (prefix + count) * sizeof(*path));
-    if (!full) { free(path); SetLastError(ERROR_OUTOFMEMORY); return INVALID_HANDLE_VALUE; }
-    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, full + prefix, count);
+// Member names come from the build-time validated index, relative to this staging directory.
+static HANDLE new_member(const wchar_t *prefix, const wchar_t *name) {
+    wchar_t *path = concat(prefix, name);
+    wchar_t *component = path + wcslen(prefix);
     HANDLE file = INVALID_HANDLE_VALUE;
-    wchar_t *part = full + prefix;
     for (;;) {
-        wchar_t *end = wcschr(part, L'\\');
-        if (end) *end = 0;
-        if (!*part || wcspbrk(part, L"/:") || !wcscmp(part, L".") || !wcscmp(part, L"..")) {
-            SetLastError(ERROR_INVALID_NAME); break;
+        wchar_t *end = wcschr(component, L'\\');
+        if (!end) {
+            file = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+            break;
         }
-        if (!end) { file = CreateFileW(full, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL); break; }
-        if (!make_dir(full)) break;
-        *end = L'\\'; part = end + 1;
+        *end = 0;
+        if (!make_dir(path)) break;
+        *end = L'\\';
+        component = end + 1;
     }
-    free(full);
+    free(path);
     return file;
 }
 
-static FNFDINOTIFY(cab_notify) {
-    if (fdint == fdintCOPY_FILE) {
-        HANDLE out = new_member(pfdin->psz1);
-        if (out == INVALID_HANDLE_VALUE) { failure = GetLastError(); return -1; }
-        CabStream *s = calloc(1, sizeof(*s));
-        if (!s) { CloseHandle(out); failure = ERROR_OUTOFMEMORY; return -1; }
-        s->output = out;
-        return (INT_PTR)s;
+static DWORD write_member(lzma_stream *decoder, HANDLE file, ULONGLONG size) {
+    BYTE buffer[65536];
+    while (size) {
+        size_t want = size > sizeof(buffer) ? sizeof(buffer) : (size_t)size;
+        decoder->next_out = buffer;
+        decoder->avail_out = want;
+        lzma_ret status = lzma_code(decoder, LZMA_FINISH);
+        DWORD got = (DWORD)(want - decoder->avail_out);
+        if (!got || (status != LZMA_OK && status != LZMA_STREAM_END)) return ERROR_INVALID_DATA;
+        DWORD written = 0;
+        if (!WriteFile(file, buffer, got, &written, NULL)) return GetLastError();
+        if (written != got) return ERROR_WRITE_FAULT;
+        size -= got;
     }
-    if (fdint == fdintCLOSE_FILE_INFO) return cab_close(pfdin->hf) == 0;
-    return fdint == fdintNEXT_CABINET || fdint == fdintPARTIAL_FILE ? -1 : 0;
+    return ERROR_SUCCESS;
 }
 
 static BOOL unpack(HINSTANCE instance, wchar_t *stage) {
     HRSRC resource = FindResourceW(instance, MAKEINTRESOURCEW(101), RT_RCDATA);
     if (!resource) return FALSE;
-    cab_size = SizeofResource(instance, resource);
-    cab = LockResource(LoadResource(instance, resource));
-    if (!cab || !cab_size || cab_size > LONG_MAX) { SetLastError(ERROR_BAD_FORMAT); return FALSE; }
+    DWORD length = SizeofResource(instance, resource);
+    const BYTE *payload = LockResource(LoadResource(instance, resource));
+    if (!payload || !length) { SetLastError(ERROR_BAD_FORMAT); return FALSE; }
     BCRYPT_ALG_HANDLE alg;
     BYTE hash[32];
     if (BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, NULL, 0)) return FALSE;
-    NTSTATUS status = BCryptHash(alg, NULL, 0, (PUCHAR)cab, cab_size, hash, sizeof(hash));
+    NTSTATUS status = BCryptHash(alg, NULL, 0, (PUCHAR)payload, length, hash, sizeof(hash));
     BCryptCloseAlgorithmProvider(alg, 0);
-    char hex[65];
     if (status) { SetLastError(ERROR_INVALID_DATA); return FALSE; }
+    char hex[65];
     for (size_t i = 0; i < sizeof(hash); ++i) sprintf(hex + i * 2, "%02x", hash[i]);
     if (strcmp(hex, BUNDLE_DIGEST)) { SetLastError(ERROR_CRC); return FALSE; }
-    wchar_t *web = concat(stage, L"\\WebView2");
-    BOOL ok = make_dir(web) && allow_webview_sandbox(web);
-    free(web);
-    if (!ok) return FALSE;
-    ERF err = {0};
-    HFDI fdi = FDICreate(cab_alloc, cab_free, cab_open, cab_read, cab_write, cab_close, cab_seek, cpuUNKNOWN, &err);
-    if (!fdi) { SetLastError(ERROR_OUTOFMEMORY); return FALSE; }
-    staging = stage;
-    ok = FDICopy(fdi, "payload.cab", "", 0, cab_notify, NULL, NULL);
-    FDIDestroy(fdi);
-    if (!ok) SetLastError(failure ? failure : ERROR_INVALID_DATA);
-    return ok;
+
+    lzma_stream decoder = LZMA_STREAM_INIT;
+    if (lzma_stream_decoder(&decoder, 64U << 20, 0) != LZMA_OK) {
+        SetLastError(ERROR_OUTOFMEMORY); return FALSE;
+    }
+    decoder.next_in = payload;
+    decoder.avail_in = length;
+    wchar_t *prefix = concat(stage, L"\\");
+    DWORD error = ERROR_SUCCESS;
+    for (size_t i = 0; !error && i < ARRAYSIZE(members); ++i) {
+        HANDLE file = new_member(prefix, members[i].name);
+        if (file == INVALID_HANDLE_VALUE) { error = GetLastError(); break; }
+        error = write_member(&decoder, file, members[i].size);
+        if (!CloseHandle(file) && !error) error = GetLastError();
+    }
+    if (!error) {
+        BYTE extra;
+        decoder.next_out = &extra;
+        decoder.avail_out = 1;
+        if (lzma_code(&decoder, LZMA_FINISH) != LZMA_STREAM_END || !decoder.avail_out || decoder.avail_in)
+            error = ERROR_INVALID_DATA;
+    }
+    free(prefix);
+    lzma_end(&decoder);
+    if (error) SetLastError(error);
+    return !error;
 }
 
 // Every live host owns an inherited read handle on this file. Exclusive open is
@@ -302,20 +254,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     wchar_t *cache = concat(app, L"\\bin");
     wchar_t *dest = concat(cache, L"\\" BUNDLE_KEY);
     wchar_t *exe = concat(dest, L"\\BiliMusicPlayer.exe");
-    wchar_t *web = concat(dest, L"\\WebView2");
     DWORD code = ERROR_SUCCESS;
     BOOL ok = make_dir(app) && make_dir(cache);
     wchar_t *long_cache = concat(L"\\\\?\\", cache), *long_dest = concat(L"\\\\?\\", dest);
     HANDLE lease = ok ? ensure_installed(instance, long_cache, long_dest) : INVALID_HANDLE_VALUE;
     ok = lease != INVALID_HANDLE_VALUE;
-    if (ok && wcslen(web) >= MAX_PATH) {
-        // Asuka queries the fixed-browser path into a MAX_PATH buffer.
-        wchar_t short_web[MAX_PATH];
-        DWORD n = GetShortPathNameW(web, short_web, MAX_PATH);
-        if (n && n < MAX_PATH) { free(web); web = _wcsdup(short_web); }
-        else { SetLastError(ERROR_FILENAME_EXCED_RANGE); ok = FALSE; }
-    }
-    if (ok) ok = SetEnvironmentVariableW(L"WEBVIEW2_BROWSER_EXECUTABLE_FOLDER", web);
     wchar_t *start = concat(L"\"", exe), *first = concat(start, L"\" "), *cmd = concat(first, arguments);
     PROCESS_INFORMATION child = {0};
     if (ok) ok = start_host(exe, cmd, lease, &child);
@@ -332,7 +275,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
         MessageBoxW(NULL, message, L"哔哩音乐", MB_OK | MB_ICONERROR);
     }
     if (lease != INVALID_HANDLE_VALUE) CloseHandle(lease);
-    free(cmd); free(first); free(start); free(web); free(exe); free(long_dest); free(long_cache);
+    free(cmd); free(first); free(start); free(exe); free(long_dest); free(long_cache);
     free(dest); free(cache); free(app);
     return (int)code;
 }

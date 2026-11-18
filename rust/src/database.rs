@@ -1,6 +1,6 @@
 //! Opens the Room database in place. SQLite recovers committed WAL frames itself.
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde::Deserialize;
 use std::{path::Path, time::Duration};
 
@@ -95,6 +95,26 @@ impl Library {
                 })
             })?
             .collect::<rusqlite::Result<_>>()?)
+    }
+
+    pub fn cached_rows(&self) -> Result<usize> {
+        Ok(self
+            .0
+            .query_row("SELECT COUNT(*) FROM cached_favorite_medias", [], |r| {
+                r.get(0)
+            })?)
+    }
+
+    pub fn folder_count(&self, folder: i64) -> Result<usize> {
+        let count: Option<i64> = self
+            .0
+            .query_row(
+                "SELECT mediaCount FROM bili_favorite_folders WHERE id=?1",
+                [folder],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(count.unwrap_or(0).max(0) as usize)
     }
 
     pub fn last_folder_update(&self) -> Result<Option<i64>> {

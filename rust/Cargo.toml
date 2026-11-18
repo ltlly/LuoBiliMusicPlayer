@@ -1,6 +1,6 @@
 [package]
 name = "bili-music-player"
-version = "1.7.1"
+version = "1.7.3"
 edition = "2024"
 
 [lib]
@@ -42,3 +42,9 @@ tiny_http = "0.12"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 libloading = "0.8"
+
+[profile.distribution]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1

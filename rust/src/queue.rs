@@ -180,13 +180,7 @@ impl Queue {
         let out = self.output.as_mut().unwrap();
         self.loaded = false;
         self.playing = false;
-        out.load(&uri)?;
-        if position > 0
-            && let Err(e) = out.seek(position)
-        {
-            let _ = out.stop();
-            return Err(e);
-        }
+        out.load(&uri, position)?;
         self.position = position;
         self.duration = track.duration_ms;
         self.loaded = true;

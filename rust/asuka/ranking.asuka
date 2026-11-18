@@ -4,23 +4,20 @@ fn openVideo(id: string) {
 }
 
 state triplePending = false
+let rankWebsiteUrl = "https://www.evocalrank.com/#/"
+state rankInBrowser = false
+
 fn sendTriple(id: string) {
   if triplePending { snackbar("正在提交三连…"); return }
   triplePending = true
   action("triple", id)
 }
 fn videoMenu(id: string, title: string) {
-  if player.loggedIn {
-    alert(title, actions: [
-      .button(title: "在哔哩哔哩打开", run: () => openVideo(id)),
-      .button(title: "一键三连（含投币）", run: () => sendTriple(id)),
-      .button(title: "取消", role: .cancel)])
-  } else {
-    alert(title, actions: [
-      .button(title: "在哔哩哔哩打开", run: () => openVideo(id)),
-      .button(title: "登录后三连", run: () => go("login")),
-      .button(title: "取消", role: .cancel)])
-  }
+  let tripleLabel = if player.loggedIn { "一键三连（含投币）" } else { "登录后三连" }
+  activeDialog = PlayerDialog(title: title, choices: [
+    PlayerChoice(label: "在哔哩哔哩打开", symbol: "open", run: () => openVideo(id)),
+    PlayerChoice(label: tripleLabel, symbol: "spark", run: () => { if player.loggedIn { sendTriple(id) } else { go("login") } })
+  ])
 }
 
 fn playRank(entry: Entry) {
@@ -32,13 +29,13 @@ fn playRank(entry: Entry) {
 component RankPane {
   let palette = colorsFor(player.themeMode, environment().dark)
   let inset = contentInset(environment().width)
-  state query = ""
+  let websiteLabel = if rankInBrowser { "在浏览器打开官网" } else { "榜单官网" }
   Column {
     grow: 1; gap: 7
     View {
       margin: [0,inset]; height: if environment().height < 630 { 77 } else { 94 }
-      clip: true; radius: 14; background: #0E2138; role: .button; label: "榜单官网"
-      on press { go("rankWeb") }; pressed { opacity: 0.85 }
+      clip: true; radius: 14; background: #0E2138; role: .button; label: websiteLabel
+      on press { if rankInBrowser { openURL(rankWebsiteUrl) } else { go("rankWeb") } }; pressed { opacity: 0.85 }
       Image("stage-wide.jpg") {
         absolute: true; top: 0; right: 0; width: 64%; height: 100%; mode: .fill
       }
@@ -52,15 +49,14 @@ component RankPane {
         Text(if player.folderTitle.isEmpty() { "周刊" } else { player.folderTitle }) { color: #F4FAFF; font: Font(size: 24).semibold(); lines: 1 }
         Row {
           align: .center; gap: 5
-          Text(if player.rankDate.isEmpty() { "榜单官网" } else { "{player.rankDate}  ·  榜单官网" }) { color: #C0DFEB; font: Font(size: 12) }
+          Text(if player.rankDate.isEmpty() { websiteLabel } else { "{player.rankDate}  ·  {websiteLabel}" }) { color: #C0DFEB; font: Font(size: 12) }
           Glyph("right",#C0DFEB,11.0)
         }
       }
     }
     Column {
       padding: [0,inset]; gap: 7
-      Segmented(["全部歌曲", if player.loggedIn { "未收藏" } else { "登录看未收藏" }]) {
-        selected: if player.rankFiltered { 1 } else { 0 }
+      ChoiceBar(["全部歌曲", if player.loggedIn { "未收藏" } else { "登录看未收藏" }], if player.rankFiltered { 1 } else { 0 }, "榜单筛选") {
         on change(i) {
           if i == 1 && !player.loggedIn { go("login") }
           else { action("rankFilter", if i == 1 { "1" } else { "0" }) }
@@ -72,8 +68,8 @@ component RankPane {
           grow: 1; shrink: 1; align: .center; gap: 8; padding: [1,11]; border: 1; radius: 11; borderColor: palette.rule; background: palette.surface
           Glyph("search",palette.secondary,16.0)
           TextField {
-            grow: 1; plain: true; minHeight: 36; text: query; color: palette.ink; placeholder: "搜索本期歌曲"
-            on change(v) { query = v; action("search",v) }
+            grow: 1; plain: true; minHeight: 36; text: rankQuery; color: palette.ink; placeholder: "搜索本期歌曲"
+            on change(v) { rankQuery = v; action("search",v) }
           }
         }
         if player.rankFiltered && player.rankVerified && !player.entries.isEmpty() {
@@ -87,7 +83,7 @@ component RankPane {
       Text("收藏夹尚未核对完成，可点刷新重试") { color: palette.secondary; padding: [8,inset] }
     }
     else if player.entries.isEmpty() && player.message.isEmpty() {
-      Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.rankFiltered { "本期歌曲均已收藏" } else { "暂无歌曲" }) {
+      Text(if !rankQuery.isEmpty() { "没有匹配的歌曲" } else if player.rankFiltered { "本期歌曲均已收藏" } else { "暂无歌曲" }) {
         color: palette.secondary; padding: [8,inset]
       }
     }
@@ -118,16 +114,25 @@ component RankPane {
   }
 }
 component RankWebsite {
+  let palette = colorsFor(player.themeMode, environment().dark)
   let web = Ref()
   state page = WebState()
   state failure = ""
   onBack { if page.canGoBack { web.goBack(); return true }; go("rank"); return true }
   Column { grow: 1
-    if !failure.isEmpty() { Button("重新加载榜单官网") { on press { failure=""; web.reload() } } }
-    WebView("https://www.evocalrank.com/#/") { grow: 1; ref: web
+    if !failure.isEmpty() { Pill("重新加载榜单官网", "refresh", palette.accent, palette.accentWash) { on press { failure=""; web.reload() } } }
+    WebView(rankWebsiteUrl) { grow: 1; ref: web
       block: ["googletagmanager.com", "google-analytics.com"]
       on state(s) { page=s }
-      on error(m) { failure=m }
+      on error(m) {
+        if @platform == .windows && m == "WebView2 unavailable" {
+          if !rankInBrowser {
+            rankInBrowser = true
+            go("rank")
+            snackbar("内嵌网页暂不可用，可点周刊封面在浏览器打开官网")
+          }
+        } else { failure=m }
+      }
       on newWindow(url) { if url.hasPrefix("https://") { openURL(url) } }
     }
   }

@@ -1,0 +1,48 @@
+struct PlayerChoice {
+  label: string
+  symbol: string
+  run: fn()
+  destructive: bool = false
+}
+struct PlayerDialog {
+  title: string = ""
+  choices: [PlayerChoice] = []
+}
+state activeDialog = PlayerDialog()
+
+fn confirmAction(title: string, verb: string, accept: fn()) {
+  activeDialog = PlayerDialog(title: title, choices: [PlayerChoice(label: verb, symbol: "check", run: accept, destructive: true)])
+}
+
+component PlayerDialogs {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let compact = environment().width < 600
+  let danger = if player.themeMode == "DARK" || (player.themeMode != "LIGHT" && environment().dark) { #FFAFB3 } else { #A13844 }
+  Overlay {
+    open: !activeDialog.choices.isEmpty()
+    on change(show) { if !show { activeDialog = PlayerDialog() } }
+    side: if compact { .bottom } else { .center }; edgeGap: 12; modal: true
+    dismissOn: [.outsidePress, .escape, .back]
+    backdrop { View { background: #07142185 } }
+    Column {
+      role: .dialog; label: activeDialog.title; a11yModal: true
+      width: min(392.0, environment().width - 24.0); padding: 16; gap: 8
+      radius: 18; clip: true; background: palette.surface; border: 1; borderColor: palette.rule
+      Row {
+        padding: [0,0,4,4]; gap: 8; align: .center
+        Text(activeDialog.title) { grow: 1; basis: 0; shrink: 1; color: palette.ink; font: Font(size: 18).semibold(); lines: 3 }
+        IconAction("close","取消",palette.secondary,palette.soft,44.0,17.0) { on press { activeDialog = PlayerDialog() } }
+      }
+      for choice in activeDialog.choices key choice.label {
+        Row {
+          role: .button; label: choice.label; height: 48; padding: [0,14]; gap: 12
+          align: .center; radius: 12; background: palette.soft
+          on press { let run = choice.run; activeDialog = PlayerDialog(); run() }
+          pressed { background: palette.accentWash }
+          Glyph(choice.symbol, if choice.destructive { danger } else { palette.accent }, 20.0)
+          Text(choice.label) { grow: 1; color: if choice.destructive { danger } else { palette.ink }; font: Font(size: 15).medium(); lines: 1 }
+        }
+      }
+    }
+  }
+}

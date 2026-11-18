@@ -1,5 +1,6 @@
 component Navigation(wide: bool, panel: string) {
   let palette = colorsFor(player.themeMode, environment().dark)
+  let current = if requestedPage.isEmpty() { player.page } else { requestedPage }
   event choose(page: string)
   fn active(page: string, current: string, openPanel: string) -> bool = openPanel.isEmpty() && (page == current || (page == "rank" && current == "rankWeb") || (page == "favorites" && current == "content") || (page == "settings" && current == "downloadSettings"))
   View {
@@ -11,16 +12,16 @@ component Navigation(wide: bool, panel: string) {
         align: .center; justify: if wide { .start } else { .center }
         padding: if wide { [11, 13] } else { [3, 0] }; gap: if wide { 12 } else { 3 }
         minHeight: if wide { 42 } else { 49 }; radius: 12
-        background: if wide && active(page, player.page, panel) { palette.accentWash } else { #00000000 }
+        background: if wide && active(page, current, panel) { palette.accentWash } else { #00000000 }
         role: .button; label: pageName(page)
         on press { emit choose(page) }
         pressed { opacity: 0.65 }
         View {
           width: if wide { 23 } else { 42 }; height: 24; radius: 12; align: .center; justify: .center
           background: #00000000
-          Glyph(page, if active(page, player.page, panel) { palette.accent } else { palette.secondary }, 20.0)
+          Glyph(page, if active(page, current, panel) { palette.accent } else { palette.secondary }, 20.0)
         }
-        Text(pageName(page)) { font: if wide { Font(size: 15).medium() } else { Font(size: 11).semibold() }; color: if active(page, player.page, panel) { palette.accent } else { palette.secondary } }
+        Text(pageName(page)) { font: if wide { Font(size: 15).medium() } else { Font(size: 11).semibold() }; color: if active(page, current, panel) { palette.accent } else { palette.secondary } }
       }
     }
   }

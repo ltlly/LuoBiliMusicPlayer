@@ -1,6 +1,16 @@
 import std/json
 import std/math
 
+component TrackButtons(onCover: bool = false) {
+  let side = if onCover { #213C50 } else { #00000000 }
+  Row {
+    align: .center; gap: if onCover { 8 } else { 3 }
+    IconAction("previous", "上一首", #E5F6FA, side, 48.0, 19.0) { on press { control("previous") } }
+    IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #123447, #A5E5E8, 48.0, 22.0) { on press { control("toggle") } }
+    IconAction("next", "下一首", #E5F6FA, side, 48.0, 19.0) { on press { control("next") } }
+  }
+}
+
 component MiniPlayer {
   let inset = contentInset(environment().width)
   event open
@@ -20,9 +30,7 @@ component MiniPlayer {
             Text(player.artist) { color: #B7D3DF; font: Font(size: 12); lines: 1 }
           }
         }
-        IconAction("previous", "上一首", #DFFAFF, #00000000, 48.0, 16.0) { on press { control("previous") } }
-        IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #143341, #9AE7DE, 48.0, 19.0) { on press { control("toggle") } }
-        IconAction("next", "下一首", #DFFAFF, #00000000, 48.0, 16.0) { on press { control("next") } }
+        TrackButtons()
       }
       Canvas(g => {
         g.stroke(Path().move(0,1).line(g.width,1), #FFFFFF22, StrokeStyle(width: 2))
@@ -65,7 +73,7 @@ component NowPlaying(panel: string) {
           Text("{player.queue.count()} 首歌曲") { color: palette.secondary; font: .subheadline }
           if !player.queue.isEmpty() {
             Pill("清空队列", "minus", palette.ink, palette.soft) {
-              on press { alert("清空播放队列？", actions: [.button(title: "取消", role: .cancel), .button(title: "清空", role: .destructive, run: () => control("clear"))]) }
+              on press { confirmAction("清空播放队列？", "清空", () => control("clear")) }
             }
           }
         }
@@ -219,11 +227,11 @@ component TransportPanel {
     }
     Row {
       align: .center; justify: .spaceBetween
-      IconAction("shuffle", if player.shuffle { "随机已开启" } else { "随机播放" }, if player.shuffle { #8FE5ED } else { #B1CDD6 }, #00000000, 39.0, 20.0) { on press { control("shuffle") } }
-      IconAction("previous", "上一首", #EEF9FF, #00000000, 44.0, 29.0) { on press { control("previous") } }
-      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #123244, #A2DEFF, 59.0, 27.0) { on press { control("toggle") } }
-      IconAction("next", "下一首", #EEF9FF, #00000000, 44.0, 29.0) { on press { control("next") } }
-      IconAction(if player.repeatMode == 1 { "single" } else { "repeat" }, if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }, if player.repeatMode > 0 { #8FE5ED } else { #B1CDD6 }, #00000000, 39.0, 20.0) { on press { control("repeat") } }
+      IconAction("shuffle", if player.shuffle { "随机已开启" } else { "随机播放" }, if player.shuffle { #8FE5ED } else { #B1CDD6 }, #00000000, 48.0, 20.0) { on press { control("shuffle") } }
+      IconAction("previous", "上一首", #EEF9FF, #00000000, 48.0, 25.0) { on press { control("previous") } }
+      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #123244, #A5E5E8, 48.0, 24.0) { on press { control("toggle") } }
+      IconAction("next", "下一首", #EEF9FF, #00000000, 48.0, 25.0) { on press { control("next") } }
+      IconAction(if player.repeatMode == 1 { "single" } else { "repeat" }, if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }, if player.repeatMode > 0 { #8FE5ED } else { #B1CDD6 }, #00000000, 48.0, 20.0) { on press { control("repeat") } }
     }
   }
 }
@@ -242,6 +250,7 @@ component PlaybackSeekBar {
     height: 40; role: .slider; label: "播放进度"; focusable: duration > 0; disabled: duration <= 0
     a11yValue: "{clock(value)} / {clock(duration)}"; a11yRange: ValueRange(min: 0, max: max(1.0, duration), now: value)
     on layout(f) { if width != f.width { width = f.width } }
+    pressed { opacity: 1 }
     on pressStart(x,y) { preview = at(x) }
     on press { if preview >= 0 { seek(preview) } }
     on pan(g) {

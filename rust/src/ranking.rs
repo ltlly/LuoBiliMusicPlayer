@@ -180,6 +180,13 @@ impl Ranking {
         self.only_new = false;
         self.owner = 0;
     }
+    pub fn fresh_membership(&self, client: &Client) -> bool {
+        client.owner().is_ok_and(|owner| owner == self.owner)
+            && self
+                .synced
+                .is_some_and(|t| t.elapsed() < Duration::from_secs(300))
+    }
+
     pub fn filter(&mut self, client: &mut Client, enabled: bool, force: bool) -> Result<()> {
         if !enabled {
             self.only_new = false;
@@ -198,12 +205,7 @@ impl Ranking {
             self.owner = owner;
         }
         self.only_new = true;
-        if !force
-            && (self.busy()
-                || self
-                    .synced
-                    .is_some_and(|t| t.elapsed() < Duration::from_secs(300)))
-        {
+        if !force && (self.busy() || self.fresh_membership(client)) {
             return Ok(());
         }
         self.synced = None;

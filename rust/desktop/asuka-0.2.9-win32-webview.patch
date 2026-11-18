@@ -1,0 +1,86 @@
+--- a/src/web.c
++++ b/src/web.c
+@@ -37,6 +37,7 @@
+ 	WV_ADD_SOURCE_CHANGED = 11,
+ 	WV_ADD_HISTORY_CHANGED = 13,
+ 	WV_ADD_NAVIGATION_COMPLETED = 15,
++	WV_ADD_PROCESS_FAILED = 25,
+ 	WV_ADD_SCRIPT_ON_DOCUMENT_CREATED = 27,
+ 	WV_REMOVE_SCRIPT_ON_DOCUMENT_CREATED = 28,
+ 	WV_EXECUTE_SCRIPT = 29,
+@@ -61,6 +62,7 @@
+ 	SET_PUT_ARE_DEV_TOOLS_ENABLED = 12,
+ 	SET2_PUT_USER_AGENT = 22,
+ 
++	PROCESS_FAILED_GET_KIND = 3,
+ 	NAV_COMPLETED_GET_IS_SUCCESS = 3,
+ 	NAV_COMPLETED_GET_STATUS = 4,
+ 	MSG_TRY_GET_STRING = 5,
+@@ -319,6 +321,28 @@
+ 	ak_buf_f32(&b, progress);
+ 	wh_emit_bytes(n, AK_EVENT_WEB_STATE, b.data, b.len);
+ 	ak_buf_free(&b);
++}
++
++// Initialization can fail inside node creation, before Asuka installs its listeners.
++static void report_unavailable(void *ctx) {
++	wh_web *w = ctx;
++	static const char message[] = "WebView2 unavailable";
++	if (!w->closed) wh_emit_str(w->n, AK_EVENT_FAILED, message, sizeof message - 1);
++	web_unref(w);
++}
++
++static void web_unavailable(wh_web *w) {
++	if (w->closed) return;
++	InterlockedIncrement(&w->refs);
++	wh_post(report_unavailable, w);
++}
++
++static void on_process_failed(wh_web *w, uintptr_t a, void *args) {
++	(void)a;
++	int kind;
++	// A browser or main renderer exit destroys this page. Edge recovers other subprocesses itself.
++	if (SUCCEEDED(CALL_P(args, PROCESS_FAILED_GET_KIND, &kind)) && (kind == 0 || kind == 1))
++		web_unavailable(w);
+ }
+ 
+ static void on_navigation_starting(wh_web *w, uintptr_t a, void *b) {
+@@ -546,7 +570,7 @@
+ static void set_up(wh_web *w, com controller) {
+ 	w->controller = controller;
+ 	CALL_P(controller, CTL_GET_CORE_WEBVIEW2, &w->view);
+-	if (!w->view) return;
++	if (!w->view) { web_unavailable(w); return; }
+ 	CALL_P(w->view, WV_GET_SETTINGS, &w->settings);
+ 	if (w->settings) CALL_I(w->settings, SET_PUT_ARE_DEV_TOOLS_ENABLED, TRUE);
+ 	com c2 = asuka_com_query(controller, &IID_CONTROLLER2);
+@@ -562,6 +586,7 @@
+ 		free(dir);
+ 		asuka_com_release(wv3);
+ 	}
++	add_event(w, w->view, WV_ADD_PROCESS_FAILED, on_process_failed);
+ 	add_event(w, w->view, WV_ADD_NAVIGATION_STARTING, on_navigation_starting);
+ 	add_event(w, w->view, WV_ADD_NAVIGATION_COMPLETED, on_navigation_completed);
+ 	add_event(w, w->view, WV_ADD_SOURCE_CHANGED, on_state_changed);
+@@ -592,7 +617,7 @@
+ 
+ static void controller_made(wh_web *w, uintptr_t a, void *controller) {
+ 	if (FAILED(hr_of(a)) || !controller) {
+-		if (!w->closed) wh_log("making a WebView2 failed (HRESULT 0x%08lx)", (unsigned long)hr_of(a));
++		web_unavailable(w);
+ 		return;
+ 	}
+ 	if (w->closed) return;  // the view went meanwhile: the controller goes with its handler
+@@ -602,9 +627,10 @@
+ 
+ static void with_environment(void *ctx, void *env) {
+ 	wh_web *w = ctx;
+-	if (env && !w->closed && w->n && w->n->hwnd) {
++	if (!env) web_unavailable(w);
++	else if (!w->closed && w->n && w->n->hwnd) {
+ 		void *h = new_handler(w, controller_made);
+-		CALL_PP(env, ENV_CREATE_CONTROLLER, w->n->hwnd, h);
++		if (FAILED(CALL_PP(env, ENV_CREATE_CONTROLLER, w->n->hwnd, h))) web_unavailable(w);
+ 		asuka_com_release(h);
+ 	}
+ 	web_unref(w);  // the wait's

@@ -1,7 +1,7 @@
 name = "BiliMusicPlayer"
 id = "com.bilimusicplayer"
-version = "1.7.1"
-build = 16
+version = "1.7.3"
+build = 18
 accent = "#47ADCA"
 icon = "icon.png"
 orientations = ["portrait", "landscape"]
@@ -20,7 +20,7 @@ libraries = ["dl", "pthread", "m"]
 [c.windows]
 libraries = ["ws2_32", "userenv", "bcrypt", "ntdll", "crypt32", "secur32"]
 [c.android]
-libraries = ["log", "android", "m", "dl"]
+libraries = ["./android-exports.ld", "log", "android", "m", "dl"]
 [c.macos]
 frameworks = ["Security", "SystemConfiguration", "CoreFoundation"]
 

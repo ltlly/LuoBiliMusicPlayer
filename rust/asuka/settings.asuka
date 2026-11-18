@@ -25,7 +25,7 @@ component Preferences {
               Pill("扫码登录","",palette.ink,palette.soft) { on press { go("login") } }
             } else {
               Pill("退出登录","",palette.secondary,palette.soft) {
-                on press { alert("退出当前账户？", actions: [.button(title: "取消", role: .cancel), .button(title: "退出", role: .destructive, run: () => action("logout"))]) }
+                on press { confirmAction("退出当前账户？", "退出", () => action("logout")) }
               }
             }
           }
@@ -53,8 +53,7 @@ component Preferences {
         }
         Card {
           SectionName("外观","sun")
-          Segmented(["跟随系统", "浅色", "深色"]) {
-            selected: if player.themeMode == "DARK" { 2 } else if player.themeMode == "LIGHT" { 1 } else { 0 }
+          ChoiceBar(["跟随系统", "浅色", "深色"], if player.themeMode == "DARK" { 2 } else if player.themeMode == "LIGHT" { 1 } else { 0 }, "外观主题") {
             on change(i) { action("theme", ["SYSTEM", "LIGHT", "DARK"][i]) }
           }
         }
@@ -74,7 +73,7 @@ component Preferences {
             }
           }
         }
-        Text("哔哩音乐 1.7.1") { color: palette.secondary; font: .footnote; alignSelf: .center }
+        Text("哔哩音乐 1.7.3") { color: palette.secondary; font: .footnote; alignSelf: .center }
       } else {
         Card {
           SectionName("保存目录","favorites")
@@ -113,7 +112,7 @@ component Preferences {
         Card {
           SectionName("缓存","library")
           Pill("清除播放和封面缓存（{player.cacheSize}）","",palette.ink,palette.soft) {
-            on press { alert("清除播放和封面缓存？", actions: [.button(title: "取消", role: .cancel), .button(title: "清除", role: .destructive, run: () => action("clearCache"))]) }
+            on press { confirmAction("清除播放和封面缓存？", "清除", () => action("clearCache")) }
           }
         }
       }

@@ -4,6 +4,7 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    sync::Mutex,
     time::UNIX_EPOCH,
 };
 
@@ -27,6 +28,8 @@ pub struct Cache {
     legacy: PathBuf,
     agent: ureq::Agent,
     limit: u64,
+    // A miss waits for one download; disk hits never wait behind the network.
+    bytes_until_trim: Mutex<u64>,
 }
 impl Cache {
     pub fn new(legacy: PathBuf) -> Self {
@@ -39,6 +42,7 @@ impl Cache {
             dir,
             legacy,
             agent,
+            bytes_until_trim: Mutex::new(0),
             limit: if cfg!(target_os = "android") {
                 128 << 20
             } else {
@@ -59,6 +63,13 @@ impl Cache {
         if path.is_file() {
             return Ok(path);
         }
+        let mut budget = self
+            .bytes_until_trim
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if path.is_file() {
+            return Ok(path);
+        }
         fs::create_dir_all(&self.dir)?;
         let mut response = self.agent.get(url).call()?;
         let bytes = response
@@ -71,13 +82,20 @@ impl Cache {
         let mut tmp = tempfile::NamedTempFile::new_in(&self.dir)?;
         tmp.write_all(&bytes)?;
         tmp.persist(&path)?;
-        self.trim(&[&path])?;
+        self.trim(&mut budget, bytes.len() as u64, &[&path])?;
         Ok(path)
     }
     /// Derive the player's soft background from the bytes already on disk.
     pub fn ambience(&self, url: &str, cover: &Path) -> Result<PathBuf> {
         let key = format!("{:x}", Sha256::digest(url.as_bytes()));
         let path = self.dir.join(format!("{key}.ambience.jpg"));
+        if path.is_file() {
+            return Ok(path);
+        }
+        let mut budget = self
+            .bytes_until_trim
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         if path.is_file() {
             return Ok(path);
         }
@@ -91,12 +109,17 @@ impl Cache {
         fs::create_dir_all(&self.dir)?;
         let mut tmp = tempfile::NamedTempFile::new_in(&self.dir)?;
         image::codecs::jpeg::JpegEncoder::new(tmp.as_file_mut()).encode_image(&wash)?;
+        let size = tmp.as_file().metadata()?.len();
         tmp.persist(&path)?;
-        self.trim(&[cover, &path])?;
+        self.trim(&mut budget, size, &[cover, &path])?;
         Ok(path)
     }
 
-    fn trim(&self, protected: &[&Path]) -> Result<()> {
+    fn trim(&self, budget: &mut u64, added: u64, protected: &[&Path]) -> Result<()> {
+        if let Some(left) = budget.checked_sub(added) {
+            *budget = left;
+            return Ok(());
+        }
         let mut total = 0;
         let mut files = vec![];
         for f in fs::read_dir(&self.dir)? {
@@ -121,6 +144,7 @@ impl Cache {
                 }
             }
         }
+        *budget = self.limit.saturating_sub(total);
         Ok(())
     }
 }

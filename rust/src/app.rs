@@ -51,7 +51,8 @@ pub(crate) enum Command {
     Retry,
     Transport(Transport, i32),
     Seek(f32),
-    Navigate(Page),
+    Navigate(Page, i64),
+    Scanned(Result<crate::library_scan::ScanResult>),
     Choose(String, String),
     More,
     Search(String),
@@ -74,7 +75,7 @@ pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_mediaAction(
     if action == 12 {
         let tx = crate::bridge::start_worker();
         let _ = tx.send(Command::Open);
-        let _ = tx.send(Command::Navigate(Page::Settings));
+        let _ = tx.send(Command::Navigate(Page::Settings, 0));
         return;
     }
     if action == 7 {
@@ -98,31 +99,8 @@ pub(crate) fn run(
     view: View,
     rx: Receiver<Command>,
 ) -> Result<()> {
-    let library = Library::open(&db)?;
-    let queue = crate::queue::Queue::restore(&settings, &library)?;
-    let cache_dir = crate::cover::legacy_path(&db);
-    let downloads = crate::download::Downloads::open(&library, db)?;
-    let mut app = Application {
-        cache_dir,
-        downloads,
-        downloads_tab: 0,
-        queue,
-        view,
-        client: Client::new(settings)?,
-        library,
-        page: Page::Library,
-        folder: 0,
-        title: String::new(),
-        items: vec![],
-        total: 0,
-        page_number: 1,
-        folder_total: 0,
-        keyword: String::new(),
-        prompt: None,
-        filling: None,
-        ranking: Default::default(),
-        clean_next: Instant::now(),
-    };
+    let mut app = Application::new(db, settings, view)?;
+    app.view.database_ready(&app.db);
     app.events(rx);
     Ok(())
 }
@@ -134,6 +112,9 @@ struct Prompt {
     next: Instant,
 }
 struct Application {
+    db: PathBuf,
+    navigation: i64,
+    scan_state: crate::library_scan::ScanState,
     ranking: crate::ranking::Ranking,
     clean_next: Instant,
     cache_dir: PathBuf,
@@ -156,6 +137,36 @@ struct Application {
 }
 
 impl Application {
+    fn new(db: PathBuf, settings: Settings, view: View) -> Result<Self> {
+        let library = Library::open(&db)?;
+        let queue = crate::queue::Queue::restore(&settings, &library)?;
+        let cache_dir = crate::cover::legacy_path(&db);
+        let downloads = crate::download::Downloads::open(&library, db.clone())?;
+        Ok(Self {
+            db,
+            navigation: 0,
+            scan_state: Default::default(),
+            cache_dir,
+            downloads,
+            downloads_tab: 0,
+            queue,
+            view,
+            client: Client::new(settings)?,
+            library,
+            page: Page::Library,
+            folder: 0,
+            title: String::new(),
+            items: vec![],
+            total: 0,
+            page_number: 1,
+            folder_total: 0,
+            keyword: String::new(),
+            prompt: None,
+            filling: None,
+            ranking: Default::default(),
+            clean_next: Instant::now(),
+        })
+    }
     fn show(&self, update: impl FnOnce(&mut Snapshot)) {
         self.view.update(update);
     }
@@ -180,9 +191,56 @@ impl Application {
                 }
             })
     }
+    // Publish the route and its rows together, so the UI never renders the previous
+    // page's rows under the new heading or briefly paints an empty warm list.
+    fn page_view(&self, update: impl FnOnce(&mut Snapshot)) {
+        let auto_clean = self.cleanup_enabled();
+        let logged_in = self.client.logged_in();
+        self.show(|ui| {
+            if ui.page != self.page || (self.page == Page::Content && ui.folder_title != self.title)
+            {
+                ui.set_entries(Vec::new());
+                ui.has_more = false;
+                ui.message.clear();
+            }
+            ui.page = self.page;
+            ui.navigation = self.navigation;
+            if ui.account.is_empty() || ui.logged_in != logged_in || self.page == Page::Settings {
+                ui.account = if logged_in {
+                    match self.client.settings.get("username") {
+                        Some(name) => format!(
+                            "已登录: {name} (UID: {})",
+                            self.client.settings.get("user_id").unwrap_or("")
+                        ),
+                        None => "已登录".into(),
+                    }
+                } else {
+                    "未登录".into()
+                };
+                if ui.logged_in != logged_in {
+                    ui.account_detail.clear();
+                }
+            }
+            ui.logged_in = logged_in;
+            ui.auto_clean = auto_clean;
+            ui.page_loading = false;
+            if self.page == Page::Content {
+                ui.folder_title.clone_from(&self.title);
+            }
+            update(ui);
+        });
+    }
+    fn loading_page(&self) {
+        self.page_view(|ui| {
+            ui.page_loading = true;
+            ui.set_entries(Vec::new());
+            ui.has_more = false;
+            ui.message.clear();
+        });
+    }
     fn entries(&self, rows: Vec<Entry>, more: bool) {
-        self.show(move |ui| {
-            ui.entries = rows;
+        self.page_view(move |ui| {
+            ui.set_entries(rows);
             ui.has_more = more;
             ui.message.clear();
         });
@@ -479,7 +537,11 @@ impl Application {
                     10 if self.page == Page::Settings => self.quality_state(),
                     7 => {
                         self.show_player(true);
-                        Ok(())
+                        crate::android_platform::quality_call(
+                            "resetLabels",
+                            &serde_json::Value::Null,
+                        )
+                        .map(|_| ())
                     }
                     6 if self.page == Page::Library => self.navigate(Page::Library, false),
                     _ => Ok(()),
@@ -500,13 +562,13 @@ impl Application {
                     }
                 }
                 Command::RankFilter(value) if self.page == Page::Rank => {
-                    if value {
+                    if value && !self.ranking.fresh_membership(&self.client) {
                         // The folder list can require network I/O before the first membership batch.
                         self.show(|ui| {
                             ui.rank_filtered = true;
                             ui.rank_busy = true;
                             ui.rank_verified = false;
-                            ui.entries.clear();
+                            ui.set_entries(Vec::new());
                             ui.message.clear();
                         });
                     }
@@ -539,10 +601,14 @@ impl Application {
                         .logout()
                         .and_then(|()| self.navigate(Page::Library, false))
                 }
-                Command::Navigate(Page::Login) => {
-                    self.navigate(Page::Login, false).and_then(|()| self.qr())
+                Command::Navigate(p, token) => {
+                    if token > 0 {
+                        self.navigation = token;
+                    }
+                    self.navigate(p, false)
+                        .and_then(|()| if p == Page::Login { self.qr() } else { Ok(()) })
                 }
-                Command::Navigate(p) => self.navigate(p, false),
+                Command::Scanned(result) => self.scanned(result),
                 Command::Retry if self.page == Page::Login => self.qr(),
                 Command::Retry => self.navigate(self.page, true),
                 Command::Choose(key, title) if self.page == Page::Favorites => {
@@ -624,7 +690,7 @@ impl Application {
         } else {
             format!("{size} B")
         };
-        self.show(move |ui| {
+        self.page_view(move |ui| {
             ui.download_dir = dir;
             ui.cache_size = size;
             ui.wifi_only = wifi;
@@ -652,20 +718,10 @@ impl Application {
         Ok(())
     }
     fn download_entries(&self) -> Result<()> {
-        let rows = crate::download::rows(&self.library, self.downloads_tab, &self.keyword)?;
-        self.show(move |ui| {
-            let rows = rows
-                .into_iter()
-                .map(|(id, title, detail, status)| Entry {
-                    video: crate::database::linked_video(&id, "", 0),
-                    key: id,
-                    title,
-                    detail,
-                    status,
-                    ..Default::default()
-                })
-                .collect::<Vec<_>>();
-            ui.entries = rows;
+        let rows = download_rows(&self.library, self.downloads_tab, &self.keyword)?;
+        self.page_view(|ui| {
+            ui.set_entries(rows);
+            ui.has_more = false;
         });
         Ok(())
     }
@@ -831,7 +887,7 @@ impl Application {
             ui.queue_index = index as i32;
             ui.repeat_mode = repeat;
             ui.shuffle = shuffle;
-            ui.queue = entries;
+            ui.set_queue(entries);
         });
     }
     fn play_row(&mut self, key: &str) -> Result<()> {
@@ -931,7 +987,7 @@ impl Application {
     fn error(&self, e: anyhow::Error) {
         let is_login = self.page == Page::Login;
         let msg = e.to_string();
-        self.show(move |ui| {
+        self.page_view(move |ui| {
             ui.message = msg;
             if is_login {
                 ui.login_state = "error".into();
@@ -1031,19 +1087,7 @@ impl Application {
         self.total = 0;
         self.folder_total = 0;
         self.page_number = 1;
-        let title = self.title.clone();
         let logged_in = self.client.logged_in();
-        let auto_clean = self.cleanup_enabled();
-        self.show(move |ui| {
-            ui.auto_clean = auto_clean;
-            ui.logged_in = logged_in;
-            ui.page = p;
-            ui.entries = Vec::new();
-            ui.message = "".into();
-            ui.has_more = false;
-
-            ui.folder_title = title;
-        });
         match p {
             Page::Rank => {
                 self.ranking.keyword.clear();
@@ -1057,11 +1101,14 @@ impl Application {
                     }
                 });
                 let filtered = self.ranking.only_new;
+                if filtered {
+                    self.rank_rows();
+                }
                 let result = self.ranking.filter(&mut self.client, filtered, force);
                 self.rank_rows();
                 result?;
             }
-            Page::Favorites if !logged_in => {}
+            Page::Favorites if !logged_in => self.entries(vec![], false),
             Page::Favorites => {
                 let mid = self
                     .client
@@ -1076,20 +1123,23 @@ impl Application {
                     .into_iter()
                     .filter(|f| f.mid == mid)
                     .collect();
-                let warm = !force && !cached.is_empty();
+                let warm = !cached.is_empty();
                 if warm {
                     self.folder_entries(cached);
-                    if self
-                        .library
-                        .last_folder_update()?
-                        .is_some_and(|last| now_ms() - last <= 300_000)
+                    if !force
+                        && self
+                            .library
+                            .last_folder_update()?
+                            .is_some_and(|last| now_ms() - last <= 300_000)
                     {
                         return Ok(());
                     }
+                } else {
+                    self.loading_page();
                 }
                 let folders = match self.client.folders(mid) {
                     Ok(v) => v,
-                    Err(_) if warm => return Ok(()),
+                    Err(_) if warm && !force => return Ok(()),
                     Err(e) => return Err(e),
                 };
                 self.library.store_folders(&folders, now_ms())?;
@@ -1100,7 +1150,16 @@ impl Application {
                     self.client.refresh_folder(self.folder);
                 }
                 self.items = self.library.media(self.folder)?;
-                self.media_entries();
+                self.folder_total = self
+                    .library
+                    .folder_count(self.folder)?
+                    .max(self.items.len());
+                self.total = self.folder_total;
+                if self.items.is_empty() {
+                    self.loading_page();
+                } else {
+                    self.media_entries();
+                }
                 let cached = std::mem::take(&mut self.items);
                 match self.client.folder_page(self.folder, 1, None) {
                     Ok((mut fresh, total)) => {
@@ -1110,7 +1169,12 @@ impl Application {
                         self.total = total;
                         self.folder_total = total;
                     }
-                    Err(_) if !cached.is_empty() => self.items = cached,
+                    Err(e) if !cached.is_empty() => {
+                        self.items = cached;
+                        if force {
+                            return Err(e);
+                        }
+                    }
                     Err(e) => return Err(e),
                 }
                 self.page_number = self.items.len().div_ceil(20).max(1);
@@ -1119,6 +1183,10 @@ impl Application {
             Page::DownloadSettings => self.download_settings(false)?,
             Page::Downloads => self.download_entries()?,
             Page::Library => {
+                #[cfg(target_os = "android")]
+                if force {
+                    crate::android_platform::quality_call("resetLabels", &serde_json::Value::Null)?;
+                }
                 self.search("")?;
                 self.scan(force)?;
             }
@@ -1129,16 +1197,9 @@ impl Application {
                     let pending = crate::android_platform::pending_replacement()?.is_some();
                     self.show(|ui| ui.pending_replacement = pending);
                 }
-                let user = match self.client.settings.get("username") {
-                    Some(name) => format!(
-                        "已登录: {name} (UID: {})",
-                        self.client.settings.get("user_id").unwrap_or("")
-                    ),
-                    None => "未登录".into(),
-                };
-                self.show(move |ui| ui.account = user);
+                self.page_view(|_| {});
             }
-            _ => {}
+            _ => self.page_view(|ui| ui.message.clear()),
         }
         Ok(())
     }
@@ -1171,14 +1232,20 @@ impl Application {
         Ok(())
     }
     fn scan(&mut self, _force: bool) -> Result<()> {
+        if self.scan_state.active {
+            self.scan_state.force_again |= _force;
+            return Ok(());
+        }
         #[cfg(target_os = "android")]
         {
             if !crate::android_platform::request_library_access()? {
                 return Ok(());
             }
-            let needs=self.library.0.query_row("SELECT NOT EXISTS(SELECT 1 FROM cached_favorite_medias) OR (SELECT COUNT(*) FROM songs WHERE id LIKE 'local_%' AND isDownloaded=1)>10",[],|r|r.get::<_,bool>(0))?;
             if _force
-                && needs
+                && self.library.0.query_row(
+                    "SELECT NOT EXISTS(SELECT 1 FROM cached_favorite_medias) OR EXISTS(SELECT 1 FROM songs WHERE id GLOB 'local_*' AND isDownloaded=1 LIMIT 1 OFFSET 10)",
+                    [], |r| r.get::<_,bool>(0),
+                )?
                 && let Some(mid) = self
                     .client
                     .settings
@@ -1200,21 +1267,60 @@ impl Application {
             }
         }
         let dir = crate::download::directory(&self.client)?;
-        let count =
-            crate::library_scan::scan(&mut self.library, &dir, cfg!(target_os = "android"))?;
-        if count > 0 {
-            self.search("")?;
-        }
-        if _force {
-            self.show(move |ui| {
-                ui.message = if count == 0 {
-                    "未找到新的本地文件".into()
+        if !_force
+            && self.scan_state.index.unchanged(
+                &dir,
+                if cfg!(target_os = "android") {
+                    self.library.cached_rows()?
                 } else {
-                    format!("已恢复 {count} 首本地歌曲")
-                }
-            });
+                    0
+                },
+            )
+        {
+            return Ok(());
         }
+        let Some(tx) = crate::bridge::sender().cloned() else {
+            return Ok(());
+        };
+        let db = self.db.clone();
+        self.scan_state.active = true;
+        self.scan_state.report = _force;
+        std::thread::spawn(move || {
+            let result = Library::open(&db).and_then(|mut library| {
+                crate::library_scan::scan_indexed(&mut library, &dir, cfg!(target_os = "android"))
+            });
+            let _ = tx.send(Command::Scanned(result));
+        });
         Ok(())
+    }
+    fn scanned(&mut self, result: Result<crate::library_scan::ScanResult>) -> Result<()> {
+        self.scan_state.active = false;
+        let again = std::mem::take(&mut self.scan_state.force_again);
+        let report = std::mem::take(&mut self.scan_state.report);
+        let update = match result {
+            Ok(scan) => {
+                self.scan_state.index = scan.index;
+                if self.page == Page::Library && scan.imported > 0 {
+                    self.search(&self.keyword.clone())?;
+                }
+                if self.page == Page::Library && report {
+                    self.show(|ui| {
+                        ui.message = if scan.imported == 0 {
+                            "未找到新的本地文件".into()
+                        } else {
+                            format!("已恢复 {} 首本地歌曲", scan.imported)
+                        };
+                    });
+                }
+                Ok(())
+            }
+            Err(e) if self.page == Page::Library => Err(e),
+            Err(_) => Ok(()),
+        };
+        if again {
+            self.scan(true)?;
+        }
+        update
     }
     fn folder_entries(&self, folders: Vec<crate::database::Folder>) {
         self.entries(
@@ -1234,8 +1340,9 @@ impl Application {
     fn rank_rows(&self) {
         let entries = self.ranking.entries();
         let issue = self.ranking.issue();
-        self.show(|s| {
-            s.entries = entries;
+        self.page_view(|s| {
+            s.page_loading = self.ranking.loading() && issue.is_empty();
+            s.set_entries(entries);
             s.folder_title = issue;
             s.rank_filtered = self.ranking.only_new;
             s.rank_busy = self.ranking.busy();
@@ -1322,33 +1429,19 @@ impl Application {
                 .library
                 .downloaded_with_video()?
                 .into_iter()
-                .filter(|(t, _)| t.matches(&lower))
+                .filter(|(t, _)| lower.is_empty() || t.matches(&lower))
                 .collect::<Vec<_>>();
             #[cfg(target_os = "android")]
             let labels = crate::android_platform::quality_call(
                 "labels",
-                &serde_json::to_value(tracks.iter().map(|(t, _)| &t.uri).collect::<Vec<_>>())?,
+                &serde_json::json!({
+                    "dir": crate::download::directory(&self.client)?,
+                    "paths": tracks.iter().map(|(t, _)| &t.uri).collect::<Vec<_>>(),
+                }),
             )?;
-            let rows = tracks
-                .into_iter()
-                .map(|(t, video)| {
-                    #[cfg(target_os = "android")]
-                    let detail = labels[&t.uri]
-                        .as_str()
-                        .map(|q| format!("{} · {q}", t.artist))
-                        .unwrap_or(t.artist);
-                    #[cfg(not(target_os = "android"))]
-                    let detail = t.artist;
-                    Entry {
-                        key: t.id,
-                        title: t.title,
-                        detail,
-                        video,
-                        cover_url: crate::cover::thumbnail(&t.cover, false),
-                        ..Default::default()
-                    }
-                })
-                .collect();
+            #[cfg(not(target_os = "android"))]
+            let labels = serde_json::Value::Null;
+            let rows = library_rows(tracks, &labels);
             self.entries(rows, false);
             return Ok(());
         }
@@ -1389,8 +1482,81 @@ impl Application {
     }
 }
 
+pub(crate) fn library_rows(
+    tracks: Vec<(crate::playback::Track, String)>,
+    labels: &serde_json::Value,
+) -> Vec<Entry> {
+    tracks
+        .into_iter()
+        .map(|(track, video)| {
+            let detail = labels
+                .get(&track.uri)
+                .and_then(|label| label.as_str())
+                .map(|quality| format!("{} · {quality}", track.artist))
+                .unwrap_or(track.artist);
+            Entry {
+                key: track.id,
+                title: track.title,
+                detail,
+                video,
+                cover_url: crate::cover::thumbnail(&track.cover, false),
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+pub(crate) fn download_rows(library: &Library, tab: i32, query: &str) -> Result<Vec<Entry>> {
+    Ok(crate::download::rows(library, tab, query)?
+        .into_iter()
+        .map(|(id, title, detail, status)| Entry {
+            video: crate::database::linked_video(&id, "", 0),
+            key: id,
+            title,
+            detail,
+            status,
+            ..Default::default()
+        })
+        .collect())
+}
+
 fn unique(mut rows: Vec<Media>) -> Vec<Media> {
     let mut seen = HashSet::new();
     rows.retain(|m| seen.insert(m.bvid.clone()));
     rows
+}
+
+#[cfg(all(test, not(target_os = "android")))]
+mod navigation_tests {
+    use super::*;
+
+    #[test]
+    fn warm_favorites_publish_rows_and_route_in_one_revision() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let settings = Settings::open(dir.path().join("prefs"), || {
+            Ok([
+                ("access_token", "local-test"),
+                ("refresh_token", "local-test"),
+                ("user_id", "22"),
+            ]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect())
+        })?;
+        let view = View::default();
+        let mut app = Application::new(dir.path().join("db"), settings, view.clone())?;
+        let folder = serde_json::from_value(serde_json::json!({
+            "id": 91, "fid": 91, "mid": 22, "title": "本机收藏", "media_count": 3, "attr": 0
+        }))?;
+        app.library.store_folders(&[folder], now_ms())?;
+        app.navigation = 7;
+        app.navigate(Page::Favorites, false)?;
+        view.update(|s| {
+            assert_eq!(serde_json::to_value(&*s).unwrap()["revision"], 1);
+            assert!(s.page == Page::Favorites && !s.page_loading);
+            assert_eq!(s.navigation, 7);
+            assert_eq!(s.entries[0].title, "本机收藏");
+        });
+        Ok(())
+    }
 }

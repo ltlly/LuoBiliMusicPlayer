@@ -1,0 +1,46 @@
+--- a/src/list.c
++++ b/src/list.c
+@@ -608,6 +608,27 @@
+ float wh_list_offset(node *n) { return n->list->offset; }
+ float wh_list_content(node *n) { return n->list->ntops ? n->list->tops[n->list->ntops - 1] : 0; }
+ 
++// Present the parent and its visible row windows together. Separate WM_PAINTs otherwise
++// leave old text and covers on screen between two wheel messages.
++static void present_rows(node *n) {
++	RECT view;
++	GetClientRect(n->hwnd, &view);
++	HDC target = GetDCEx(n->hwnd, NULL, DCX_CACHE | DCX_CLIPSIBLINGS);
++	HDC frame = NULL;
++	HPAINTBUFFER buffer = target ? BeginBufferedPaint(target, &view, BPBF_COMPATIBLEBITMAP, NULL, &frame) : NULL;
++	if (frame) {
++		wh_paint(n, n->hwnd, frame, view);
++		HWND child = GetWindow(n->hwnd, GW_CHILD);
++		if (child) child = GetWindow(child, GW_HWNDLAST);
++		for (; child; child = GetWindow(child, GW_HWNDPREV)) {
++			if (IsWindowVisible(child)) wh_paint_tree(child, n->hwnd, frame);
++		}
++	}
++	if (buffer) EndBufferedPaint(buffer, frame != NULL);
++	if (target) ReleaseDC(n->hwnd, target);
++	if (!frame) RedrawWindow(n->hwnd, NULL, NULL, RDW_INVALIDATE | RDW_ALLCHILDREN);
++}
++
+ // wh_list_scroll moves the list to an offset (clamped) and tiles; the
+ // user's scrolling moves a list anchored at its bottom off its end, or
+ // back.
+@@ -619,9 +640,15 @@
+ 	y = wh_clampf(y, 0, wh_maxf(total - view, 0));
+ 	if (l->bottom) l->stuck = y >= wh_maxf(total - view, 0) - 1;
+ 	if (y == l->offset) return;
++	bool visible = IsWindowVisible(n->hwnd);
++	if (visible) SendMessageW(n->hwnd, WM_SETREDRAW, FALSE, 0);
+ 	l->offset = y;
+ 	tile(l);
+ 	wh_show_bars(n);
++	if (visible) {
++		SendMessageW(n->hwnd, WM_SETREDRAW, TRUE, 0);
++		present_rows(n);
++	}
+ 	wh_overlays_dirty();  // an anchor in a row moved
+ 	ak_event e = {.kind = AK_EVENT_SCROLLED, .x = 0, .y = l->offset};
+ 	wh_emit(n, &e);

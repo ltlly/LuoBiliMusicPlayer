@@ -1,0 +1,42 @@
+component WindowChrome {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let window = mainWindow()
+  if !window.fullScreen {
+    Row {
+      absolute: true; top: 0; left: 0; right: 0; height: 32; align: .center
+      gradient: Gradient(stops: [Stop(color: palette.soft, at: 0), Stop(color: palette.paper, at: 0.64)], startX: 0, startY: 0.5, endX: 1, endY: 0.5)
+      Row {
+        grow: 1; shrink: 1; gap: 8; padding: [0, 14]; align: .center; clip: true
+        Glyph("ribbon", palette.accent, 17.0)
+        Text(if player.trackTitle.isEmpty() { "哔哩音乐" } else { player.trackTitle }) {
+          shrink: 1; lines: 1; color: palette.ink; font: Font(size: 12).semibold()
+        }
+      }
+      CaptionButton("最小化", "minus") { on press { window.minimize() } }
+      CaptionButton(if window.maximized { "还原" } else { "最大化" }, if window.maximized { "restore" } else { "maximize" }) {
+        on press { if window.maximized { window.restore() } else { window.maximize() } }
+      }
+      CaptionButton("关闭窗口", "close") { on press { window.close() } }
+    }
+  }
+}
+
+component CaptionButton(name: string, symbol: string) {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  event press
+  View {
+    width: 46; height: 32; align: .center; justify: .center; role: .button; label: name; tooltip: name
+    on press { emit press }
+    hovered { background: if symbol == "close" { #DA636C40 } else { palette.accentWash } }
+    pressed { background: if symbol == "close" { #DA636C66 } else { palette.soft } }
+    focusVisible { border: 2; borderColor: palette.accent }
+    Canvas(g => {
+      let ink = palette.secondary
+      let pen = StrokeStyle(width: 1.4, cap: .round, join: .round)
+      if symbol == "minus" { g.stroke(Path().move(2.5,7).line(11.5,7), ink, pen) }
+      else if symbol == "maximize" { g.stroke(Path().move(2.5,2.5).line(11.5,2.5).line(11.5,11.5).line(2.5,11.5).close(), ink, pen) }
+      else if symbol == "restore" { g.stroke(Path().move(5,2).line(12,2).line(12,9).move(2,5).line(9,5).line(9,12).line(2,12).close(), ink, pen) }
+      else { g.stroke(Path().move(3,3).line(11,11).move(11,3).line(3,11), ink, pen) }
+    }) { width: 14; height: 14 }
+  }
+}

@@ -26,6 +26,57 @@ public final class QualityTasks {
     private final Context context;
     private final LegacyAudioReplacement journal;
     private final WorkManager work;
+    private final Map<String, Long> labelSizes = new HashMap<>();
+    private android.os.FileObserver labelObserver;
+    private File labelDirectory;
+
+    private synchronized void resetLabels() {
+        labelSizes.clear();
+        if (labelObserver != null) labelObserver.stopWatching();
+        labelObserver = null;
+        labelDirectory = null;
+    }
+
+    private synchronized JSONObject qualityLabels(JSONObject args) throws Exception {
+        File dir = new File(args.getString("dir"));
+        if (!dir.equals(labelDirectory)) {
+            resetLabels();
+            if (dir.isDirectory() && dir.canRead()) {
+                final int changes = android.os.FileObserver.CREATE | android.os.FileObserver.MODIFY
+                        | android.os.FileObserver.CLOSE_WRITE | android.os.FileObserver.DELETE | android.os.FileObserver.MOVED_FROM
+                        | android.os.FileObserver.MOVED_TO | android.os.FileObserver.DELETE_SELF | android.os.FileObserver.MOVE_SELF;
+                labelObserver = new android.os.FileObserver(dir, changes) {
+                    @Override public void onEvent(int event, String name) {
+                        synchronized (QualityTasks.this) {
+                            if (labelObserver != this) return;
+                            if (name == null) resetLabels();
+                            else labelSizes.remove(name);
+                        }
+                    }
+                };
+                labelObserver.startWatching();
+                labelDirectory = dir;
+            }
+        }
+        JSONArray paths = args.getJSONArray("paths");
+        SharedPreferences meta = context.getSharedPreferences("download_audio_quality", Context.MODE_PRIVATE);
+        JSONObject labels = new JSONObject();
+        for (int i = 0; i < paths.length(); i++) {
+            String path = paths.getString(i);
+            if (!meta.contains(path)) continue;
+            File file = new File(path);
+            boolean watched = labelDirectory != null && labelDirectory.equals(file.getParentFile());
+            String name = file.getName();
+            Long size = watched ? labelSizes.get(name) : null;
+            if (size == null) {
+                size = file.length();
+                if (watched) labelSizes.put(name, size);
+            }
+            if (size > 0 && size == meta.getLong("size:" + path, -1))
+                labels.put(path, meta.getString(path, ""));
+        }
+        return labels;
+    }
 
     private QualityTasks(Context app) {
         context = app;
@@ -67,17 +118,8 @@ public final class QualityTasks {
             return new JSONObject().put("errors", errors).put("status", status).put("failed", failed).put("summary", summary.toString()).toString();
         }
         if ("pending".equals(op)) { String pending = journal.pending(); return pending.isEmpty() ? "null" : pending; }
-        if ("labels".equals(op)) {
-            JSONArray paths = new JSONArray(raw);
-            SharedPreferences meta = context.getSharedPreferences("download_audio_quality", Context.MODE_PRIVATE);
-            JSONObject labels = new JSONObject();
-            for (int i = 0; i < paths.length(); i++) {
-                String path = paths.getString(i);
-                if (meta.contains(path) && new File(path).length() == meta.getLong("size:" + path, -1))
-                    labels.put(path, meta.getString(path, ""));
-            }
-            return labels.toString();
-        }
+        if ("resetLabels".equals(op)) { resetLabels(); return "null"; }
+        if ("labels".equals(op)) return qualityLabels(new JSONObject(raw)).toString();
         JSONObject args = new JSONObject(raw);
         if ("saveQuality".equals(op)) {
             saveQuality(new File(args.getString("path")), args.getString("label"), args.getInt("rank"));

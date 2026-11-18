@@ -1,0 +1,61 @@
+--- a/src/titlebar.c
++++ b/src/titlebar.c
+@@ -35,7 +35,8 @@
+ 		DwmSetWindowAttribute(c->hwnd, 35, &none, sizeof none);  // DWMWA_CAPTION_COLOR
+ 	}
+ 	HINSTANCE inst = GetModuleHandleW(NULL);
+-	HWND b = CreateWindowExW(WS_EX_LAYERED, WH_CLASS_VIEW, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0, c->hwnd, NULL, inst, NULL);
++	// The main window draws its three accessible caption buttons in Asuka.
++	HWND b = c->main ? NULL : CreateWindowExW(WS_EX_LAYERED, WH_CLASS_VIEW, L"", WS_CHILD | WS_CLIPSIBLINGS, 0, 0, 0, 0, c->hwnd, NULL, inst, NULL);
+ 	if (b) {
+ 		c->caption = wh_alloc(sizeof *c->caption);
+ 		c->caption->hwnd = b;
+@@ -119,6 +120,20 @@
+ 	uint32_t i = 0;
+ 	void *v;
+ 	while (wh_map_next(&H.ctls, &i, NULL, &v)) wh_layout_chrome(v);
++}
++
++// Let the shell recognize the position of the main window's custom maximize
++// button for Snap Layouts. The other two buttons use normal client input.
++bool wh_main_max_hit(HWND hwnd, LPARAM lp) {
++	wh_wctl *c = H.main_ctl;
++	if (!c || !c->hidden || c->full || GetAncestor(hwnd, GA_ROOT) != c->hwnd) return false;
++	POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
++	ScreenToClient(c->hwnd, &pt);
++	RECT r;
++	GetClientRect(c->hwnd, &r);
++	int bw = roundi(BUTTON_WIDTH * wh_ctl_k(c));
++	return pt.y >= 0 && pt.y < roundi(CAPTION_HEIGHT * wh_ctl_k(c))
++		&& pt.x >= r.right - 2 * bw && pt.x < r.right - bw;
+ }
+ 
+ LRESULT wh_title_bar_message(wh_wctl *c, UINT m, WPARAM wp, LPARAM lp, bool *handled) {
+@@ -145,6 +160,7 @@
+ 		if (r == HTCLIENT && !c->full) {
+ 			POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+ 			ScreenToClient(c->hwnd, &pt);
++			if (wh_main_max_hit(c->hwnd, lp)) return HTMAXBUTTON;
+ 			if (pt.y < roundi(CAPTION_HEIGHT * wh_ctl_k(c))) return HTCAPTION;
+ 		}
+ 		return r;
+--- a/src/parts.h
++++ b/src/parts.h
+@@ -66,6 +66,7 @@
+ // ---- window.c / winctl.c / titlebar.c / placement.c ----
+ void wh_listen_window(node *n);
+ bool wh_under_caption(HWND hwnd);
++bool wh_main_max_hit(HWND hwnd, LPARAM lp);
+ void wh_set_scale(HWND hwnd, float k);
+ void wh_close_main(void);
+ 
+--- a/src/views.c
++++ b/src/views.c
+@@ -1098,6 +1098,7 @@
+ 		// Through to what's under it: under a hidden title bar, the
+ 		// window's caption (a header's empty room too).
+ 		if (!wh_interactive(n) || (n->kind == KIND_HEADER && wh_under_caption(hwnd))) return HTTRANSPARENT;
++		if (wh_main_max_hit(hwnd, lp)) return HTTRANSPARENT;
+ 		break;
+ 	case WM_ERASEBKGND:
+ 		return 1;

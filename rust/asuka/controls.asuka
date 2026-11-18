@@ -23,7 +23,7 @@ fn contentInset(width: float) -> float = if width >= 720 { 32.0 } else if width 
 component IconAction(symbol: string, name: string, fg: Color, bg: Color, diameter: float = 40.0, iconSize: float = 20.0) {
   event press
   View {
-    role: .button; label: name; width: diameter; height: diameter; radius: diameter / 2
+    role: .button; label: name; width: diameter; height: diameter; minWidth: diameter; minHeight: diameter; shrink: 0; radius: diameter / 2
     align: .center; justify: .center; background: bg
     on press { emit press }
     pressed { opacity: 0.72 }
@@ -40,6 +40,46 @@ component Pill(text: string, symbol: string, fg: Color, bg: Color) {
     pressed { opacity: 0.72 }
     if !symbol.isEmpty() { Glyph(symbol, fg, 16.0) }
     Text(text) { color: fg; font: Font(size: 13).semibold(); lines: 1 }
+  }
+}
+
+component ChoiceBar(options: [string], value: int, name: string) {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  state keyFocus = -1
+  event change(index: int)
+  Row {
+    role: .radioGroup; label: name; padding: 3; gap: 3; radius: 15; background: palette.soft
+    for i in 0..<options.count() key i {
+      ChoiceItem(options[i], i == value, i == keyFocus) {
+        on choose { keyFocus = -1; if value != i { emit change(i) } }
+        on step(delta) {
+          let next = (i + delta + options.count()) % options.count()
+          keyFocus = next
+          if next != value { emit change(next) }
+        }
+      }
+    }
+  }
+}
+
+component ChoiceItem(title: string, chosen: bool, moveFocus: bool) {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let target = Ref()
+  event choose
+  event step(delta: int)
+  effect(moveFocus) { if moveFocus { target.focus() } }
+  View {
+    ref: target; role: .radio; label: title; a11yChecked: if chosen { .checked } else { .unchecked }
+    grow: 1; width: 0; height: 44; align: .center; justify: .center; radius: 12
+    background: if chosen { palette.accent } else { .clear }
+    focusVisible { border: 2; borderColor: palette.ink }
+    pressed { opacity: 0.80 }
+    keys: [Shortcut(key: "left", run: () => { emit step(-1) }), Shortcut(key: "right", run: () => { emit step(1) })]
+    on press { emit choose }
+    Text(title) {
+      color: if chosen { palette.paper } else { palette.ink }
+      font: Font(size: 14).semibold(); lines: 1; a11yHidden: true
+    }
   }
 }
 

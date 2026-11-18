@@ -15,7 +15,12 @@ app {
     height: 720
     minWidth: 330
     minHeight: 430
-    Music()
+    titleBar: if @platform == .windows { .hidden } else { .default }
+    View {
+      grow: 1
+      Music()
+      if @platform == .windows { WindowChrome() }
+    }
   }
 }
 
@@ -33,12 +38,25 @@ component Music(live: bool = true) {
   task {
     if !live { return }
     lbm_start()
+    let updates = ViewUpdates()
+    var revision = -1
+    var rows: [Entry] = []
+    var queue: [Entry] = []
     while true {
+      let raw = await updates.next(revision, playhead.int())
       let seconds = lbm_position_seconds().float()
       if playhead != seconds { playhead = seconds }
-      let raw = lbm_snapshot(player.revision)
       if !raw.isEmpty() {
-        if let next = try? json.decode<Player>(raw) {
+        if let packet = try? json.decode<Player>(raw) {
+          var next = packet
+          if next.entriesVersion > revision { rows = next.entries } else { next.entries = rows }
+          if next.queueVersion > revision { queue = next.queue } else { next.queue = queue }
+          revision = next.revision
+          if player.loggedIn != next.loggedIn { tabRows = [:] }
+          if !next.notice.isEmpty() { triplePending = false; snackbar(next.notice, duration: .long) }
+          if !requestedPage.isEmpty() && next.navigation != navigationRequest { continue }
+          navigationRequest = next.navigation
+          requestedPage = ""
           if player.page != next.page {
             query = ""
             selecting = false
@@ -46,10 +64,28 @@ component Music(live: bool = true) {
             panel = ""
           }
           player = next
-          if !next.notice.isEmpty() { triplePending = false; snackbar(next.notice, duration: .long) }
+          rememberTab(next, query)
         }
       }
-      await sleep(250ms)
+    }
+  }
+  task(navigationRequest) {
+    let page = requestedPage
+    if !live || (page != "library" && page != "downloads") || tabRows[page] != none { return }
+    let token = navigationRequest
+    // Usually the player has already published local rows before this point.
+    await sleep(80ms)
+    if token != navigationRequest || requestedPage != page { return }
+    let local = LocalPages()
+    let raw = await local.read(page, tab)
+    if token == navigationRequest && requestedPage == page {
+      if let rows = try? json.decode<[Entry]>(raw) {
+        player.page = page
+        player.entries = rows
+        player.hasMore = false
+        player.pageLoading = false
+        player.message = ""
+      }
     }
   }
   task(query) {
@@ -59,6 +95,7 @@ component Music(live: bool = true) {
     }
   }
   onBack {
+    if !activeDialog.choices.isEmpty() { activeDialog = PlayerDialog(); return true }
     if !panel.isEmpty() { dismissPanel(); return true }
     if selecting { selecting = false; selected = []; return true }
     if !query.isEmpty() { query = ""; action("search", ""); return true }
@@ -76,7 +113,10 @@ component Music(live: bool = true) {
   fn dismissPanel() { showPanel(if queueFromPlayer { "player" } else { "" }) }
   fn openTab(page: string) {
     panel = ""
-    if page != player.page { go(page) }
+    if page != player.page || !requestedPage.isEmpty() {
+      query = ""; rankQuery = ""; selected = []; selecting = false
+      go(page)
+    }
   }
   fn select(key: string) {
     if selected.contains(key) { selected.removeWhere(k => k == key) } else { selected.push(key) }
@@ -85,11 +125,11 @@ component Music(live: bool = true) {
     let page = player.page
     let ids = selected
     let title = if unsynced { "删除未匹配的本地歌曲及其文件？" } else if page == "downloads" { "移除 {ids.count()} 条下载记录？" } else { "删除选中的 {ids.count()} 首歌曲及其文件？" }
-    alert(title, actions: [.button(title: "取消", role: .cancel), .button(title: "删除", role: .destructive, run: () => {
+    confirmAction(title, "删除", () => {
       if let encoded = try? json.encode(ids) { action("removeItems", encoded, if unsynced { "unsynced" } else { "" }) }
       selecting = false
       selected = []
-    })])
+    })
   }
   fn sendDownload(ids: [string]) {
     if let encoded = try? json.encode(ids) { action("download", encoded) }
@@ -126,7 +166,7 @@ component Music(live: bool = true) {
       if wide {
         Column {
           width: if environment().width < 850 { 146 } else { 164 }; padding: [26, 13]; gap: 28; background: palette.surface
-          View { padding: [0,6]; Brand() }
+          if @platform != .windows { View { padding: [0,6]; Brand() } }
           Navigation(true, panel) { on choose(p) { openTab(p) } }
           View { grow: 1 }
           Pill("播放队列", "queue", palette.accent, palette.accentWash) { on press { showPanel("queue") } }
@@ -172,8 +212,8 @@ component Music(live: bool = true) {
                 }
               }
               if player.page == "downloads" {
-                Segmented(["进行中", "已完成", "失败"]) {
-                  margin: [3,inset]; selected: tab
+                ChoiceBar(["进行中", "已完成", "失败"], tab, "下载状态") {
+                  margin: [3,inset]
                   on change(i) { tab = i; selected = []; selecting = false; action("downloadsTab", "{i}") }
                 }
               }
@@ -201,7 +241,7 @@ component Music(live: bool = true) {
                 Column {
                   grow: 1; align: .center; justify: .center; gap: 9
                   View { width: 50; height: 50; radius: 16; background: palette.accentWash; align: .center; justify: .center; Glyph(if query.isEmpty() { player.page } else { "search" },palette.accent,22.0) }
-                  Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.page == "downloads" { "暂无下载" } else { "暂无歌曲" }) { color: palette.secondary; font: .subheadline }
+                  Text(if player.pageLoading { "正在读取歌曲…" } else if !query.isEmpty() { "没有匹配的歌曲" } else if player.page == "downloads" { "暂无下载" } else { "暂无歌曲" }) { color: palette.secondary; font: .subheadline }
                 }
               } else {
                 List {
@@ -227,6 +267,7 @@ component Music(live: bool = true) {
         }
       }
     }
+    PlayerDialogs()
   }
 }
 
@@ -277,12 +318,13 @@ component EntryRow(e: Entry, index: int, selecting: bool, checked: bool) {
     if !selecting && !e.video.isEmpty() { IconAction("more", "视频操作", palette.secondary,palette.soft,40.0,19.0) { on press { videoMenu(e.video,e.title) } } }
     if downloads && !selecting {
       Column {
+        gap: 3; shrink: 0
         if e.status == "QUEUED" || e.status == "DOWNLOADING" {
-          Button("暂停") { on press { action("downloadAction", e.key, "pause") } }
-          Button("取消") { on press { action("downloadAction", e.key, "cancel") } }
+          Pill("暂停", "pause", palette.accent, palette.accentWash) { on press { action("downloadAction", e.key, "pause") } }
+          Pill("取消", "", palette.secondary, palette.soft) { on press { action("downloadAction", e.key, "cancel") } }
         } else {
-          if e.status != "COMPLETED" && e.status != "CONVERTING" { Button(if e.status == "PAUSED" { "继续" } else { "重试" }) { on press { action("downloadAction", e.key, "retry") } } }
-          Button("移除") { on press { action("downloadAction", e.key, "delete") } }
+          if e.status != "COMPLETED" && e.status != "CONVERTING" { Pill(if e.status == "PAUSED" { "继续" } else { "重试" }, if e.status == "PAUSED" { "play" } else { "refresh" }, palette.accent, palette.accentWash) { on press { action("downloadAction", e.key, "retry") } } }
+          Pill("移除", "", palette.secondary, palette.soft) { on press { action("downloadAction", e.key, "delete") } }
         }
       }
     }

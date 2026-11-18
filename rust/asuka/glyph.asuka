@@ -43,6 +43,10 @@ component Glyph(kind: string, tint: Color, size: float = 22.0) {
       if kind == "down" { g.transform(0,1,-1,0,24,0) }
       if kind == "back" { g.transform(-1,0,0,1,24,0) }
       g.stroke(Path().move(9,5).line(16,12).line(9,19),tint,pen)
+    } else if kind == "spark" {
+      g.stroke(Path().move(12,2.5).line(14.4,9.1).line(21,12).line(14.4,14.9).line(12,21.5).line(9.6,14.9).line(3,12).line(9.6,9.1).close(), tint, pen)
+    } else if kind == "close" {
+      g.stroke(Path().move(6,6).line(18,18).move(18,6).line(6,18), tint, pen)
     } else if kind == "open" {
       g.stroke(Path().move(5,18).line(18,5).move(8,5).line(18,5).line(18,15),tint,pen)
     } else if kind == "check" {
