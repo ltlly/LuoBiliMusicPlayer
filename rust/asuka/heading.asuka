@@ -17,6 +17,7 @@ component PageTitle(title: string, count: string = "", refresh: bool = false, ba
   Row {
     align: .center; gap: 9; padding: [8, inset, 8, inset]
     if back { IconAction("back", "返回", palette.ink, palette.soft, 36.0, 17.0) { on press { emit returnPage } } }
+    if !back { View { width: 4; height: 21; radius: 2; background: palette.accent } }
     Text(title) { shrink: 1; color: palette.ink; font: Font(size: 25).semibold(); lines: 1 }
     if !count.isEmpty() { Text(count) { color: palette.secondary; font: Font(size: 13); lines: 1 } }
     View { grow: 1 }
@@ -28,15 +29,21 @@ component ListeningCover {
   let inset = contentInset(environment().width)
   let wide = environment().width >= 720
   let hasTrack = !player.trackTitle.isEmpty()
-  let height = if wide { min(365.0, max(240.0, environment().height * 0.45)) } else if hasTrack { min(375.0, max(224.0, environment().height * 0.40)) } else { min(272.0, environment().height * 0.35) }
+  let height = if wide { min(376.0, max(240.0, environment().height * 0.47)) } else { min(367.0, max(240.0, environment().height * 0.405)) }
   event open
   event queue
   View {
-    height: height; clip: true; background: #302635
-    CoverImage(if hasTrack { player.smallCoverUrl } else { "" }, "mountain-dusk.jpg", 0.0)
+    height: height; clip: true; background: #173C51
+    Image(if wide { "stage-wide.jpg" } else { "stage-mobile.jpg" }) {
+      absolute: true; top: 0; left: 0; width: 100%; height: 100%; mode: .fill
+    }
     View {
       absolute: true; top: 0; left: 0; width: 100%; height: 100%
-      gradient: Gradient(stops: [Stop(color: #0F0B1748, at: 0), Stop(color: #0F0B1708, at: 0.35), Stop(color: #110D19A8, at: 0.78), Stop(color: #111014, at: 1)])
+      gradient: Gradient(stops: [Stop(color: #081A2EEC, at: 0), Stop(color: #092138C0, at: 0.26), Stop(color: #09223A42, at: 0.52), Stop(color: #07243400, at: 0.74)], startX: 0, startY: 0.5, endX: 1, endY: 0.5)
+    }
+    View {
+      absolute: true; top: 0; left: 0; width: 100%; height: 100%
+      gradient: Gradient(stops: [Stop(color: #081D321A, at: 0), Stop(color: #09233600, at: 0.69), Stop(color: #0A1929D0, at: 1)])
     }
     if hasTrack {
       View {
@@ -46,32 +53,31 @@ component ListeningCover {
     }
     if !wide {
       Row {
-        absolute: true; top: 6; left: 0; right: 0; padding: [0, inset]; align: .center; justify: .spaceBetween
+        absolute: true; top: 6; left: 0; right: 0; padding: [0,inset]; align: .center; justify: .spaceBetween
         Brand(true)
-        IconAction("queue", "队列", #FFFFFF, #18121D50, 40.0, 19.0) { on press { emit queue } }
+        IconAction("queue", "队列", #F4FCFF, #10283D99, 40.0, 19.0) { on press { emit queue } }
       }
     }
-    Row {
-      absolute: true; bottom: if wide { 26 } else { 18 }; left: 0; right: 0
-      padding: [0, inset]; align: .end; gap: 9
-      Column {
-        grow: 1; shrink: 1; gap: 4
-        if hasTrack {
-          Row { align: .center; gap: 7
-            Glyph("wave", #FFB4C2, 16.0)
-            Text(if player.playing { "正在播放" } else { "继续收听" }) { color: #FFE4EA; font: Font(size: 13).medium() }
-          }
-        }
-        Text(if hasTrack { player.trackTitle } else { "我的音乐" }) {
-          color: #FFFCFE; font: Font(size: if wide { 47.0 } else { 37.0 }).medium(); lines: 2
-        }
-        if hasTrack && !player.artist.isEmpty() { Text(player.artist) { color: #E3DCE2; font: Font(size: 16); lines: 1 } }
-      }
+    Column {
+      absolute: true; bottom: if wide { 26 } else { 18 }; left: inset
+      width: if wide { 51% } else { 55% }; gap: 5
       if hasTrack {
         Row {
-          align: .center; gap: 2
-          IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #221E25, #FEFAFC, 49.0, 23.0) { on press { control("toggle") } }
-          IconAction("next","下一首",#FFFFFF,#00000000,39.0,18.0) { on press { control("next") } }
+          align: .center; gap: 7
+          if !player.smallCoverUrl.isEmpty() { Art(player.smallCoverUrl, 34.0, "singer-cover.jpg", 5.0) }
+          else { Glyph("wave", #93E6EF, 16.0) }
+          Text(if player.playing { "正在播放" } else { "继续收听" }) { color: #CBF4FC; font: Font(size: 13).medium() }
+        }
+      }
+      Text(if hasTrack { player.trackTitle } else { "我的音乐" }) {
+        color: #F3FBFF; font: Font(size: if wide { 43.0 } else { 32.0 }).semibold(); lines: 2
+      }
+      if hasTrack && !player.artist.isEmpty() { Text(player.artist) { color: #CBE4EE; font: Font(size: 15); lines: 1 } }
+      if hasTrack {
+        Row {
+          padding: [6,0,0,0]; align: .center; gap: 6
+          Pill(if player.playing { "暂停" } else { "播放" }, if player.playing { "pause" } else { "play" }, #0B3344, #B3EFF2) { on press { control("toggle") } }
+          IconAction("next", "下一首", #EBFCFF, #18394C99, 39.0, 17.0) { on press { control("next") } }
         }
       }
     }

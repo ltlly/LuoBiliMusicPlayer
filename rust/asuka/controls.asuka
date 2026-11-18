@@ -1,19 +1,19 @@
 struct Palette {
-  paper: Color = #F7F6F8
+  paper: Color = #F3F9FB
   surface: Color = #FFFFFF
-  ink: Color = #211F26
-  secondary: Color = #686570
-  rule: Color = #E4E1E6
-  soft: Color = #EDEBF0
-  accent: Color = #AA3153
-  accentWash: Color = #F9E4EB
+  ink: Color = #102C3E
+  secondary: Color = #496776
+  rule: Color = #CEE3E8
+  soft: Color = #E1EFF3
+  accent: Color = #06657D
+  accentWash: Color = #CCEFF4
 }
 
 fn colorsFor(mode: string, systemDark: bool) -> Palette {
   if mode == "DARK" || (mode != "LIGHT" && systemDark) {
     return Palette(
-      paper: #111014, surface: #1C1A20, ink: #F7F5F7, secondary: #AEABB4,
-      rule: #312F36, soft: #29262E, accent: #FFA1B6, accentWash: #3D2932)
+      paper: #0A1929, surface: #102537, ink: #F1FBFF, secondary: #A5BFCD,
+      rule: #264153, soft: #1C3648, accent: #87DCFF, accentWash: #193E51)
   }
   return Palette()
 }
@@ -47,7 +47,7 @@ component Brand(inverse: bool = false) {
   let palette = colorsFor(player.themeMode, environment().dark)
   Row {
     align: .center; gap: 8
-    Glyph("wave", if inverse { #FFFFFF } else { palette.accent }, 22.0)
+    Glyph("ribbon", if inverse { #D9FAFF } else { palette.accent }, 26.0)
     Text("哔哩音乐") { color: if inverse { #FFFFFF } else { palette.ink }; font: Font(size: 17).semibold() }
   }
 }
@@ -64,11 +64,11 @@ component CoverImage(source: string, fallback: string, corner: float) {
   }
 }
 
-component Art(source: string, size: float, fallback: string = "mountain-cover.jpg", corner: float = 8.0) {
+component Art(source: string, size: float, fallback: string = "singer-cover.jpg", corner: float = 8.0) {
   View { width: size; height: size; CoverImage(source, fallback, corner) }
 }
 
-fn albumFallback(index: int) -> string = ["afterglow.jpg", "garden.jpg", "aurora.jpg", "fiber.jpg"][index % 4]
+fn albumFallback(index: int) -> string = ["sleeve-kite.jpg", "sleeve-jade.jpg", "sleeve-fan.jpg", "sleeve-stars.jpg"][index % 4]
 
 component Card {
   let palette = colorsFor(player.themeMode, environment().dark)

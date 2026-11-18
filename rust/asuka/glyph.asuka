@@ -3,7 +3,13 @@ component Glyph(kind: string, tint: Color, size: float = 22.0) {
   Canvas(g => {
     g.transform(g.width / 24.0, 0, 0, g.height / 24.0, 0, 0)
     let pen = StrokeStyle(width: 1.9, cap: .round)
-    if kind == "mark" {
+    if kind == "ribbon" {
+      let thread = StrokeStyle(width: 1.45, cap: .round)
+      g.stroke(Path().move(12,11).cubic(8,9,3,2,2.5,6.5).cubic(2,10,7,13,12,11).cubic(16,9,21,2,21.5,6.5).cubic(22,10,17,13,12,11),tint,thread)
+      g.stroke(Path().move(11,12).cubic(9,14,7,17,3,16).move(13,12).cubic(16,15,17,17,21,16).move(12,14).line(12,20),tint,thread)
+      g.fill(Path().move(12,7.5).line(15,11).line(12,14.5).line(9,11).close(),tint)
+      g.fill(Path().move(12,18).line(14,20.5).line(12,23).line(10,20.5).close(),tint)
+    } else if kind == "mark" {
       g.stroke(Path().move(4,15).line(7,7).move(8,18).line(12,5).move(13,18).line(17,6).move(18,15).line(20,9), tint, StrokeStyle(width: 2.5, cap: .round))
     } else if kind == "favorites" {
       g.stroke(Path().move(3,7).line(3,5).line(10,5).line(12,7).line(20,7).line(21,9).line(21,19).line(3,19).close(), tint, pen)

@@ -7,26 +7,26 @@ component MiniPlayer {
   Column {
     padding: [5, inset, 8, inset]
     View {
-      radius: 15; clip: true; background: #28242B
+      radius: 15; clip: true; background: #15394C
       Row {
         align: .center; padding: [8, 11]; gap: 10
         Row {
           grow: 1; shrink: 1; align: .center; gap: 10; role: .button; label: "展开播放器"
           on press { emit open }
-          Art(player.smallCoverUrl, 40.0, "mountain-cover.jpg", 6.0)
+          Art(player.smallCoverUrl, 40.0, "singer-cover.jpg", 6.0)
           Column {
             grow: 1; shrink: 1; gap: 1
-            Text(player.trackTitle) { color: #FFFAFE; font: Font(size: 14).bold(); lines: 1 }
-            Text(player.artist) { color: #C2B9C2; font: Font(size: 12); lines: 1 }
+            Text(player.trackTitle) { color: #F1FDFF; font: Font(size: 14).bold(); lines: 1 }
+            Text(player.artist) { color: #B7D3DF; font: Font(size: 12); lines: 1 }
           }
         }
-        IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #27232C, #F5B0BE, 37.0, 17.0) { on press { control("toggle") } }
-        IconAction("next", "下一首", #F4EEE3, #FFFFFF13, 34.0, 16.0) { on press { control("next") } }
+        IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #143341, #9AE7DE, 37.0, 17.0) { on press { control("toggle") } }
+        IconAction("next", "下一首", #DFFAFF, #FFFFFF13, 34.0, 16.0) { on press { control("next") } }
       }
       Canvas(g => {
         g.stroke(Path().move(0,1).line(g.width,1), #FFFFFF22, StrokeStyle(width: 2))
         if player.duration > 0 {
-          g.stroke(Path().move(0,1).line(g.width * min(1.0, player.position / player.duration),1), #F5B0BE, StrokeStyle(width: 2))
+          g.stroke(Path().move(0,1).line(g.width * min(1.0, player.position / player.duration),1), #9AE7DE, StrokeStyle(width: 2))
         }
       }) { height: 2 }
     }
@@ -113,13 +113,13 @@ component ImmersivePlayer {
   let inset = if wide { 32.0 } else { max(20.0, min(38.0, environment().width * 0.07)) }
   let side = if wide { max(175.0, min(335.0, (environment().width - 200.0) * 0.42)) } else { min(420.0, min(environment().width - inset * 2, max(184.0, environment().height * 0.48))) }
   View {
-    grow: 1; background: #241F2B; clip: true
-    Image(if art.ambience.isEmpty() { "mountain-mist.jpg" } else { art.ambience }) {
+    grow: 1; background: #113347; clip: true
+    Image(if art.ambience.isEmpty() { "stage-glow.jpg" } else { art.ambience }) {
       absolute: true; top: 0; left: 0; width: 100%; height: 100%; mode: .fill
     }
     View {
       absolute: true; top: 0; left: 0; width: 100%; height: 100%
-      gradient: Gradient(stops: [Stop(color: #100E192F, at: 0), Stop(color: #13101961, at: 0.42), Stop(color: #111015DA, at: 0.81), Stop(color: #111014FA, at: 1)])
+      gradient: Gradient(stops: [Stop(color: #071D2B30, at: 0), Stop(color: #0923366B, at: 0.42), Stop(color: #091B2BDF, at: 0.81), Stop(color: #081925FA, at: 1)])
     }
     Column {
       grow: 1
@@ -139,10 +139,16 @@ component ImmersivePlayer {
             gap: if wide { 28 } else { max(18.0, min(35.0, environment().height * 0.042)) }
             View {
               width: side; height: side; alignSelf: .center; radius: 10
-              shadow: Shadow(color: #06030C58, radius: 19, y: 8)
-              Image(if art.cover.isEmpty() { "mountain-cover.jpg" } else { art.cover }) {
+              shadow: Shadow(color: #00101D64, radius: 19, y: 8)
+              Image(if art.cover.isEmpty() { "singer-cover.jpg" } else { art.cover }) {
                 width: 100%; height: 100%; mode: .fill; radius: 10
               }
+              Canvas(g => {
+                let edge = StrokeStyle(width: 1.0, cap: .round)
+                g.stroke(Path().move(8,37).line(8,17).quad(8,8,17,8).line(37,8), #D9FAFFBB, edge)
+                g.stroke(Path().move(g.width-8,g.height-36).line(g.width-8,g.height-17).quad(g.width-8,g.height-8,g.width-17,g.height-8).line(g.width-37,g.height-8), #D9FAFFBB, edge)
+                g.fill(Path().move(g.width-36,g.height-8).line(g.width-40,g.height-10.5).line(g.width-44,g.height-8).line(g.width-40,g.height-5.5).close(),#C3F2F1CC)
+              }) { absolute: true; top: 0; left: 0; width: 100%; height: 100% }
             }
             TransportPanel()
           }
@@ -151,19 +157,19 @@ component ImmersivePlayer {
               gap: 0
               Row {
                 justify: .spaceBetween; align: .center
-                Text("播放队列") { color: #FFF9FC; font: Font(size: 20).medium() }
-                Pill("查看全部", "queue", #F7D6DE, #FFFFFF12) { on press { emit queue } }
+                Text("播放队列") { color: #EFFDFF; font: Font(size: 20).medium() }
+                Pill("查看全部", "queue", #AEECF4, #FFFFFF12) { on press { emit queue } }
               }
               for i in player.queueIndex..<min(player.queue.count(), player.queueIndex + 3) key i {
                 Row {
                   align: .center; gap: 12; minHeight: 42; role: .button; label: player.queue[i].title
                   on press { control("jump", i) }; pressed { background: #FFFFFF14 }
                   View { width: 22; align: .center
-                    if i == player.queueIndex { Glyph("wave", #FFB8CB, 17.0) }
-                    else { Text("{i+1}") { color: #ACA4AE; font: .footnote } }
+                    if i == player.queueIndex { Glyph("wave", #8FE5ED, 17.0) }
+                    else { Text("{i+1}") { color: #A8BDC9; font: .footnote } }
                   }
-                  Text(player.queue[i].title) { grow: 1; shrink: 1; color: #F9F5F7; font: Font(size: 15); lines: 1 }
-                  Text(player.queue[i].detail) { shrink: 1; color: #C9BEC8; font: .footnote; lines: 1 }
+                  Text(player.queue[i].title) { grow: 1; shrink: 1; color: #F0FCFF; font: Font(size: 15); lines: 1 }
+                  Text(player.queue[i].detail) { shrink: 1; color: #BCD4DE; font: .footnote; lines: 1 }
                 }
               }
             }
@@ -180,8 +186,8 @@ component TransportPanel {
     grow: if wide { 1 } else { 0 }; shrink: 1; gap: if wide { 18 } else { 12 }
     Column {
       gap: 3
-      Text(player.trackTitle) { color: #FDFAFC; font: Font(size: if wide { 33.0 } else { 32.0 }).medium(); lines: 2 }
-      if !player.artist.isEmpty() { Text(player.artist) { color: #E3D9E2; font: Font(size: 18); lines: 1 } }
+      Text(player.trackTitle) { color: #F2FCFF; font: Font(size: if wide { 33.0 } else { 32.0 }).medium(); lines: 2 }
+      if !player.artist.isEmpty() { Text(player.artist) { color: #CBE1E9; font: Font(size: 18); lines: 1 } }
     }
     Column {
       base.Slider {
@@ -190,7 +196,7 @@ component TransportPanel {
         base.SliderTrack {
           height: 31; justify: .center
           View { height: 4; radius: 2; background: #FFFFFF43 }
-          base.SliderRange { justify: .center; View { height: 4; radius: 2; background: #FCF6FB } }
+          base.SliderRange { justify: .center; View { height: 4; radius: 2; background: #A5E9F1 } }
           base.SliderThumb {
             label: "播放进度"; width: 24; height: 28; justify: .center; align: .center
             View { width: 9; height: 9; radius: 5; background: #FFFFFF }
@@ -199,17 +205,17 @@ component TransportPanel {
       }
       Row {
         justify: .spaceBetween
-        Text(clock(player.position)) { color: #D2C8D1; font: Font(size: 12) }
-        Text(if player.duration > 0 { clock(player.duration) } else { "–:––" }) { color: #D2C8D1; font: Font(size: 12) }
+        Text(clock(player.position)) { color: #B8CEDA; font: Font(size: 12) }
+        Text(if player.duration > 0 { clock(player.duration) } else { "–:––" }) { color: #B8CEDA; font: Font(size: 12) }
       }
     }
     Row {
       align: .center; justify: .spaceBetween
-      IconAction("shuffle", if player.shuffle { "随机已开启" } else { "随机播放" }, if player.shuffle { #FFB8CB } else { #C9C0CA }, #00000000, 39.0, 20.0) { on press { control("shuffle") } }
-      IconAction("previous", "上一首", #FFF9FD, #00000000, 44.0, 29.0) { on press { control("previous") } }
-      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #201B24, #FEFCFD, 59.0, 27.0) { on press { control("toggle") } }
-      IconAction("next", "下一首", #FFF9FD, #00000000, 44.0, 29.0) { on press { control("next") } }
-      IconAction(if player.repeatMode == 1 { "single" } else { "repeat" }, if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }, if player.repeatMode > 0 { #FFB8CB } else { #C9C0CA }, #00000000, 39.0, 20.0) { on press { control("repeat") } }
+      IconAction("shuffle", if player.shuffle { "随机已开启" } else { "随机播放" }, if player.shuffle { #8FE5ED } else { #B1CDD6 }, #00000000, 39.0, 20.0) { on press { control("shuffle") } }
+      IconAction("previous", "上一首", #EEF9FF, #00000000, 44.0, 29.0) { on press { control("previous") } }
+      IconAction(if player.playing { "pause" } else { "play" }, if player.playing { "暂停" } else { "播放" }, #123244, #A2E6F2, 59.0, 27.0) { on press { control("toggle") } }
+      IconAction("next", "下一首", #EEF9FF, #00000000, 44.0, 29.0) { on press { control("next") } }
+      IconAction(if player.repeatMode == 1 { "single" } else { "repeat" }, if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }, if player.repeatMode > 0 { #8FE5ED } else { #B1CDD6 }, #00000000, 39.0, 20.0) { on press { control("repeat") } }
     }
   }
 }

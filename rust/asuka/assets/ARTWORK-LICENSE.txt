@@ -1,16 +1,12 @@
-Fallback photography distributed with BiliMusicPlayer
+LuoBiliMusicPlayer — illustration credits
 
-Fuji san — amaral (mountain-dusk.jpg, mountain-cover.jpg, mountain-mist.jpg)
-Blue flower — Elena Stravoravdi (garden.jpg)
-Mirror — Uday Nakade (afterglow.jpg)
-Northan lights — mizuno (aurora.jpg)
-Optical Fibers in Dark — Elena Stravoravdi (fiber.jpg)
+The stage and record sleeve depict a fan interpretation inspired by Luo Tianyi
+(洛天依). The character artwork was generated locally with Animagine XL 3.1,
+then color-graded and composed for the phone banner, desktop banner and
+square album cover. It is not official character or promotional artwork.
 
-These photographs and the adaptations listed above are licensed under
-Creative Commons Attribution-ShareAlike 4.0 International.
-https://creativecommons.org/licenses/by-sa/4.0/
-
-Source: Ubuntu community wallpapers, Jammy and Noble collections.
-https://launchpad.net/ubuntu-wallpapers
-Adaptations for this player include cropping, color grading, resizing,
-a sky extension for the wide cover, and blurring for the player background.
+Model: Animagine XL 3.1, Cagliostro Research Lab
+https://modelscope.cn/models/AI-ModelScope/animagine-xl-3.1
+Portrait seed: 71112. Source render: 1088 x 896 pixels.
+The four fallback sleeves, ribbon emblem and application icon were drawn
+for this player. Music and collection artwork come from the user's library.
