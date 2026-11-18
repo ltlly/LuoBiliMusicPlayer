@@ -37,7 +37,7 @@ component Heading(panel: string) {
       Text(title) { color: #FFFAEB; font: .largeTitle.bold(); lines: 1 }
       if !detail.isEmpty() { Text(detail) { color: #D3EBDC; font: .footnote } }
     }
-    if !player.trackTitle.isEmpty() {
+    if panel.isEmpty() && !player.trackTitle.isEmpty() {
       View {
         role: .button
         label: "队列"

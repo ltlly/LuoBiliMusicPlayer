@@ -78,9 +78,17 @@ impl Output {
                 (c"ytdl", c"no"),
                 (c"terminal", c"no"),
             ] {
+                let result = options(ctx.as_ptr(), key.as_ptr(), value.as_ptr());
+                // MediaMP's Windows build omits the optional youtube-dl hook.
+                // With no hook the requested behaviour is already in effect.
+                const MPV_ERROR_OPTION_NOT_FOUND: c_int = -5;
+                if key == c"ytdl" && result == MPV_ERROR_OPTION_NOT_FOUND {
+                    continue;
+                }
                 ensure!(
-                    options(ctx.as_ptr(), key.as_ptr(), value.as_ptr()) >= 0,
-                    "MPV 配置失败"
+                    result >= 0,
+                    "MPV 配置失败（{}，错误码 {result}）",
+                    key.to_string_lossy()
                 );
             }
             ensure!(init(ctx.as_ptr()) >= 0, "MPV 初始化失败");

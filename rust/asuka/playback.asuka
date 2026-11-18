@@ -6,7 +6,7 @@ component NowPlaying(panel: string) {
     Row {
       padding: [10, 16]
       align: .center
-      Button("") { icon: "chevron.down"; label: "收起"; on press { emit dismiss } }
+      Button("收起") { on press { emit dismiss } }
       View { grow: 1 }
       Button(if panel == "queue" { "播放器" } else { "队列" }) { on press { emit queue } }
     }

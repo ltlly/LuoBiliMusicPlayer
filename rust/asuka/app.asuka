@@ -221,7 +221,7 @@ component Music(live: bool = true) {
                       if e.status != "COMPLETED" { Button("重试") { on press { action("downloadAction", e.key, "retry") } } }
                       Button("移除") { on press { action("downloadAction", e.key, "delete") } }
                     }
-                  } else { Symbol("chevron.forward") { color: .tertiaryLabel } }
+                  } else { Text("›") { color: .tertiaryLabel; font: .title3 } }
                 }
               }
             }
@@ -244,7 +244,7 @@ component Music(live: bool = true) {
             Text(player.trackTitle) { font: .headline; lines: 1 }
             Text(player.artist) { color: .secondaryLabel; font: .footnote; lines: 1 }
           }
-          Button("") { icon: if player.playing { "pause.fill" } else { "play.fill" }; label: if player.playing { "暂停" } else { "播放" }; on press { control("toggle") } }
+          Button(if player.playing { "暂停" } else { "播放" }) { variant: .filled; on press { control("toggle") } }
           Button("下一首") { on press { control("next") } }
         }
       }
