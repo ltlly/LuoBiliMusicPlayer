@@ -160,7 +160,9 @@ pub struct Media {
     pub id: i64,
     #[serde(rename = "type")]
     pub kind: i64,
-    #[serde(alias = "bv_id")]
+    #[serde(default)]
+    pub attr: i64,
+    #[serde(default)]
     pub bvid: String,
     pub title: String,
     #[serde(default)]
@@ -176,6 +178,32 @@ pub struct Media {
     pub pubtime: i64,
 }
 impl Media {
+    pub(crate) fn list(mut data: serde_json::Value) -> Result<Vec<Self>> {
+        if data.is_null() {
+            return Ok(Vec::new());
+        }
+        if let Some(rows) = data.as_array_mut() {
+            for row in rows {
+                let fields = row.as_object_mut().context("收藏条目格式异常")?;
+                if fields
+                    .get("bvid")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .is_empty()
+                {
+                    let id = fields
+                        .get("bv_id")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned)
+                        .or_else(|| crate::api::bvid(fields.get("id")?.as_i64()?))
+                        .unwrap_or_default();
+                    fields.insert("bvid".into(), id.into());
+                }
+            }
+        }
+        Ok(serde_json::from_value(data)?)
+    }
     pub fn artist(&self) -> &str {
         self.upper
             .as_ref()
@@ -188,7 +216,7 @@ impl Library {
     pub fn media(&self, folder: i64) -> Result<Vec<Media>> {
         Ok(self.0.prepare("SELECT id,type,bvid,title,cover,upperMid,upperName,upperFace,
             duration,intro,ctime,pubtime FROM cached_favorite_medias WHERE folderId=?1 ORDER BY position")?
-            .query_map([folder],|r|Ok(Media{id:r.get(0)?,kind:r.get(1)?,bvid:r.get(2)?,title:r.get(3)?,cover:r.get(4)?,
+            .query_map([folder],|r|Ok(Media{attr:0,id:r.get(0)?,kind:r.get(1)?,bvid:r.get(2)?,title:r.get(3)?,cover:r.get(4)?,
                 upper:Some(Upper{mid:r.get(5)?,name:r.get(6)?,face:r.get(7)?}),duration:r.get(8)?,intro:r.get(9)?,
                 ctime:r.get(10)?,pubtime:r.get(11)?}))?.collect::<rusqlite::Result<_>>()?)
     }
@@ -244,21 +272,61 @@ impl Library {
     }
 
     pub fn downloaded(&self) -> Result<Vec<crate::playback::Track>> {
+        Ok(self
+            .downloaded_with_video()?
+            .into_iter()
+            .map(|(track, _)| track)
+            .collect())
+    }
+    pub(crate) fn downloaded_with_video(&self) -> Result<Vec<(crate::playback::Track, String)>> {
         let mut query=self.0.prepare(
-            "SELECT id,title,artist,localPath,coverUrl,duration FROM songs WHERE isDownloaded=1 ORDER BY addedDate DESC"
+            "SELECT id,title,artist,localPath,coverUrl,duration,bvid,aid FROM songs WHERE isDownloaded=1 ORDER BY addedDate DESC"
         )?;
         let rows = query.query_map([], |r| {
             let id: String = r.get(0)?;
             let local: Option<String> = r.get(3)?;
-            Ok(crate::playback::Track {
-                uri: local.unwrap_or_else(|| format!("bili://{id}")),
-                id,
-                title: r.get(1)?,
-                artist: r.get(2)?,
-                cover: r.get(4)?,
-                duration_ms: r.get::<_, i64>(5)? * 1000,
-            })
+            let video = linked_video(&id, r.get_ref(6)?.as_str()?, r.get(7)?);
+            Ok((
+                crate::playback::Track {
+                    uri: local.unwrap_or_else(|| format!("bili://{id}")),
+                    id,
+                    title: r.get(1)?,
+                    artist: r.get(2)?,
+                    cover: r.get(4)?,
+                    duration_ms: r.get::<_, i64>(5)? * 1000,
+                },
+                video,
+            ))
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+}
+
+pub(crate) fn linked_video(id: &str, bv: &str, av: i64) -> String {
+    if crate::api::aid(id).is_some() {
+        id.to_owned()
+    } else if crate::api::aid(bv).is_some() {
+        bv.to_owned()
+    } else {
+        crate::api::bvid(av).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn stored_video_identity_is_available_for_legacy_local_tracks() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let db = Library::open(&dir.path().join("links"))?;
+        db.0.execute("INSERT INTO songs(id,title,artist,duration,coverUrl,localPath,cid,bvid,aid,uploaderId,uploaderName,pubDate,addedDate,isDownloaded,fileSize,playCount,lastPlayedAt) VALUES ('local_old','测试','',0,'','/test.m4a',0,'',170001,0,'',0,0,1,0,0,0)",[])?;
+        let rows = db.downloaded_with_video()?;
+        assert_eq!(rows[0].0.id, "local_old");
+        assert_eq!(rows[0].1, "BV17x411w7KC");
+        let media = Media::list(
+            serde_json::json!([{"id":170001,"type":2,"bv_id":"BV17x411w7KC","bvid":"BV17x411w7KC","title":"示例"},{"id":170001,"type":2,"title":"示例"}]),
+        )?;
+        assert!(media.iter().all(|row| row.bvid == "BV17x411w7KC"));
+        Ok(())
     }
 }

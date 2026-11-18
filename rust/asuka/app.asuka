@@ -1,6 +1,7 @@
 import std/json
+import platform/nowplaying
 
-let tabs = ["favorites", "library", "downloads", "settings"]
+let tabs = ["favorites", "rank", "library", "downloads", "settings"]
 
 state appForeground = true
 
@@ -45,6 +46,7 @@ component Music(live: bool = true) {
             panel = ""
           }
           player = next
+          if !next.notice.isEmpty() { triplePending = false; snackbar(next.notice, duration: .long) }
         }
       }
       await sleep(250ms)
@@ -60,6 +62,7 @@ component Music(live: bool = true) {
     if !panel.isEmpty() { dismissPanel(); return true }
     if selecting { selecting = false; selected = []; return true }
     if !query.isEmpty() { query = ""; action("search", ""); return true }
+    if player.page == "rankWeb" { go("rank"); return true }
     if player.page == "content" { go("favorites"); return true }
     if player.page == "downloadSettings" { go("settings"); return true }
     return false
@@ -94,6 +97,28 @@ component Music(live: bool = true) {
     selected = []
   }
 
+  if @platform == .windows || @platform == .linux {
+    if live && !player.trackTitle.isEmpty() {
+      nowplaying.NowPlaying {
+        title: player.trackTitle
+        artist: player.artist
+        state: if player.playing { .playing } else if player.stopped { .stopped } else { .paused }
+        duration: player.duration
+        position: playhead
+        on play { control("play") }
+        on pause { control("pause") }
+        on togglePlayPause { control("toggle") }
+        on stop { control("stop") }
+        on previous { control("previous") }
+        on next { control("next") }
+        on seek(seconds) { action("seek", "{seconds}") }
+        skipInterval: 10
+        on skipForward(seconds) { action("seek", "{playhead + seconds}") }
+        on skipBackward(seconds) { action("seek", "{max(0.0, playhead - seconds)}") }
+      }
+    }
+  }
+
   SafeArea {
     grow: 1; background: palette.paper
     Row {
@@ -121,15 +146,15 @@ component Music(live: bool = true) {
           } else {
             if !wide { Masthead { on queue { showPanel("queue") } } }
             PageTitle(pageName(player.page), if player.page == "library" { "{player.entries.count()} 首" } else { "" },
-              player.page == "library" || player.page == "content" || player.page == "downloads",
-              player.page == "content" || player.page == "downloadSettings") {
-              on returnPage { go(if player.page == "content" { "favorites" } else { "settings" }) }
+              player.page == "library" || player.page == "content" || player.page == "downloads" || player.page == "rank",
+              player.page == "content" || player.page == "downloadSettings" || player.page == "rankWeb") {
+              on returnPage { go(if player.page == "content" { "favorites" } else if player.page == "rankWeb" { "rank" } else { "settings" }) }
               on refreshPage { action("retry") }
             }
             if !player.message.isEmpty() {
               Text(player.message) { color: palette.accent; font: .footnote; padding: [4,inset]; lines: 3 }
             }
-            if player.page == "login" {
+            if player.page == "rank" { RankPane() } else if player.page == "rankWeb" { RankWebsite() } else if player.page == "login" {
               LoginPane()
             } else if player.page == "settings" || player.page == "downloadSettings" {
               Preferences()
@@ -247,8 +272,9 @@ component EntryRow(e: Entry, index: int, selecting: bool, checked: bool) {
         View { width: 22; height: 22; radius: 11; border: 1; borderColor: if checked { palette.accent } else { palette.rule }; background: if checked { palette.accent } else { palette.surface }; align: .center; justify: .center
           if checked { Glyph("check",palette.surface,14.0) }
         }
-      } else if !downloads { Glyph("right", palette.secondary, 14.0) }
+      } else if !downloads && e.video.isEmpty() { Glyph("right", palette.secondary, 14.0) }
     }
+    if !selecting && !e.video.isEmpty() { IconAction("more", "视频操作", palette.secondary,palette.soft,40.0,19.0) { on press { videoMenu(e.video,e.title) } } }
     if downloads && !selecting {
       Column {
         if e.status == "QUEUED" || e.status == "DOWNLOADING" {

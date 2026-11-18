@@ -3,7 +3,7 @@ test "a restored library opens its existing player and queue" {
     entries: [Entry(key: "BV1", title: "收藏的曲目", detail: "歌手")],
     queue: [Entry(title: "旧曲", detail: "歌手")])
   let ui = mount(Music(false))
-  ui.expect("收藏的曲目", "音乐库")
+  ui.expect("收藏的曲目", "音乐库", "上一首", "播放", "下一首")
   ui.tap("队列")
   ui.expect("播放队列", "清空队列", "旧曲")
   ui.tap("播放器")
@@ -25,7 +25,7 @@ test "the immersive cover opens the restored track" {
     entries: [Entry(key: "1", title: "日落之后"), Entry(key: "2", title: "潮汐唱片")],
     queue: [Entry(title: "夜色慢行")])
   let ui = mount(Music(false))
-  ui.expect("日落之后", "潮汐唱片")
+  ui.expect("日落之后", "潮汐唱片", "上一首", "播放", "下一首")
   ui.tap("展开播放器")
   ui.expect("正在播放", "夜色慢行", "上一首", "下一首")
 }
@@ -40,4 +40,17 @@ test "closing the queue restores the player that opened it" {
   ui.expect("播放进度", "上一首", "下一首")
   ui.tap("收起")
   ui.expect("展开播放器", "音乐库")
+}
+
+test "the weekly chart exposes its source, filter and per-video actions" {
+  player = Player(page: "rank", loggedIn: true, folderTitle: "第 745 期", rankDate: "2026-11-15",
+    entries: [Entry(key: "BV17x411w7KC", video: "BV17x411w7KC", title: "测试歌曲", detail: "主榜", status: "01")])
+  let ui = mount(Music(false))
+  ui.expect("榜单官网", "未收藏", "第 745 期", "测试歌曲", "视频操作")
+}
+
+test "a partial collection index is distinct from an empty result" {
+  player = Player(page: "rank", loggedIn: true, rankFiltered: true, rankVerified: false)
+  let ui = mount(Music(false))
+  ui.expect("收藏夹尚未核对完成，可点刷新重试")
 }

@@ -23,22 +23,12 @@ final class LibraryRemoval {
     void clear() { prefs.edit().clear().commit(); }
     void begin(String plan) throws Exception {
         if (prefs.contains("plan")) throw new IOException("上一批文件仍在等待系统确认");
-        Set<String> paths = new HashSet<>();
         LinkedHashSet<String> uris = new LinkedHashSet<>();
         JSONArray rows = new JSONArray(plan);
+        // Look up only the requested audio items, including in large media libraries.
         for (int i = 0; i < rows.length(); i++) {
-            String path = rows.getJSONObject(i).optString("path");
-            Uri uri = Uri.parse(path);
-            if ("content".equals(uri.getScheme())) {
-                if ("media".equals(uri.getAuthority())) uris.add(uri.toString());
-            } else paths.add(path.startsWith("file://") ? uri.getPath() : path);
-        }
-        if (!paths.isEmpty()) {
-            Uri audio = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
-            try (Cursor c = activity.getContentResolver().query(audio, new String[]{"_id","_data"}, null, null, null)) {
-                if (c != null) while (c.moveToNext())
-                    if (paths.contains(c.getString(1))) uris.add(ContentUris.withAppendedId(audio, c.getLong(0)).toString());
-            }
+            AudioRow row = lookup(rows.getJSONObject(i).optString("path"));
+            if (row != null) uris.add(row.uri.toString());
         }
         if (uris.isEmpty()) throw new IOException("文件无法删除，已保留歌曲记录");
         if (!prefs.edit().putString("plan", plan).putString("uris", new JSONArray(uris).toString()).commit())
@@ -68,6 +58,39 @@ final class LibraryRemoval {
     }
     void recover(boolean freshLaunch) {
         if (prefs.contains("plan") && (freshLaunch || prefs.getBoolean("returned", false))) finish(false);
+    }
+    private record AudioRow(Uri uri, String path, String owner) {}
+
+    private AudioRow lookup(String raw) {
+        Uri base = MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL);
+        Uri uri = Uri.parse(raw);
+        String[] args = null;
+        if (raw.startsWith("/") || "file".equals(uri.getScheme())) {
+            args = new String[]{"file".equals(uri.getScheme()) ? uri.getPath() : raw};
+            uri = base;
+        } else if (!"content".equals(uri.getScheme()) || !"media".equals(uri.getAuthority())
+                || uri.getPath() == null || !uri.getPath().matches("/[^/]+/audio/media/[0-9]+")) return null;
+        try (Cursor c = activity.getContentResolver().query(uri,
+                new String[]{"_id", "_data", "volume_name", MediaStore.MediaColumns.OWNER_PACKAGE_NAME},
+                args == null ? null : "_data=?", args, null)) {
+            if (c == null || !c.moveToFirst()) return null;
+            Uri item = ContentUris.withAppendedId(MediaStore.Audio.Media.getContentUri(c.getString(2)), c.getLong(0));
+            return new AudioRow(item, c.getString(1), c.getString(3));
+        }
+    }
+    String aliases(String raw) {
+        AudioRow row = lookup(raw);
+        if (row == null) return "[]";
+        JSONArray names = new JSONArray();
+        if (row.path != null) names.put(row.path);
+        names.put(row.uri.toString());
+        names.put(ContentUris.withAppendedId(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, ContentUris.parseId(row.uri)).toString());
+        return names.toString();
+    }
+    boolean deleteOwned(String raw) {
+        AudioRow row = lookup(raw);
+        return row != null && activity.getPackageName().equals(row.owner) &&
+                activity.getContentResolver().delete(row.uri, null, null) == 1;
     }
     boolean missing(String raw) {
         Uri uri = Uri.parse(raw);

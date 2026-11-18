@@ -1,7 +1,7 @@
 component Navigation(wide: bool, panel: string) {
   let palette = colorsFor(player.themeMode, environment().dark)
   event choose(page: string)
-  fn active(page: string, current: string, openPanel: string) -> bool = openPanel.isEmpty() && (page == current || (page == "favorites" && current == "content") || (page == "settings" && current == "downloadSettings"))
+  fn active(page: string, current: string, openPanel: string) -> bool = openPanel.isEmpty() && (page == current || (page == "rank" && current == "rankWeb") || (page == "favorites" && current == "content") || (page == "settings" && current == "downloadSettings"))
   View {
     direction: if wide { .column } else { .row }; gap: if wide { 6 } else { 1 }
     padding: if wide { 0 } else { [4, 9] }; background: palette.surface

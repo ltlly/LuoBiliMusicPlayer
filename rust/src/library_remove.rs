@@ -9,7 +9,7 @@ use std::{
     path::Path,
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Item {
     pub id: String,
     pub path: Option<String>,
@@ -40,7 +40,7 @@ pub(crate) struct Removal {
 pub(crate) fn remove(db: &mut Library, items: &[Item], only_missing: bool) -> Result<Removal> {
     let tx =
         db.0.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    let selected: HashSet<_> = items.iter().map(|i| i.id.as_str()).collect();
+    let selected: HashSet<_> = items.iter().map(|i| i.id.clone()).collect();
     let mut handled = HashMap::new();
     let mut pending = Vec::new();
     let mut rows = 0;
@@ -57,12 +57,8 @@ pub(crate) fn remove(db: &mut Library, items: &[Item], only_missing: bool) -> Re
             let removed = if let Some(&prior) = handled.get(raw) {
                 prior
             } else {
-                let mut stmt = tx.prepare("SELECT id FROM songs WHERE localPath=?1")?;
-                let owners = stmt
-                    .query_map([raw], |r| r.get::<_, String>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                let shared = owners.iter().any(|id| !selected.contains(id.as_str()));
-                let removed = shared || remove_path(raw, only_missing);
+                let removed =
+                    !exclusively_owned(&tx, raw, &selected)? || remove_path(raw, only_missing);
                 handled.insert(raw, removed);
                 removed
             };
@@ -79,10 +75,81 @@ pub(crate) fn remove(db: &mut Library, items: &[Item], only_missing: bool) -> Re
     tx.commit()?;
     Ok(Removal { rows, pending })
 }
+/// Remove files for an invalid video and their references together. Downloads restored
+/// from older versions can have a file path even if the corresponding song row is gone.
+pub(crate) fn remove_invalid(
+    db: &mut Library,
+    targets: &HashSet<String>,
+    only_missing: bool,
+) -> Result<Vec<Item>> {
+    let tx =
+        db.0.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mut pending = Vec::new();
+    for id in targets {
+        let active:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM downloads WHERE songId=?1 AND status IN ('DOWNLOADING','CONVERTING'))",[id],|r|r.get(0))?;
+        anyhow::ensure!(!active, "失效音频正在写入，稍后清理");
+    }
+    for id in targets {
+        let paths=tx.prepare("SELECT localPath FROM songs WHERE id=?1 AND COALESCE(localPath,'')!=''
+                UNION SELECT localPath FROM downloads WHERE songId=?1 AND COALESCE(localPath,'')!=''")?
+            .query_map([id],|r|r.get::<_,String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let before = pending.len();
+        for raw in paths {
+            if exclusively_owned(&tx, &raw, targets)? && !remove_path(&raw, only_missing) {
+                pending.push(Item {
+                    id: id.clone(),
+                    path: Some(raw),
+                });
+            }
+        }
+        if pending.len() != before {
+            continue;
+        }
+        tx.execute("UPDATE playlists SET songCount=(SELECT COUNT(*)-1 FROM playlist_songs WHERE playlistId=playlists.id)
+              WHERE id IN (SELECT playlistId FROM playlist_songs WHERE songId=?1)",[id])?;
+        tx.execute("DELETE FROM playlist_songs WHERE songId=?1", [id])?;
+        tx.execute("DELETE FROM downloads WHERE songId=?1", [id])?;
+        tx.execute("DELETE FROM songs WHERE id=?1", [id])?;
+        tx.execute("DELETE FROM cached_playback_urls WHERE bvid=?1", [id])?;
+    }
+    tx.commit()?;
+    Ok(pending)
+}
+
+fn exclusively_owned(
+    db: &rusqlite::Connection,
+    raw: &str,
+    targets: &HashSet<String>,
+) -> Result<bool> {
+    let mut aliases = vec![raw.to_owned()];
+    #[cfg(target_os = "android")]
+    if raw.starts_with("content://") || raw.contains("/storage/") || raw.contains("/sdcard/") {
+        aliases.extend(crate::android_platform::media_aliases(raw)?);
+    }
+    let mut owners = db.prepare(
+        "SELECT id FROM songs WHERE localPath IN (?1,?2)
+                      UNION SELECT songId FROM downloads WHERE localPath IN (?1,?2)",
+    )?;
+    aliases.sort_unstable();
+    aliases.dedup();
+    for name in &aliases {
+        let plain = name.strip_prefix("file://").unwrap_or(name);
+        let mut rows = owners.query(params![plain, format!("file://{plain}")])?;
+        while let Some(row) = rows.next()? {
+            if !targets.contains(&row.get::<_, String>(0)?) {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
+}
+
 fn remove_path(raw: &str, only_missing: bool) -> bool {
     #[cfg(target_os = "android")]
     if raw.starts_with("content://") {
-        return crate::android_platform::media_missing(raw).unwrap_or(false);
+        return (!only_missing
+            && crate::android_platform::delete_owned_media(raw).unwrap_or(false))
+            || crate::android_platform::media_missing(raw).unwrap_or(false);
     }
     let path = Path::new(raw.strip_prefix("file://").unwrap_or(raw));
     if !path.is_absolute() {
@@ -93,7 +160,9 @@ fn remove_path(raw: &str, only_missing: bool) -> bool {
         && !crate::android_platform::media_missing(path.to_str().unwrap_or(raw)).unwrap_or(false)
     {
         // Scoped storage can mask a denied unlink with ENOENT while the media row and bytes still exist.
-        return false;
+        return !only_missing
+            && crate::android_platform::delete_owned_media(path.to_str().unwrap_or(raw))
+                .unwrap_or(false);
     }
     let result = if only_missing {
         fs::symlink_metadata(path).map(|_| false)

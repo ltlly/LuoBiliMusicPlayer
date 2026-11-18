@@ -134,32 +134,54 @@ pub fn publish(source: &Path, name: &str) -> Result<String> {
     })
 }
 
-pub fn playback_changed(
-    title: &str,
-    artist: &str,
-    playing: bool,
-    position: i64,
-    duration: i64,
-) -> Result<()> {
+pub fn stop_playback() -> Result<()> {
+    platform(|env, ctx| env.call_method(ctx, "stopPlayback", "()V", &[])?.v())
+}
+pub fn playback_changed(queue: &crate::queue::Queue) -> Result<()> {
     platform(|env, ctx| {
-        let title = env.new_string(title)?;
-        let artist = env.new_string(artist)?;
+        let track = queue.tracks.get(queue.index);
+        let title = env.new_string(track.map_or("", |t| t.title.as_str()))?;
+        let artist = env.new_string(track.map_or("", |t| t.artist.as_str()))?;
+        let current = env.new_string(track.map_or("", |t| t.id.as_str()))?;
+        let rows: Vec<_> = queue
+            .tracks
+            .iter()
+            .skip(queue.index.saturating_sub(12))
+            .take(25)
+            .map(|t| [t.id.as_str(), t.title.as_str(), t.artist.as_str()])
+            .collect();
+        let rows = env.new_string(serde_json::to_string(&rows).unwrap_or_default())?;
         env.call_method(
             ctx,
             "playbackChanged",
-            "(Ljava/lang/String;Ljava/lang/String;ZJJ)V",
+            "(Ljava/lang/String;Ljava/lang/String;ZJJLjava/lang/String;Ljava/lang/String;)V",
             &[
                 JValue::Object(&title),
                 JValue::Object(&artist),
-                JValue::Bool(playing.into()),
-                JValue::Long(position),
-                JValue::Long(duration),
+                JValue::Bool(queue.playing.into()),
+                JValue::Long(queue.position),
+                JValue::Long(queue.duration),
+                JValue::Object(&current),
+                JValue::Object(&rows),
             ],
         )?
         .v()
     })
 }
 
+pub fn open_video(bv: &str) -> Result<()> {
+    anyhow::ensure!(crate::api::aid(bv).is_some(), "无效的视频编号");
+    activity(|env, ctx| {
+        let id = env.new_string(bv)?;
+        env.call_method(
+            ctx,
+            "openVideo",
+            "(Ljava/lang/String;)V",
+            &[JValue::Object(&id)],
+        )?
+        .v()
+    })
+}
 pub fn request_library_access() -> Result<bool> {
     activity(|env, ctx| {
         env.call_method(ctx, "requestLibraryAccess", "()Z", &[])?
@@ -310,6 +332,34 @@ pub fn request_media_removal(items: &[crate::library_remove::Item]) -> Result<()
         .v()
     })
 }
+pub fn media_aliases(raw: &str) -> Result<Vec<String>> {
+    let json: String = activity(|env, ctx| {
+        let path = env.new_string(raw)?;
+        let aliases = JString::from(
+            env.call_method(
+                ctx,
+                "mediaAliases",
+                "(Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&path)],
+            )?
+            .l()?,
+        );
+        Ok(env.get_string(&aliases)?.into())
+    })?;
+    Ok(serde_json::from_str(&json)?)
+}
+pub fn delete_owned_media(raw: &str) -> Result<bool> {
+    activity(|env, ctx| {
+        let path = env.new_string(raw)?;
+        env.call_method(
+            ctx,
+            "deleteOwnedMedia",
+            "(Ljava/lang/String;)Z",
+            &[JValue::Object(&path)],
+        )?
+        .z()
+    })
+}
 pub fn media_missing(uri: &str) -> Result<bool> {
     activity(|env, ctx| {
         let uri = env.new_string(uri)?;
@@ -391,4 +441,15 @@ pub fn playback_cache(clear: bool) -> Result<u64> {
             .j()
     })
     .map(|n| n.max(0) as u64)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_bilimusicplayer_PlaybackService_playMedia(
+    mut env: JNIEnv,
+    _: jni::objects::JClass,
+    id: JString,
+) {
+    if let Ok(id) = env.get_string(&id) {
+        let _ = crate::bridge::start_worker().send(crate::app::Command::PlayMedia(id.into()));
+    }
 }

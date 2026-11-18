@@ -1,0 +1,122 @@
+fn openVideo(id: string) {
+  if @platform == .android { action("openVideo", id) }
+  else { openURL("https://www.bilibili.com/video/{id}/") }
+}
+
+state triplePending = false
+fn sendTriple(id: string) {
+  if triplePending { snackbar("正在提交三连…"); return }
+  triplePending = true
+  action("triple", id)
+}
+fn videoMenu(id: string, title: string) {
+  if player.loggedIn {
+    alert(title, actions: [
+      .button(title: "在哔哩哔哩打开", run: () => openVideo(id)),
+      .button(title: "一键三连（含投币）", run: () => sendTriple(id)),
+      .button(title: "取消", role: .cancel)])
+  } else {
+    alert(title, actions: [
+      .button(title: "在哔哩哔哩打开", run: () => openVideo(id)),
+      .button(title: "登录后三连", run: () => go("login")),
+      .button(title: "取消", role: .cancel)])
+  }
+}
+
+component RankPane {
+  let palette = colorsFor(player.themeMode, environment().dark)
+  let inset = contentInset(environment().width)
+  state query = ""
+  Column {
+    grow: 1; gap: 7
+    View {
+      margin: [0,inset]; height: if environment().height < 630 { 77 } else { 94 }
+      clip: true; radius: 14; background: #0E2138; role: .button; label: "榜单官网"
+      on press { go("rankWeb") }; pressed { opacity: 0.85 }
+      Image("stage-wide.jpg") {
+        absolute: true; top: 0; right: 0; width: 64%; height: 100%; mode: .fill
+      }
+      View {
+        absolute: true; top: 0; left: 0; width: 100%; height: 100%
+        gradient: Gradient(stops: [Stop(color: #101E37, at: 0.32), Stop(color: #101E37BA, at: 0.58), Stop(color: #101E3700, at: 0.82)], startX: 0, startY: 0.5, endX: 1, endY: 0.5)
+      }
+      Column {
+        grow: 1; justify: .center; padding: [3,16]; gap: 2
+        Text("虚拟歌手中文曲排行榜") { color: #B5D9EE; font: Font(size: 12).medium() }
+        Text(if player.folderTitle.isEmpty() { "周刊" } else { player.folderTitle }) { color: #F4FAFF; font: Font(size: 24).semibold(); lines: 1 }
+        Row {
+          align: .center; gap: 5
+          Text(if player.rankDate.isEmpty() { "榜单官网" } else { "{player.rankDate}  ·  榜单官网" }) { color: #C0DFEB; font: Font(size: 12) }
+          Glyph("right",#C0DFEB,11.0)
+        }
+      }
+    }
+    Column {
+      padding: [0,inset]; gap: 7
+      Segmented(["全部歌曲", if player.loggedIn { "未收藏" } else { "登录看未收藏" }]) {
+        selected: if player.rankFiltered { 1 } else { 0 }
+        on change(i) {
+          if i == 1 && !player.loggedIn { go("login") }
+          else { action("rankFilter", if i == 1 { "1" } else { "0" }) }
+        }
+      }
+      Row {
+        align: .center; gap: 8; padding: [1,11]; border: 1; radius: 11; borderColor: palette.rule; background: palette.surface
+        Glyph("search",palette.secondary,16.0)
+        TextField {
+          grow: 1; plain: true; minHeight: 36; text: query; color: palette.ink; placeholder: "搜索本期歌曲"
+          on change(v) { query = v; action("search",v) }
+        }
+      }
+    }
+    if player.rankBusy { Text("正在核对收藏夹…") { color: palette.secondary; padding: [8,inset] } }
+    else if player.rankLoading && player.entries.isEmpty() { Text("正在读取周刊…") { color: palette.secondary; padding: [8,inset] } }
+    else if player.rankFiltered && !player.rankVerified && player.message.isEmpty() {
+      Text("收藏夹尚未核对完成，可点刷新重试") { color: palette.secondary; padding: [8,inset] }
+    }
+    else if player.entries.isEmpty() && player.message.isEmpty() {
+      Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.rankFiltered { "本期歌曲均已收藏" } else { "暂无歌曲" }) {
+        color: palette.secondary; padding: [8,inset]
+      }
+    }
+    List {
+      grow: 1; appearance: .bare; margin: [0,inset]
+      for e in player.entries key e.key {
+        Row {
+          align: .center; gap: 6; padding: [4,0]
+          Row {
+            grow: 1; shrink: 1; align: .center; gap: 10; padding: [5,0]
+            role: .button; label: e.title; on press { action("choose",e.key,e.title) }; pressed { opacity: 0.65 }
+            View {
+              width: 38; height: 40; align: .center; justify: .center; radius: 9
+              background: if e.status == "01" && e.detail == "主榜" { palette.accentWash } else { palette.surface }
+              if e.status.isEmpty() { Glyph("wave",palette.secondary,17.0) }
+              else { Text(e.status) { color: if e.detail == "主榜" { palette.accent } else { palette.secondary }; font: Font(size: 16).semibold() } }
+            }
+            Column {
+              grow: 1; shrink: 1; gap: 2
+              Text(e.title) { color: palette.ink; font: Font(size: 15).medium(); lines: 2 }
+              Text(e.detail) { color: palette.secondary; font: .footnote }
+            }
+          }
+          IconAction("more","视频操作",palette.secondary,#00000000,44.0,19.0) { on press { videoMenu(e.key,e.title) } }
+        }
+      }
+    }
+  }
+}
+component RankWebsite {
+  let web = Ref()
+  state page = WebState()
+  state failure = ""
+  onBack { if page.canGoBack { web.goBack(); return true }; go("rank"); return true }
+  Column { grow: 1
+    if !failure.isEmpty() { Button("重新加载榜单官网") { on press { failure=""; web.reload() } } }
+    WebView("https://www.evocalrank.com/#/") { grow: 1; ref: web
+      block: ["googletagmanager.com", "google-analytics.com"]
+      on state(s) { page=s }
+      on error(m) { failure=m }
+      on newWindow(url) { if url.hasPrefix("https://") { openURL(url) } }
+    }
+  }
+}

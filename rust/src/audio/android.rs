@@ -34,7 +34,7 @@ impl Output {
         let mut env = self.vm.attach_current_thread()?;
         env.with_local_frame(12, |env| match f(env, self.player.as_obj()) {
             Ok(value) => Ok(value),
-            Err(e) if env.exception_check()? => {
+            Err(_) if env.exception_check()? => {
                 let ex = env.exception_occurred()?;
                 env.exception_clear()?;
                 let msg = JString::from(

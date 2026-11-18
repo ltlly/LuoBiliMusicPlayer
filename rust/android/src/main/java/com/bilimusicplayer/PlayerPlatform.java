@@ -30,18 +30,22 @@ public final class PlayerPlatform {
     }
 
     private static volatile boolean playbackStarted;
+    static void serviceStarted() { playbackStarted = true; }
+    public void stopPlayback() {
+        playbackStarted = false;
+        context.stopService(new Intent(context, PlaybackService.class));
+    }
     static void serviceStopped() { playbackStarted = false; }
     public StreamingOutput newAudioOutput() throws Exception { return new StreamingOutput(context); }
     public long playbackCache(boolean clear) { return StreamingOutput.cacheBytes(context, clear); }
-    public void playbackChanged(String title, String artist, boolean playing, long position, long duration) {
+    public void playbackChanged(String title, String artist, boolean playing, long position, long duration, String id, String queue) {
         if (!playing && !playbackStarted) return;
-        if (title.isEmpty()) {
-            context.stopService(new Intent(context, PlaybackService.class));
-            playbackStarted = false;
+        if (id.isEmpty()) {
+            stopPlayback();
             return;
         }
         Intent update = new Intent(context, PlaybackService.class).putExtra("title", title).putExtra("artist", artist)
-            .putExtra("playing", playing).putExtra("position", position).putExtra("duration", duration);
+            .putExtra("current", id).putExtra("queue", queue).putExtra("playing", playing).putExtra("position", position).putExtra("duration", duration);
         if (!playbackStarted) context.startForegroundService(update); else context.startService(update);
         playbackStarted = true;
     }

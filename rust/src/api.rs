@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{Context, Result, bail, ensure};
 use md5::{Digest, Md5};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     collections::{BTreeMap, VecDeque},
     thread,
@@ -55,6 +55,7 @@ pub struct Client {
     passport: String,
     web: String,
     pages: VecDeque<FolderPage>,
+    ids: BTreeMap<i64, (Instant, std::sync::Arc<[social::Resource]>)>,
     jar: Jar,
     wbi: Option<String>,
     pub settings: Settings,
@@ -84,6 +85,7 @@ impl Client {
             jar,
             web: "https://www.bilibili.com".into(),
             pages: VecDeque::new(),
+            ids: BTreeMap::new(),
             wbi: None,
             api: api.into(),
             passport: passport.into(),
@@ -321,7 +323,11 @@ impl Client {
             .as_str()
             .context("缺少刷新凭据")?
             .to_owned();
+        // Device cookies survive a new login. Session and CSRF cookies always come from this scan.
         let mut jar = self.jar.clone();
+        for cookies in jar.values_mut() {
+            cookies.retain(|c| matches!(c.name.as_str(), "buvid3" | "buvid4"));
+        }
         let list = jar.entry("api.bilibili.com".into()).or_default();
         for item in data["cookie_info"]["cookies"]
             .as_array()
@@ -344,12 +350,23 @@ impl Client {
         }
         let raw = serde_json::to_string(&jar)?;
         self.settings.update(|v| {
+            for key in [
+                "user_id",
+                "username",
+                "avatar",
+                "last_folder_id",
+                "last_folder_title",
+            ] {
+                v.remove(key);
+            }
             v.insert("access_token".into(), access);
             v.insert("refresh_token".into(), refresh);
             v.insert("cookies".into(), raw);
         })?;
         self.jar = jar;
         self.pages.clear();
+        self.ids.clear();
+        self.wbi = None;
         Ok(true)
     }
 
@@ -359,8 +376,8 @@ impl Client {
         if status / 100 != 2 || body["code"] != 0 || data["isLogin"] != true {
             return Ok("登录已失效，请退出后重新扫码；本地歌曲会保留。".into());
         }
+        let mid = self.store_profile(data)?;
         let name = data["uname"].as_str().unwrap_or_default();
-        let mid = data["mid"].as_i64().context("缺少用户编号")?;
         let vip = if data["vipStatus"] == 1 {
             "大会员有效"
         } else {
@@ -386,22 +403,40 @@ impl Client {
         })?;
         self.jar.clear();
         self.pages.clear();
+        self.ids.clear();
         self.wbi = None;
         Ok(())
     }
 
     pub fn user_info(&mut self) -> Result<()> {
         let data = success(self.get(NAV, &Params::new())?)?;
+        self.store_profile(&data).map(drop)
+    }
+
+    fn store_profile(&mut self, data: &Value) -> Result<i64> {
         ensure!(data["isLogin"] == true, "账号未登录");
-        let mid = data["mid"].as_i64().context("缺少用户编号")?;
-        self.settings.update(|v| {
-            v.insert("user_id".into(), mid.to_string());
-            v.insert(
-                "username".into(),
-                data["uname"].as_str().unwrap_or("").into(),
-            );
-            v.insert("avatar".into(), data["face"].as_str().unwrap_or("").into());
-        })
+        let mid = data["mid"]
+            .as_i64()
+            .filter(|v| *v > 0)
+            .context("缺少用户编号")?;
+        let name = data["uname"].as_str().unwrap_or("");
+        let avatar = data["face"].as_str().unwrap_or("");
+        let id = mid.to_string();
+        if self.settings.get("user_id") != Some(id.as_str())
+            || self.settings.get("username") != Some(name)
+            || self.settings.get("avatar") != Some(avatar)
+        {
+            if self.settings.get("user_id") != Some(id.as_str()) {
+                self.pages.clear();
+                self.ids.clear();
+            }
+            self.settings.update(|v| {
+                v.insert("user_id".into(), id);
+                v.insert("username".into(), name.into());
+                v.insert("avatar".into(), avatar.into());
+            })?;
+        }
+        Ok(mid)
     }
 
     pub(crate) fn init_wbi(&mut self) -> Result<()> {
@@ -438,6 +473,7 @@ impl Client {
 
     pub fn refresh_folder(&mut self, folder: i64) {
         self.pages.retain(|p| p.folder != folder);
+        self.ids.remove(&folder);
     }
 
     pub fn folder_page(
@@ -465,11 +501,7 @@ impl Client {
             p.insert("keyword".into(), s.into());
         }
         let data = self.signed("/x/v3/fav/resource/list", p)?;
-        let media: Vec<Media> = if data["medias"].is_null() {
-            vec![]
-        } else {
-            serde_json::from_value(data["medias"].clone())?
-        };
+        let media = Media::list(data["medias"].clone())?;
         let total = data["info"]["media_count"].as_u64().unwrap_or(0) as usize;
         self.pages
             .retain(|p| p.fetched.elapsed() < Duration::from_secs(300));
@@ -492,12 +524,16 @@ impl Client {
             "/x/v3/fav/folder/created/list-all",
             &Params::from([("up_mid".into(), mid.to_string())]),
         )?)?;
-        Ok(serde_json::from_value(
-            data.get("list")
-                .filter(|v| !v.is_null())
-                .cloned()
-                .unwrap_or(json!([])),
-        )?)
+        let list = data.get("list").context("B站未返回收藏夹列表")?;
+        let folders: Vec<Folder> =
+            serde_json::from_value::<Option<_>>(list.clone())?.unwrap_or_default();
+        ensure!(
+            data["count"]
+                .as_u64()
+                .is_none_or(|total| total <= folders.len() as u64),
+            "B站返回的收藏夹列表不完整，请刷新重试"
+        );
+        Ok(folders)
     }
 
     pub fn signed(&mut self, path: &str, params: Params) -> Result<Value> {
@@ -570,7 +606,9 @@ fn success((status, body): (u16, Value)) -> Result<Value> {
     Ok(body["data"].clone())
 }
 
+mod social;
 mod video_page;
+pub(crate) use social::{aid, bvid, complete_snapshot};
 
 #[cfg(test)]
 mod tests;

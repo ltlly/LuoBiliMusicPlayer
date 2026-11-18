@@ -10,11 +10,19 @@ use std::{
     collections::HashSet,
     path::PathBuf,
     sync::mpsc::{Receiver, RecvTimeoutError},
-    thread,
     time::{Duration, Instant},
 };
 
+#[path = "favorite_cleanup.rs"]
+mod favorite_cleanup;
+
 pub(crate) enum Command {
+    RankFilter(bool),
+    RankIssue(Result<crate::ranking::Issue>),
+    Triple(String),
+    AutoClean(bool),
+    #[cfg(target_os = "android")]
+    OpenVideo(String),
     Open,
     #[cfg(target_os = "android")]
     Pump(std::sync::mpsc::Sender<Result<i64>>),
@@ -38,6 +46,8 @@ pub(crate) enum Command {
     Logout,
     #[cfg(target_os = "android")]
     AndroidAction(i32, i64),
+    #[cfg(target_os = "android")]
+    PlayMedia(String),
     Retry,
     Transport(Transport, i32),
     Seek(f32),
@@ -73,11 +83,14 @@ pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_mediaAction(
             return;
         }
     }
+    if matches!(action, 1 | 3 | 4) {
+        let _ = crate::bridge::start_worker().send(Command::AndroidAction(action, value));
+        return;
+    }
     if let Some(sender) = crate::bridge::sender() {
         let _ = sender.send(Command::AndroidAction(action, value));
     }
 }
-type Rows = Vec<(String, String, String, String)>;
 
 pub(crate) fn run(
     db: PathBuf,
@@ -107,6 +120,8 @@ pub(crate) fn run(
         keyword: String::new(),
         prompt: None,
         filling: None,
+        ranking: Default::default(),
+        clean_next: Instant::now(),
     };
     app.events(rx);
     Ok(())
@@ -119,6 +134,8 @@ struct Prompt {
     next: Instant,
 }
 struct Application {
+    ranking: crate::ranking::Ranking,
+    clean_next: Instant,
     cache_dir: PathBuf,
     downloads: crate::download::Downloads,
     downloads_tab: i32,
@@ -142,23 +159,32 @@ impl Application {
     fn show(&self, update: impl FnOnce(&mut Snapshot)) {
         self.view.update(update);
     }
-    fn entries(&self, rows: Rows, more: bool) {
+    fn video_id(&self, key: &str) -> Option<String> {
+        if crate::api::aid(key).is_some() {
+            return Some(key.to_owned());
+        }
+        if !key.starts_with("local_") {
+            return None;
+        }
+        self.library
+            .0
+            .query_row("SELECT bvid,aid FROM songs WHERE id=?1", [key], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })
+            .ok()
+            .and_then(|(bv, av)| {
+                if crate::api::aid(&bv).is_some() {
+                    Some(bv)
+                } else {
+                    crate::api::bvid(av)
+                }
+            })
+    }
+    fn entries(&self, rows: Vec<Entry>, more: bool) {
         self.show(move |ui| {
-            let rows = rows
-                .into_iter()
-                .map(|(key, title, detail, cover)| Entry {
-                    cover_url: cover,
-
-                    status: Default::default(),
-                    key,
-                    title,
-                    detail,
-                })
-                .collect::<Vec<_>>();
-
             ui.entries = rows;
             ui.has_more = more;
-            ui.message = "".into();
+            ui.message.clear();
         });
     }
     fn open(&mut self) {
@@ -199,8 +225,16 @@ impl Application {
                 .map(|p| p.next.saturating_duration_since(Instant::now()))
                 .or_else(|| self.filling.as_ref().map(|_| Duration::ZERO))
                 .or_else(|| self.queue.playing.then_some(Duration::from_millis(250)));
+            let clean = opened
+                && matches!(self.page, Page::Favorites | Page::Content | Page::Settings)
+                && self.cleanup_enabled();
+            #[cfg(target_os = "android")]
+            let clean = clean && PLAYER_VISIBLE.load(std::sync::atomic::Ordering::Acquire);
+            let rank = self.page == Page::Rank && self.ranking.busy();
             let delay = [
                 delay,
+                rank.then_some(Duration::ZERO),
+                clean.then(|| self.clean_next.saturating_duration_since(Instant::now())),
                 (opened && self.downloads.pending).then(|| {
                     self.downloads
                         .next
@@ -225,6 +259,19 @@ impl Application {
                             {
                                 self.error(e);
                             }
+                        }
+                        if rank {
+                            let result = self.ranking.step(&mut self.client);
+                            self.rank_rows();
+                            if let Err(e) = result {
+                                self.error(e);
+                            }
+                        } else if clean
+                            && self.clean_next <= Instant::now()
+                            && let Err(e) = self.clean_step()
+                        {
+                            self.clean_next = Instant::now() + Duration::from_secs(300);
+                            self.error(e);
                         }
                         let before = (self.queue.index, self.queue.playing, self.queue.duration);
                         let filling = self.filling.is_some() && self.prompt.is_none();
@@ -379,9 +426,26 @@ impl Application {
                 }
                 Command::DownloadAction(id, action) => self.download_action(&id, &action),
                 #[cfg(target_os = "android")]
+                Command::PlayMedia(id) => {
+                    if let Some(index) = self.queue.tracks.iter().position(|t| t.id == id) {
+                        self.transport(Transport::Jump, index as i32)
+                    } else {
+                        Ok(())
+                    }
+                }
+                #[cfg(target_os = "android")]
                 Command::AndroidAction(action, value) => match action {
-                    1 if !self.queue.playing => self.transport(Transport::Toggle, 0),
-                    2 if self.queue.playing => self.transport(Transport::Toggle, 0),
+                    13 => self.transport(Transport::Stop, 0),
+                    14 | 15 => {
+                        let position = (self.queue.position
+                            + if action == 14 { 10_000 } else { -10_000 })
+                        .max(0);
+                        self.queue
+                            .seek(position, &mut self.client.settings)
+                            .map(|()| self.show_player(true))
+                    }
+                    1 => self.transport(Transport::Play, 0),
+                    2 => self.transport(Transport::Pause, 0),
                     3 => self.transport(Transport::Next, 0),
                     4 => self.transport(Transport::Previous, 0),
                     5 => self
@@ -425,6 +489,31 @@ impl Application {
                     Ok(Some(journal)) => journal.request_access(),
                     result => result.map(|_| ()),
                 },
+                Command::AutoClean(value) => self.enable_cleanup(value),
+                Command::RankIssue(result) => {
+                    let result = self.ranking.accept(result);
+                    if self.page == Page::Rank {
+                        self.rank_rows();
+                        result
+                    } else {
+                        Ok(())
+                    }
+                }
+                Command::RankFilter(value) if self.page == Page::Rank => {
+                    let result = self.ranking.filter(&mut self.client, value, false);
+                    self.rank_rows();
+                    result
+                }
+                Command::RankFilter(_) => Ok(()),
+                Command::Triple(id) => {
+                    let message = self
+                        .triple(&id)
+                        .unwrap_or_else(|e| format!("三连结果未确认 · {e}"));
+                    self.show(|s| s.notice = message);
+                    Ok(())
+                }
+                #[cfg(target_os = "android")]
+                Command::OpenVideo(id) => crate::android_platform::open_video(&id),
                 Command::Account => {
                     let text = self
                         .client
@@ -433,10 +522,13 @@ impl Application {
                     self.show(move |ui| ui.account_detail = text);
                     Ok(())
                 }
-                Command::Logout => self
-                    .client
-                    .logout()
-                    .and_then(|()| self.navigate(Page::Library, false)),
+                Command::Logout => {
+                    self.ranking.invalidate();
+                    self.clean_next = Instant::now();
+                    self.client
+                        .logout()
+                        .and_then(|()| self.navigate(Page::Library, false))
+                }
                 Command::Navigate(Page::Login) => {
                     self.navigate(Page::Login, false).and_then(|()| self.qr())
                 }
@@ -446,7 +538,9 @@ impl Application {
                 Command::Choose(key, title) if self.page == Page::Favorites => {
                     self.open_folder(&key, &title)
                 }
-                Command::Choose(key, _) if matches!(self.page, Page::Library | Page::Content) => {
+                Command::Choose(key, _)
+                    if matches!(self.page, Page::Library | Page::Content | Page::Rank) =>
+                {
                     self.play_row(&key)
                 }
                 Command::Choose(_, _) => Ok(()),
@@ -457,6 +551,11 @@ impl Application {
                         .seek((pos * 1000.) as i64, &mut self.client.settings);
                     self.show_player(false);
                     result
+                }
+                Command::Search(s) if self.page == Page::Rank => {
+                    self.ranking.keyword = s;
+                    self.rank_rows();
+                    Ok(())
                 }
                 Command::Search(s) if matches!(self.page, Page::Content | Page::Library) => {
                     self.search(s.trim())
@@ -541,6 +640,7 @@ impl Application {
             let rows = rows
                 .into_iter()
                 .map(|(id, title, detail, status)| Entry {
+                    video: crate::database::linked_video(&id, "", 0),
                     key: id,
                     title,
                     detail,
@@ -606,8 +706,15 @@ impl Application {
         if pending.is_empty() {
             return Ok(());
         }
+        if self.finish_clean_permission(&pending)? {
+            crate::android_platform::clear_removal()?;
+            return Ok(());
+        }
         let result = crate::library_remove::remove(&mut self.library, &pending, true)?;
         crate::android_platform::clear_removal()?;
+        if accepted {
+            self.clean_next = Instant::now();
+        }
         if self.page == Page::Library {
             self.search(&self.keyword.clone())?;
         }
@@ -656,6 +763,7 @@ impl Application {
         }
 
         let track = self.queue.tracks.get(self.queue.index);
+        let video = track.and_then(|t| self.video_id(&t.id)).unwrap_or_default();
         let raw = track.map_or("", |t| t.cover.as_str());
         let small = crate::cover::thumbnail(raw, false);
         let large = crate::cover::thumbnail(raw, true);
@@ -675,13 +783,7 @@ impl Application {
         );
         #[cfg(target_os = "android")]
         {
-            if let Err(e) = crate::android_platform::playback_changed(
-                &title,
-                &artist,
-                playing,
-                self.queue.position,
-                duration,
-            ) {
+            if let Err(e) = crate::android_platform::playback_changed(&self.queue) {
                 self.error(e);
             }
         }
@@ -705,7 +807,9 @@ impl Application {
             ui.local_track = local;
             ui.track_title = title;
             ui.artist = artist;
+            ui.video_id = video;
             ui.playing = playing;
+            ui.stopped = self.queue.stopped;
             ui.duration = duration as f32 / 1000.;
             ui.queue_index = index as i32;
             ui.repeat_mode = repeat;
@@ -715,7 +819,20 @@ impl Application {
     }
     fn play_row(&mut self, key: &str) -> Result<()> {
         use crate::playback::Track;
-        let rows = if self.page == Page::Library {
+        let rows = if self.page == Page::Rank {
+            self.ranking
+                .entries()
+                .into_iter()
+                .map(|e| Track {
+                    id: e.key.clone(),
+                    uri: format!("bili://{}", e.key),
+                    title: e.title,
+                    artist: String::new(),
+                    duration_ms: 0,
+                    cover: String::new(),
+                })
+                .collect()
+        } else if self.page == Page::Library {
             self.library
                 .downloaded()?
                 .into_iter()
@@ -728,26 +845,30 @@ impl Application {
             .iter()
             .position(|t| t.id == key)
             .context("未找到所选歌曲")?;
-        self.filling = None;
-        let index = if self.page == Page::Content && !self.keyword.is_empty() {
-            if let Some(existing) = self.queue.tracks.iter().position(|track| track.id == key) {
-                existing
+        let searching_folder = self.page == Page::Content && !self.keyword.is_empty();
+        let filling = (!searching_folder && self.page == Page::Content && rows.len() < self.total)
+            .then(|| crate::folder_queue::FolderQueue::new(self.folder, self.total, key.into()));
+        let result = if searching_folder {
+            if let Some(index) = self.queue.tracks.iter().position(|t| t.id == key) {
+                self.queue.play(index, 0, &mut self.client, &self.library)
             } else {
-                self.queue.tracks.push(rows[index].clone());
-                self.queue.tracks.len() - 1
+                let mut tracks = self.queue.tracks.clone();
+                tracks.push(rows[index].clone());
+                self.queue.play_selection(
+                    tracks.len() - 1,
+                    0,
+                    Some(tracks),
+                    &mut self.client,
+                    &self.library,
+                )
             }
         } else {
-            if self.page == Page::Content && rows.len() < self.total {
-                self.filling = Some(crate::folder_queue::FolderQueue::new(
-                    self.folder,
-                    self.total,
-                    key.into(),
-                ));
-            }
-            self.queue.tracks = rows;
-            index
+            self.queue
+                .play_selection(index, 0, Some(rows), &mut self.client, &self.library)
         };
-        let result = self.queue.play(index, 0, &mut self.client, &self.library);
+        if result.is_ok() {
+            self.filling = filling;
+        }
         self.show_player(true);
         result
     }
@@ -759,7 +880,15 @@ impl Application {
         let c = &mut self.client;
         let lib = &self.library;
         let result = match a {
-            Transport::Toggle => q.toggle(c, lib),
+            Transport::Play if q.playing => return Ok(()),
+            Transport::Pause if !q.playing => return Ok(()),
+            Transport::Play | Transport::Pause | Transport::Toggle => q.toggle(c, lib),
+            Transport::Stop => {
+                q.halt(&mut c.settings)?;
+                #[cfg(target_os = "android")]
+                crate::android_platform::stop_playback()?;
+                Ok(())
+            }
             Transport::Next => q.skip(1, c, lib),
             Transport::Previous => q.skip(-1, c, lib),
             Transport::Jump => q.play(i as usize, 0, c, lib),
@@ -774,6 +903,7 @@ impl Application {
                 q.save(&mut c.settings)
             }
             Transport::Shuffle => {
+                q.reset_history();
                 q.shuffle = !q.shuffle;
                 q.save(&mut c.settings)
             }
@@ -843,8 +973,9 @@ impl Application {
             }
         } {
             self.prompt = None;
-            thread::sleep(Duration::from_secs(1));
-            let _ = self.client.user_info();
+            self.ranking.invalidate();
+            self.clean_next = Instant::now();
+            self.client.user_info()?;
             self.after_login()?;
         } else {
             p.next = Instant::now() + Duration::from_secs(4);
@@ -857,7 +988,15 @@ impl Application {
             .settings
             .get("last_folder_id")
             .and_then(|s| s.parse::<i64>().ok());
-        if let (Some(id), Some(title)) = (folder, self.client.settings.get("last_folder_title")) {
+        if let (Some(id), Some(title), Ok(owner)) = (
+            folder,
+            self.client.settings.get("last_folder_title"),
+            self.client.owner(),
+        ) && self.library.0.query_row(
+            "SELECT EXISTS(SELECT 1 FROM bili_favorite_folders WHERE id=?1 AND mid=?2)",
+            [id, owner],
+            |r| r.get::<_, bool>(0),
+        )? {
             self.folder = id;
             self.title = title.to_owned();
             self.navigate(Page::Content, false)
@@ -877,7 +1016,9 @@ impl Application {
         self.page_number = 1;
         let title = self.title.clone();
         let logged_in = self.client.logged_in();
+        let auto_clean = self.cleanup_enabled();
         self.show(move |ui| {
+            ui.auto_clean = auto_clean;
             ui.logged_in = logged_in;
             ui.page = p;
             ui.entries = Vec::new();
@@ -887,6 +1028,22 @@ impl Application {
             ui.folder_title = title;
         });
         match p {
+            Page::Rank => {
+                self.ranking.keyword.clear();
+                let cache = self
+                    .cache_dir
+                    .with_file_name("rust-covers")
+                    .join("evocalrank-latest.json");
+                self.ranking.request(&cache, force, |result| {
+                    if let Some(tx) = crate::bridge::sender() {
+                        let _ = tx.send(Command::RankIssue(result));
+                    }
+                });
+                let filtered = self.ranking.only_new;
+                let result = self.ranking.filter(&mut self.client, filtered, force);
+                self.rank_rows();
+                result?;
+            }
             Page::Favorites if !logged_in => {}
             Page::Favorites => {
                 let mid = self
@@ -896,7 +1053,12 @@ impl Application {
                     .and_then(|s| s.parse().ok())
                     .filter(|id| *id != 0)
                     .context("请先登录")?;
-                let cached = self.library.folders()?;
+                let cached: Vec<_> = self
+                    .library
+                    .folders()?
+                    .into_iter()
+                    .filter(|f| f.mid == mid)
+                    .collect();
                 let warm = !force && !cached.is_empty();
                 if warm {
                     self.folder_entries(cached);
@@ -1015,7 +1177,7 @@ impl Application {
                         job.step(&mut self.client, &mut self.library, &mut tracks),
                         Ok(false)
                     ) {
-                        thread::sleep(Duration::from_millis(500));
+                        std::thread::sleep(Duration::from_millis(500));
                     }
                 }
             }
@@ -1023,7 +1185,9 @@ impl Application {
         let dir = crate::download::directory(&self.client)?;
         let count =
             crate::library_scan::scan(&mut self.library, &dir, cfg!(target_os = "android"))?;
-        self.search("")?;
+        if count > 0 {
+            self.search("")?;
+        }
         if _force {
             self.show(move |ui| {
                 ui.message = if count == 0 {
@@ -1039,17 +1203,48 @@ impl Application {
         self.entries(
             folders
                 .into_iter()
-                .map(|f| {
-                    (
-                        f.id.to_string(),
-                        f.title,
-                        format!("{} 首音频", f.media_count),
-                        crate::cover::thumbnail(f.cover.as_deref().unwrap_or(""), true),
-                    )
+                .map(|f| Entry {
+                    key: f.id.to_string(),
+                    title: f.title,
+                    detail: format!("{} 首音频", f.media_count),
+                    cover_url: crate::cover::thumbnail(f.cover.as_deref().unwrap_or(""), true),
+                    ..Default::default()
                 })
                 .collect(),
             false,
         );
+    }
+    fn rank_rows(&self) {
+        let entries = self.ranking.entries();
+        let issue = self.ranking.issue();
+        self.show(|s| {
+            s.entries = entries;
+            s.folder_title = issue;
+            s.rank_filtered = self.ranking.only_new;
+            s.rank_busy = self.ranking.busy();
+            s.rank_loading = self.ranking.loading();
+            s.rank_verified = self.ranking.verified();
+            s.rank_date = self.ranking.date().to_owned();
+            s.message.clear();
+        });
+    }
+    fn triple(&mut self, id: &str) -> Result<String> {
+        let (like, coin, fav) = self.client.triple(id)?;
+        if fav && let Some(aid) = crate::api::aid(id) {
+            self.ranking.marked(aid);
+        }
+        if self.page == Page::Rank {
+            self.rank_rows();
+        }
+        if like && coin && fav {
+            return Ok("三连成功 · 已点赞、投币并收藏".into());
+        }
+        let labels = [("点赞", like), ("投币", coin), ("收藏", fav)];
+        Ok(labels
+            .iter()
+            .map(|(name, done)| format!("{name}{}", if *done { "成功" } else { "未完成" }))
+            .collect::<Vec<_>>()
+            .join(" · "))
     }
     fn open_folder(&mut self, key: &str, title: &str) -> Result<()> {
         self.folder = key.parse()?;
@@ -1064,13 +1259,17 @@ impl Application {
         self.entries(
             self.items
                 .iter()
-                .map(|m| {
-                    (
-                        m.bvid.clone(),
-                        m.title.clone(),
-                        m.artist().into(),
-                        crate::cover::thumbnail(&m.cover, false),
-                    )
+                .map(|m| Entry {
+                    key: m.bvid.clone(),
+                    video: if m.kind == 2 {
+                        crate::database::linked_video(&m.bvid, "", m.id)
+                    } else {
+                        String::new()
+                    },
+                    title: m.title.clone(),
+                    detail: m.artist().into(),
+                    cover_url: crate::cover::thumbnail(&m.cover, false),
+                    ..Default::default()
                 })
                 .collect(),
             self.items.len() < self.total,
@@ -1104,18 +1303,18 @@ impl Application {
             self.keyword = lower.clone();
             let tracks = self
                 .library
-                .downloaded()?
+                .downloaded_with_video()?
                 .into_iter()
-                .filter(|t| t.matches(&lower))
+                .filter(|(t, _)| t.matches(&lower))
                 .collect::<Vec<_>>();
             #[cfg(target_os = "android")]
             let labels = crate::android_platform::quality_call(
                 "labels",
-                &serde_json::to_value(tracks.iter().map(|t| &t.uri).collect::<Vec<_>>())?,
+                &serde_json::to_value(tracks.iter().map(|(t, _)| &t.uri).collect::<Vec<_>>())?,
             )?;
             let rows = tracks
                 .into_iter()
-                .map(|t| {
+                .map(|(t, video)| {
                     #[cfg(target_os = "android")]
                     let detail = labels[&t.uri]
                         .as_str()
@@ -1123,12 +1322,14 @@ impl Application {
                         .unwrap_or(t.artist);
                     #[cfg(not(target_os = "android"))]
                     let detail = t.artist;
-                    (
-                        t.id,
-                        t.title,
+                    Entry {
+                        key: t.id,
+                        title: t.title,
                         detail,
-                        crate::cover::thumbnail(&t.cover, false),
-                    )
+                        video,
+                        cover_url: crate::cover::thumbnail(&t.cover, false),
+                        ..Default::default()
+                    }
                 })
                 .collect();
             self.entries(rows, false);

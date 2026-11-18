@@ -14,6 +14,10 @@ component Glyph(kind: string, tint: Color, size: float = 22.0) {
     } else if kind == "favorites" {
       g.stroke(Path().move(3,7).line(3,5).line(10,5).line(12,7).line(20,7).line(21,9).line(21,19).line(3,19).close(), tint, pen)
       g.stroke(Path().move(3,10).line(20,10), tint, pen)
+    } else if kind == "rank" {
+      g.stroke(Path().move(4,19).line(4,13).line(8,13).line(8,19).move(10,19).line(10,5).line(14,5).line(14,19).move(16,19).line(16,9).line(20,9).line(20,19),tint,pen)
+    } else if kind == "more" {
+      for i in 0..<3 { g.fill(Path().ellipse(3.0+i.float()*7.0,10.0,3.8,3.8),tint) }
     } else if kind == "library" {
       g.stroke(Path().move(4,5).line(4,20).move(9,5).line(9,20).move(14,5).line(14,20).move(17,6).line(21,19), tint, pen)
     } else if kind == "downloads" {

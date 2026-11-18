@@ -160,6 +160,10 @@ impl Output {
             if event.id == 0 {
                 break;
             }
+            if event.id == 6 {
+                // MPV_EVENT_START_FILE supersedes an earlier EOF in this batch.
+                ended = false;
+            }
             if event.id == 7 && !event.data.is_null() {
                 // mpv_event_end_file starts with an mpv_end_file_reason.
                 let reason = unsafe { *event.data.cast::<c_int>() };

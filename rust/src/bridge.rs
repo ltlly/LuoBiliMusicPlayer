@@ -23,6 +23,8 @@ use std::{
 pub(crate) enum Page {
     Login,
     Favorites,
+    Rank,
+    RankWeb,
     Content,
     #[default]
     Library,
@@ -34,6 +36,9 @@ pub(crate) enum Page {
 #[derive(Copy, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) enum Transport {
+    Play,
+    Pause,
+    Stop,
     Toggle,
     Previous,
     Next,
@@ -48,6 +53,7 @@ pub(crate) enum Transport {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Entry {
     pub key: String,
+    pub video: String,
     pub title: String,
     pub detail: String,
     pub cover_url: String,
@@ -59,6 +65,14 @@ pub(crate) struct Entry {
 pub(crate) struct Snapshot {
     revision: i64,
     pub page: Page,
+    pub rank_filtered: bool,
+    pub rank_busy: bool,
+    pub rank_loading: bool,
+    pub rank_verified: bool,
+    pub rank_date: String,
+    pub notice: String,
+    pub auto_clean: bool,
+    pub video_id: String,
     pub login_state: String,
     pub logged_in: bool,
     pub message: String,
@@ -71,6 +85,7 @@ pub(crate) struct Snapshot {
     pub small_cover_url: String,
     pub large_cover_url: String,
     pub playing: bool,
+    pub stopped: bool,
     pub local_track: bool,
     pub duration: f32,
     pub queue: Vec<Entry>,
@@ -196,11 +211,13 @@ extern "C" fn lbm_snapshot(revision: i64) -> *const c_char {
     let Some(player) = PLAYER.get() else {
         return output(String::new());
     };
-    let state = player.view.0.lock().unwrap_or_else(|e| e.into_inner());
+    let mut state = player.view.0.lock().unwrap_or_else(|e| e.into_inner());
     output(if revision == state.revision {
         String::new()
     } else {
-        serde_json::to_string(&*state).unwrap_or_default()
+        let json = serde_json::to_string(&*state).unwrap_or_default();
+        state.notice.clear();
+        json
     })
 }
 
@@ -227,6 +244,11 @@ unsafe extern "C" fn lbm_player_art(url: *const c_char) -> *const c_char {
 
 fn command(name: &str, arg: &str, value: &str) -> Option<Command> {
     Some(match name {
+        "rankFilter" => Command::RankFilter(arg == "1"),
+        "triple" => Command::Triple(arg.into()),
+        "autoClean" => Command::AutoClean(arg == "1"),
+        #[cfg(target_os = "android")]
+        "openVideo" => Command::OpenVideo(arg.into()),
         "navigate" => {
             Command::Navigate(Page::deserialize(serde_json::Value::String(arg.into())).ok()?)
         }

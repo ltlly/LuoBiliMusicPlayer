@@ -15,6 +15,7 @@ struct Artwork {
 
 struct Entry {
   key: string = ""
+  video: string = ""
   title: string = ""
   detail: string = ""
   coverUrl: string = ""
@@ -25,6 +26,14 @@ struct Player {
   revision: int = -1
   page: string = "library"
   loggedIn: bool = false
+  rankFiltered: bool = false
+  rankBusy: bool = false
+  rankLoading: bool = false
+  rankVerified: bool = false
+  rankDate: string = ""
+  notice: string = ""
+  autoClean: bool = false
+  videoId: string = ""
   loginState: string = "generating"
   message: string = ""
   qr: string = ""
@@ -36,6 +45,7 @@ struct Player {
   smallCoverUrl: string = ""
   largeCoverUrl: string = ""
   playing: bool = false
+  stopped: bool = false
   localTrack: bool = false
   duration: float = 0
   queue: [Entry] = []
@@ -70,6 +80,8 @@ fn clock(seconds: float) -> string {
 fn pageName(p: string) -> string = match p {
   "favorites" => "收藏夹"
   "library" => "音乐库"
+  "rank" => "周刊榜单"
+  "rankWeb" => "榜单官网"
   "downloads" => "下载管理"
   "content" => player.folderTitle
   "settings" => "设置"

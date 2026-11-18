@@ -17,4 +17,5 @@ mod quality_android;
 #[cfg(any(test, target_os = "android"))]
 mod quality_transfer;
 mod queue;
+mod ranking;
 pub mod settings;

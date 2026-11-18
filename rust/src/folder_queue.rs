@@ -6,17 +6,7 @@ use crate::{
     playback::Track,
 };
 use anyhow::Result;
-use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-
-#[derive(Deserialize)]
-struct Resource {
-    id: i64,
-    #[serde(rename = "type")]
-    kind: i64,
-    #[serde(alias = "bv_id")]
-    bvid: Option<String>,
-}
 
 pub struct FolderQueue {
     folder: i64,
@@ -33,6 +23,10 @@ enum Phase {
 }
 
 impl FolderQueue {
+    pub fn folder(&self) -> i64 {
+        self.folder
+    }
+
     pub fn new(folder: i64, total: usize, clicked: String) -> Self {
         Self {
             folder,
@@ -53,15 +47,7 @@ impl FolderQueue {
                 let cached = library.media(self.folder)?;
                 let known: HashSet<_> = cached.iter().map(|m| m.bvid.clone()).collect();
                 append(tracks, cached);
-                let params = BTreeMap::from([
-                    ("media_id".into(), self.folder.to_string()),
-                    ("platform".into(), "web".into()),
-                ]);
-                let ids = client
-                    .signed("/x/v3/fav/resource/ids", params)
-                    .and_then(|v| {
-                        Ok(serde_json::from_value::<Option<Vec<Resource>>>(v)?.unwrap_or_default())
-                    });
+                let ids = client.resource_ids(self.folder);
                 let Ok(ids) = ids else {
                     if self.total == 0 {
                         return Ok(true);
@@ -74,10 +60,13 @@ impl FolderQueue {
                     .position(|r| r.bvid.as_deref() == Some(&self.clicked))
                     .unwrap_or(0);
                 let placeholders: Vec<_> = ids
-                    .into_iter()
+                    .iter()
                     .enumerate()
                     .filter_map(|(pos, r)| {
-                        let bvid = r.bvid?;
+                        if r.kind != 2 {
+                            return None;
+                        }
+                        let bvid = r.bvid.clone()?;
                         Some((
                             pos,
                             Media {
@@ -114,12 +103,9 @@ impl FolderQueue {
                         ]),
                     );
                     if let Ok(data) = data {
-                        let media: Option<Vec<Media>> = serde_json::from_value(data)?;
-                        let mut by_id: HashMap<_, _> = media
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|m| (m.id, m))
-                            .collect();
+                        let media = Media::list(data)?;
+                        let mut by_id: HashMap<_, _> =
+                            media.into_iter().map(|m| (m.id, m)).collect();
                         let rows = batch
                             .into_iter()
                             .map(|(pos, mut placeholder)| {

@@ -37,6 +37,20 @@ component Preferences {
           Text("下载设置") { grow: 1; color: palette.ink; font: Font(size: 16).bold() }
           Glyph("right",palette.secondary,14.0)
         }
+        if player.loggedIn {
+          Card {
+            SectionName("收藏夹","favorites")
+            Row { align: .center; gap: 8
+              View {
+                grow: 1; minHeight: 44; justify: .center; role: .button; label: "自动清理失效视频"
+                on press { action("autoClean",if player.autoClean { "0" } else { "1" }) }
+                Text("自动清理失效视频") { color: palette.ink }
+              }
+              Toggle { on: player.autoClean; label: "自动清理失效视频"; on change(v) { action("autoClean",if v { "1" } else { "0" }) } }
+            }
+            Text("每天分批检查自己的收藏夹，移除 B 站标记失效的视频及对应的本地下载。") { color: palette.secondary; font: .footnote }
+          }
+        }
         Card {
           SectionName("外观","sun")
           Segmented(["跟随系统", "浅色", "深色"]) {
@@ -60,7 +74,7 @@ component Preferences {
             }
           }
         }
-        Text("哔哩音乐 1.6.1") { color: palette.secondary; font: .footnote; alignSelf: .center }
+        Text("哔哩音乐 1.7.0") { color: palette.secondary; font: .footnote; alignSelf: .center }
       } else {
         Card {
           SectionName("保存目录","favorites")

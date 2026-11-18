@@ -1,7 +1,7 @@
 name = "BiliMusicPlayer"
 id = "com.bilimusicplayer"
-version = "1.6.1"
-build = 14
+version = "1.7.0"
+build = 15
 accent = "#47ADCA"
 icon = "icon.png"
 orientations = ["portrait", "landscape"]

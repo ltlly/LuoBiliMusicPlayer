@@ -54,6 +54,20 @@ public final class PlayerActivity extends AsukaActivity {
         super.onDestroy();
         unbindActivity();
     }
+    public void openVideo(String bv) {
+        if (!bv.matches("BV1[A-Za-z0-9]{9}")) return;
+        runOnUiThread(() -> {
+            Uri page = Uri.parse("https://www.bilibili.com/video/" + bv + "/");
+            for (String app : new String[]{"tv.danmaku.bili", "tv.danmaku.bilibilihd", "com.bilibili.app.in"}) {
+                try { startActivity(new Intent(Intent.ACTION_VIEW, page).setPackage(app)); return; }
+                catch (android.content.ActivityNotFoundException ignored) { }
+            }
+            try { startActivity(new Intent(Intent.ACTION_VIEW, page)); }
+            catch (android.content.ActivityNotFoundException e) {
+                android.widget.Toast.makeText(this, "未找到可打开视频的应用", android.widget.Toast.LENGTH_SHORT).show();
+            }
+        });
+    }
     public boolean requestLibraryAccess() {
         String permission = Manifest.permission.READ_MEDIA_AUDIO;
         if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) return true;
@@ -72,6 +86,8 @@ public final class PlayerActivity extends AsukaActivity {
     private LibraryRemoval removal;
     private boolean freshLaunch;
     public void requestMediaRemoval(String plan) throws Exception { removal.begin(plan); }
+    public boolean deleteOwnedMedia(String path) { return removal.deleteOwned(path); }
+    public String mediaAliases(String path) { return removal.aliases(path); }
     public boolean mediaMissing(String uri) { return removal.missing(uri); }
     public String removalPlan() { return removal.plan(); }
     public void clearRemoval() { removal.clear(); }

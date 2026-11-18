@@ -60,7 +60,7 @@ component ListeningCover {
     }
     Column {
       absolute: true; bottom: if wide { 26 } else { 18 }; left: inset
-      width: if wide { 51% } else { 55% }; gap: 5
+      width: if wide { 51% } else { 68% }; gap: 5
       if hasTrack {
         Row {
           align: .center; gap: 7
@@ -76,8 +76,9 @@ component ListeningCover {
       if hasTrack {
         Row {
           padding: [6,0,0,0]; align: .center; gap: 6
+          IconAction("previous", "上一首", #EBFCFF, #18394C99, 48.0, 17.0) { on press { control("previous") } }
           Pill(if player.playing { "暂停" } else { "播放" }, if player.playing { "pause" } else { "play" }, #0B3344, #B3EFF2) { on press { control("toggle") } }
-          IconAction("next", "下一首", #EBFCFF, #18394C99, 39.0, 17.0) { on press { control("next") } }
+          IconAction("next", "下一首", #EBFCFF, #18394C99, 48.0, 17.0) { on press { control("next") } }
         }
       }
     }

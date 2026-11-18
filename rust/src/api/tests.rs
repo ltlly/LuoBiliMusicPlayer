@@ -1,5 +1,6 @@
 use super::*;
 use crate::{database::Library, playback::Track, settings::Values};
+use serde_json::json;
 use std::sync::{Arc, Mutex};
 use tempfile::{TempDir, tempdir};
 use tiny_http::{Response, Server};
@@ -9,6 +10,7 @@ struct Fixture {
     client: Client,
     library: Library,
     trace: Arc<Mutex<Vec<String>>>,
+    forms: Arc<Mutex<Vec<String>>>,
     server: Arc<Server>,
     worker: Option<thread::JoinHandle<()>>,
 }
@@ -23,11 +25,18 @@ impl Fixture {
         client.web = base;
         let library = Library::open(&dir.path().join("db"))?;
         let trace = Arc::new(Mutex::new(vec![]));
+        let forms = Arc::new(Mutex::new(Vec::new()));
+        let sent_forms = forms.clone();
         let listener = server.clone();
         let records = trace.clone();
         let worker = thread::spawn(move || {
             let mut responses = responses.into_iter();
-            while let Ok(req) = listener.recv() {
+            while let Ok(mut req) = listener.recv() {
+                if req.method() == &tiny_http::Method::Post {
+                    let mut form = String::new();
+                    req.as_reader().read_to_string(&mut form).unwrap();
+                    sent_forms.lock().unwrap().push(form);
+                }
                 records
                     .lock()
                     .unwrap()
@@ -46,6 +55,7 @@ impl Fixture {
             client,
             library,
             trace,
+            forms,
             server,
             worker: Some(worker),
         })
@@ -227,12 +237,7 @@ fn folder_completion_batches_missing_metadata_without_resolving_audio() -> Resul
     let ids: Vec<_> = (0..23)
         .map(|i| json!({"id":i,"type":2,"bv_id":format!("BV{i}")}))
         .collect();
-    let mut f = Fixture::new(vec![
-        ok(json!(ids)),
-        ok(json!([])),
-        ok(json!([])),
-        ok(json!(ids)),
-    ])?;
+    let mut f = Fixture::new(vec![ok(json!(ids)), ok(json!([])), ok(json!([]))])?;
     let cached = Media {
         id: 0,
         kind: 2,
@@ -251,7 +256,7 @@ fn folder_completion_batches_missing_metadata_without_resolving_audio() -> Resul
     }
     let ids = "/x/v3/fav/resource/ids";
     let infos = "/x/v3/fav/resource/infos";
-    assert_eq!(f.trace(), [ids, infos, infos, ids]);
+    assert_eq!(f.trace(), [ids, infos, infos]);
     Ok(())
 }
 
@@ -403,5 +408,187 @@ fn paused_downloads_stay_in_the_active_tab_to_resume() -> Result<()> {
     f.library.0.execute("INSERT INTO downloads(songId,title,artist,status,progress,totalBytes,downloadedBytes,audioUrl,startedAt) VALUES('test','测试','歌手','PAUSED',0,0,0,'',0)",[])?;
     assert_eq!(crate::download::rows(&f.library, 0, "")?[0].3, "PAUSED");
     assert!(crate::download::rows(&f.library, 2, "")?.is_empty());
+    Ok(())
+}
+
+fn test_login(f: &mut Fixture, uid: i64) -> Result<()> {
+    f.client.settings.update(|v| {
+        v.insert("user_id".into(), uid.to_string());
+        v.insert("access_token".into(), "local".into());
+        v.insert("refresh_token".into(), "local".into());
+    })?;
+    f.client.jar.insert(
+        "api.bilibili.com".into(),
+        vec![Cookie {
+            name: "bili_jct".into(),
+            value: "fixture-token".into(),
+            domain: "api.bilibili.com".into(),
+            path: "/".into(),
+            expires_at: -1,
+            secure: true,
+            http_only: false,
+            host_only: true,
+        }],
+    );
+    Ok(())
+}
+fn loaded_rank(f: &Fixture) -> Result<crate::ranking::Ranking> {
+    let cache = f._dir.path().join("weekly");
+    let data = json!({"ranknum":745,"pubdate":"2026-11-15 08:00:00","main_rank":[
+        {"avid":"av170001","title":"洛天依 A","rank":1},{"avid":"av117537282987908","title":"诗岸 B","rank":2}],
+        "pick_up":[{"avid":"av170001","title":"同视频在另一个分区","rank":1}],"op":[{"url":"https://example.invalid/","title":"缺少编号的条目"}]});
+    std::fs::write(&cache, serde_json::to_vec(&data)?)?;
+    let mut rank = crate::ranking::Ranking::default();
+    rank.request(&cache, false, |_| {
+        panic!("fresh issue cache should not fetch")
+    });
+    assert_eq!(rank.issue(), "第 745 期");
+    assert_eq!(rank.date(), "2026-11-15");
+    Ok(rank)
+}
+fn rank_folder(owner: i64, id: i64, count: i64) -> Value {
+    json!({"id":id,"mid":owner,"fid":id/100,"attr":0,"title":"测试收藏夹","media_count":count})
+}
+#[test]
+fn rank_filters_after_all_owned_folders_and_reuses_cached_membership() -> Result<()> {
+    let all = "/x/v3/fav/folder/created/list-all";
+    let ids = "/x/v3/fav/resource/ids";
+    let mut f = Fixture::new(vec![
+        ok(
+            json!({"count":3,"list":[rank_folder(32,132,2),rank_folder(32,232,1),rank_folder(32,332,0)]}),
+        ),
+        ok(
+            json!([{"id":170001,"type":2,"bv_id":"BV17x411w7KC","bvid":"BV17x411w7KC"},{"id":10,"type":12}]),
+        ),
+        ok(json!([{"id":117537282987908_i64,"type":12}])),
+        ok(json!({"count":0,"list":null})),
+    ])?;
+    test_login(&mut f, 32)?;
+    let mut rank = loaded_rank(&f)?;
+    assert_eq!(rank.entries().len(), 2);
+    assert_eq!(aid("BV17x411w7KC"), Some(170001));
+    rank.filter(&mut f.client, true, false)?;
+    assert!(rank.entries().is_empty());
+    rank.step(&mut f.client)?;
+    assert!(rank.entries().is_empty());
+    rank.step(&mut f.client)?;
+    assert_eq!(
+        rank.entries()
+            .iter()
+            .map(|e| e.title.as_str())
+            .collect::<Vec<_>>(),
+        ["诗岸 B"]
+    );
+    rank.filter(&mut f.client, false, false)?;
+    rank.filter(&mut f.client, true, false)?;
+    rank.keyword = "B".into();
+    assert_eq!(rank.entries().len(), 1);
+    assert_eq!(f.trace(), [all, ids, ids]);
+    rank.marked(117537282987908);
+    assert!(rank.entries().is_empty());
+    test_login(&mut f, 55)?;
+    rank.filter(&mut f.client, true, false)?;
+    rank.keyword.clear();
+    assert_eq!(rank.entries().len(), 2);
+    assert_eq!(f.trace(), [all, ids, ids, all]);
+    Ok(())
+}
+
+#[test]
+fn short_or_failed_membership_never_marks_unknown_songs_uncollected() -> Result<()> {
+    let folders = ok(json!({"list":[rank_folder(32,132,2)]}));
+    let mut f = Fixture::new(vec![
+        folders.clone(),
+        ok(Value::Null),
+        folders.clone(),
+        ok(json!([{"id":170001,"type":2},{"id":170001,"type":2}])),
+        folders,
+        (500, Value::Null),
+    ])?;
+    test_login(&mut f, 32)?;
+    let mut rank = loaded_rank(&f)?;
+    for _ in 0..3 {
+        rank.filter(&mut f.client, true, false)?;
+        assert!(rank.step(&mut f.client).is_err());
+        assert!(!rank.busy() && !rank.verified() && rank.entries().is_empty());
+    }
+    rank.filter(&mut f.client, false, false)?;
+    assert_eq!(rank.entries().len(), 2);
+    f.client.logout()?;
+    assert!(rank.filter(&mut f.client, true, false).is_err());
+    assert!(!rank.only_new);
+    Ok(())
+}
+
+#[test]
+fn triple_is_one_authenticated_post_and_reports_partial_results() -> Result<()> {
+    let mut f = Fixture::new(vec![
+        ok(json!({"like":true,"coin":false,"fav":true})),
+        (200, json!({"code":-101,"message":"账号未登录"})),
+    ])?;
+    assert!(f.client.triple("BV17x411w7KC").is_err());
+    assert!(f.trace().is_empty());
+    test_login(&mut f, 32)?;
+    assert!(f.client.triple("../").is_err());
+    assert!(f.trace().is_empty());
+    assert_eq!(f.client.triple("BV17x411w7KC")?, (true, false, true));
+    let form = f.forms.lock().unwrap()[0].clone();
+    let fields: std::collections::HashMap<_, _> =
+        url::form_urlencoded::parse(form.as_bytes()).collect();
+    assert_eq!(fields["aid"], "170001");
+    assert_eq!(fields["bvid"], "BV17x411w7KC");
+    assert_eq!(fields["csrf"], "fixture-token");
+    assert_eq!(
+        f.client.triple("BV17x411w7KC").unwrap_err().to_string(),
+        "账号未登录"
+    );
+    assert_eq!(f.trace(), ["/x/web-interface/archive/like/triple"; 2]);
+    Ok(())
+}
+
+#[test]
+fn switching_accounts_clears_old_identity_before_nav_and_keeps_device_cookie() -> Result<()> {
+    let mut f = Fixture::new(vec![
+        ok(json!({"b_3":"device","b_4":"device4"})),
+        ok(
+            json!({"access_token":"new","refresh_token":"refresh","cookie_info":{"cookies":[{"name":"SESSDATA","value":"new-session"}]}}),
+        ),
+        (503, Value::Null),
+    ])?;
+    f.client.ensure_buvid()?;
+    let old = Cookie {
+        name: "bili_jct".into(),
+        value: "other-account".into(),
+        domain: "bilibili.com".into(),
+        path: "/".into(),
+        expires_at: -1,
+        secure: true,
+        http_only: false,
+        host_only: false,
+    };
+    f.client
+        .jar
+        .entry("bilibili.com".into())
+        .or_default()
+        .push(old);
+    f.client.settings.update(|s| {
+        for (key, value) in [
+            ("user_id", "12"),
+            ("last_folder_id", "123"),
+            ("last_folder_title", "前一个账号"),
+            ("theme_mode", "DARK"),
+        ] {
+            s.insert(key.into(), value.into());
+        }
+    })?;
+    assert!(f.client.poll_qr("local")?);
+    assert!(f.client.user_info().is_err());
+    assert!(f.client.owner().is_err());
+    assert!(f.client.settings.get("last_folder_id").is_none());
+    assert!(f.client.settings.get("last_folder_title").is_none());
+    assert_eq!(f.client.settings.get("theme_mode"), Some("DARK"));
+    let cookies = f.client.cookie_header("api.bilibili.com");
+    assert!(cookies.contains("buvid3=device") && cookies.contains("SESSDATA=new-session"));
+    assert!(!cookies.contains("other-account"));
     Ok(())
 }
