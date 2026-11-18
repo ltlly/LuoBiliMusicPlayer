@@ -1,0 +1,64 @@
+import std/json
+
+extern fn lbm_start()
+extern fn lbm_snapshot(revision: Int64) -> CString
+extern fn lbm_action(name: CString, arg: CString, value: CString)
+extern fn lbm_cover(url: CString) -> CString
+
+struct Entry {
+  key: string = ""
+  title: string = ""
+  detail: string = ""
+  coverUrl: string = ""
+  status: string = ""
+}
+
+struct Player {
+  revision: int = -1
+  page: string = "login"
+  loginState: string = "generating"
+  message: string = ""
+  qr: string = ""
+  folderTitle: string = ""
+  entries: [Entry] = []
+  hasMore: bool = false
+  trackTitle: string = ""
+  artist: string = ""
+  smallCoverUrl: string = ""
+  largeCoverUrl: string = ""
+  playing: bool = false
+  localTrack: bool = false
+  position: float = 0
+  duration: float = 0
+  queue: [Entry] = []
+  queueIndex: int = 0
+  repeatMode: int = 0
+  shuffle: bool = false
+  themeMode: string = "SYSTEM"
+  account: string = ""
+  accountDetail: string = ""
+  downloadDir: string = ""
+  cacheSize: string = ""
+  wifiOnly: bool = false
+  rateEnabled: bool = false
+  rateLimit: int = 20
+  concurrent: int = 2
+}
+
+state player = Player()
+fn action(name: string, arg: string = "", value: string = "") { lbm_action(name, arg, value) }
+fn go(page: string) { action("navigate", page) }
+fn control(kind: string, index: int = 0) { action("transport", kind, "{index}") }
+fn clock(seconds: float) -> string {
+  let s = max(0, seconds.int())
+  return "{s / 60}:{(s % 60).padded(2)}"
+}
+fn pageName(p: string) -> string = match p {
+  "favorites" => "收藏夹"
+  "library" => "音乐库"
+  "downloads" => "下载管理"
+  "content" => player.folderTitle
+  "settings" => "设置"
+  "downloadSettings" => "下载设置"
+  _ => "登录哔哩哔哩"
+}

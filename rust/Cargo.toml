@@ -4,11 +4,7 @@ version = "1.6.0"
 edition = "2024"
 
 [lib]
-crate-type = ["rlib", "cdylib"]
-
-[features]
-default = ["ui"]
-ui = ["dep:slint"]
+crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 rusqlite = { version = "0.37", features = ["bundled"] }
@@ -21,12 +17,6 @@ prost = "0.14"
 fastrand = "2"
 sha2 = "0.10"
 image = { version = "0.25", default-features = false, features = ["webp", "jpeg", "png"] }
-slint = { version = "=1.19.0", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-software", "software-renderer-path", "backend-android-activity-06"], optional = true }
-
-[[bin]]
-name = "BiliMusicPlayer"
-path = "src/main.rs"
-required-features = ["ui"]
 
 [dependencies.ureq]
 version = "3.1"
@@ -51,10 +41,3 @@ tiny_http = "0.12"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 libloading = "0.8"
-
-[target.'cfg(target_os = "windows")'.dependencies.i-slint-common]
-version = "=1.19.0"
-features = ["shared-fontique"]
-
-[target.'cfg(target_os = "android")'.dependencies.ndk-context]
-version = "0.1"

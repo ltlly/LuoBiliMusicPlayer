@@ -196,7 +196,7 @@ impl Downloads {
                 move || {
                     let mut db = db;
                     if let Err(e) = transfer(&mut db, &id, &urls, &temp, &dir, &name) {
-                        let _ = fail(&db, &id, e);
+                        let _ = db.execute("UPDATE downloads SET status='FAILED',errorMessage=?2 WHERE songId=?1 AND status IN ('DOWNLOADING','CONVERTING')", params![id,e.to_string()]);
                     }
                 }
             })?;

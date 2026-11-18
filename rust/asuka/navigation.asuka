@@ -1,0 +1,31 @@
+component Navigation(wide: bool, panel: string) {
+  event choose(page: string)
+  fn active(page: string) -> bool = panel.isEmpty() && (page == player.page || (page == "favorites" && player.page == "content") || (page == "settings" && player.page == "downloadSettings"))
+  View {
+    direction: if wide { .column } else { .row }
+    padding: if wide { 12 } else { 6 }
+    gap: 4
+    for page in tabs key page {
+
+      View {
+        direction: if wide { .row } else { .column }
+        grow: if wide { 0 } else { 1 }
+        align: .center
+        justify: if wide { .start } else { .center }
+        padding: if wide { 10 } else { 2 }
+        gap: if wide { 10 } else { 3 }
+        minHeight: 46
+        radius: 12
+        role: .button
+        label: pageName(page)
+        background: if active(page) { #245954 } else { .background }
+        on press { emit choose(page) }
+        Glyph(page, if active(page) { #D5EEDA } else { .secondaryLabel })
+        Text(pageName(page)) {
+          color: if active(page) { #F5F8EF } else { .label }
+          font: if wide { .headline } else { .caption }
+        }
+      }
+    }
+  }
+}

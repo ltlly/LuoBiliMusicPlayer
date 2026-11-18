@@ -250,7 +250,7 @@ fn folder_completion_batches_missing_metadata_without_resolving_audio() -> Resul
     Ok(())
 }
 
-#[cfg(all(feature = "ui", not(target_os = "android")))]
+#[cfg(not(target_os = "android"))]
 #[test]
 fn batch_download_resolves_once_and_publishes_original_bytes() -> Result<()> {
     use crate::download::{Downloads, enqueue};

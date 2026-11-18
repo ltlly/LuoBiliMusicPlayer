@@ -6,32 +6,60 @@ use jni::{
 use std::path::{Path, PathBuf};
 
 static CURRENT: std::sync::Mutex<Option<GlobalRef>> = std::sync::Mutex::new(None);
-pub struct ActivityBinding;
-impl ActivityBinding {
-    pub fn new(app: &slint::android::AndroidApp) -> Result<Self> {
-        let vm = unsafe { JavaVM::from_raw(app.vm_as_ptr().cast()) }?;
-        let env = vm.attach_current_thread()?;
-        // AndroidApp owns this global for its lifetime. Retain our own reference for worker calls.
-        let borrowed = unsafe { JObject::from_raw(app.activity_as_ptr().cast()) };
-        *CURRENT.lock().unwrap() = Some(env.new_global_ref(&borrowed)?);
-        Ok(Self)
-    }
-}
-impl Drop for ActivityBinding {
-    fn drop(&mut self) {
-        CURRENT.lock().unwrap().take();
+static VM: std::sync::OnceLock<JavaVM> = std::sync::OnceLock::new();
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_bindActivity(
+    env: JNIEnv,
+    activity: JObject,
+) {
+    if let (Ok(vm), Ok(reference)) = (env.get_java_vm(), env.new_global_ref(&activity)) {
+        let _ = VM.set(vm);
+        *CURRENT.lock().unwrap() = Some(reference);
     }
 }
 
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_unbindActivity(
+    env: JNIEnv,
+    activity: JObject,
+) {
+    let mut bound = CURRENT.lock().unwrap();
+    if bound
+        .as_ref()
+        .is_some_and(|r| env.is_same_object(r, &activity).unwrap_or(false))
+    {
+        bound.take();
+    }
+}
+
+pub fn context() -> Result<(&'static JavaVM, GlobalRef)> {
+    Ok((
+        VM.get().context("Android 尚未初始化")?,
+        CURRENT
+            .lock()
+            .unwrap()
+            .clone()
+            .context("Android 界面已关闭")?,
+    ))
+}
+
+pub fn files_dir() -> Result<PathBuf> {
+    activity(|env, obj| {
+        let file = env
+            .call_method(obj, "getFilesDir", "()Ljava/io/File;", &[])?
+            .l()?;
+        let path = JString::from(
+            env.call_method(file, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+                .l()?,
+        );
+        Ok(PathBuf::from(String::from(env.get_string(&path)?)))
+    })
+}
+
 fn activity<T>(f: impl FnOnce(&mut JNIEnv, &JObject) -> jni::errors::Result<T>) -> Result<T> {
-    let ctx = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }?;
+    let (vm, activity) = context()?;
     let mut env = vm.attach_current_thread()?;
-    let activity = CURRENT
-        .lock()
-        .unwrap()
-        .clone()
-        .context("Android 界面已关闭")?;
     env.with_local_frame(16, |env| match f(env, activity.as_obj()) {
         Ok(value) => Ok(value),
         Err(error) => {

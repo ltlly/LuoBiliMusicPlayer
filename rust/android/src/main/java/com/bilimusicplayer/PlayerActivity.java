@@ -1,7 +1,8 @@
 package com.bilimusicplayer;
 
 import android.Manifest;
-import android.app.NativeActivity;
+import android.os.Bundle;
+import dev.asuka.AsukaActivity;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Context;
@@ -20,8 +21,14 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 
-public final class PlayerActivity extends NativeActivity {
-    static { System.loadLibrary("bili_music_player"); }
+public final class PlayerActivity extends AsukaActivity {
+    static { System.loadLibrary("asuka"); }
+    private native void bindActivity();
+    private native void unbindActivity();
+    @Override protected void onCreate(Bundle state) {
+        bindActivity();
+        super.onCreate(state);
+    }
     static native void mediaAction(int action, long value);
     private boolean playbackStarted;
     public void playbackChanged(String title, String artist, boolean playing, long position, long duration) {
@@ -47,6 +54,7 @@ public final class PlayerActivity extends NativeActivity {
     @Override protected void onDestroy() {
         stopService(new Intent(this, PlaybackService.class));
         super.onDestroy();
+        unbindActivity();
     }
     public boolean requestLibraryAccess() {
         String permission = Build.VERSION.SDK_INT >= 33 ? Manifest.permission.READ_MEDIA_AUDIO : Manifest.permission.READ_EXTERNAL_STORAGE;

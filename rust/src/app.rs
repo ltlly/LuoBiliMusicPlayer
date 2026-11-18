@@ -1,3 +1,4 @@
+use crate::bridge::{Entry, Page, Snapshot, Transport, View};
 use crate::{
     api::{Client, now_ms},
     database::{Library, Media},
@@ -5,19 +6,15 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use qrcode::{Color, QrCode};
-use slint::{ComponentHandle, Model, ModelRc, Rgb8Pixel, SharedPixelBuffer, VecModel};
 use std::{
     collections::HashSet,
     path::PathBuf,
-    rc::Rc,
-    sync::mpsc::{self, Receiver, RecvTimeoutError, Sender},
+    sync::mpsc::{Receiver, RecvTimeoutError},
     thread,
     time::{Duration, Instant},
 };
 
-slint::slint! { #[edition = "1.19"] export {PlayerWindow,Entry,Page,Transport} from "../ui/window.slint";}
-
-enum Command {
+pub(crate) enum Command {
     Download(Vec<String>),
     SetDownloadOption(String, i32),
     ClearCache,
@@ -40,9 +37,6 @@ enum Command {
 #[cfg(target_os = "android")]
 static PLAYER_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 #[cfg(target_os = "android")]
-static ANDROID_COMMANDS: std::sync::Mutex<Option<Sender<Command>>> = std::sync::Mutex::new(None);
-
-#[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_mediaAction(
     _: jni::JNIEnv,
@@ -56,265 +50,47 @@ pub extern "system" fn Java_com_bilimusicplayer_PlayerActivity_mediaAction(
             return;
         }
     }
-    if let Ok(sender) = ANDROID_COMMANDS.lock()
-        && let Some(sender) = sender.as_ref()
-    {
+    if let Some(sender) = crate::bridge::sender() {
         let _ = sender.send(Command::AndroidAction(action, value));
     }
 }
 type Rows = Vec<(String, String, String, String)>;
 
-#[cfg(target_os = "windows")]
-fn platform_font() -> Result<String> {
-    let mut fonts = i_slint_common::sharedfontique::system_collection(false);
-    let selected = [
-        "Microsoft YaHei UI",
-        "Microsoft YaHei",
-        "Noto Sans CJK SC",
-        "SimSun",
-        "Segoe UI",
-        "Arial",
-        "Tahoma",
-    ]
-    .into_iter()
-    .find(|family| fonts.family_id(family).is_some())
-    .map(str::to_owned)
-    .or_else(|| fonts.family_names().next().map(str::to_owned))
-    .context("系统未提供可用字体")?;
-    Ok(selected)
-}
-#[cfg(not(target_os = "windows"))]
-fn platform_font() -> Result<String> {
-    Ok(if cfg!(target_os = "macos") {
-        "PingFang SC"
-    } else {
-        "Noto Sans CJK SC"
-    }
-    .to_owned())
-}
-
-pub fn run(db: PathBuf, settings: Settings) -> Result<()> {
-    let family = platform_font()?;
-    let ui = PlayerWindow::new()?;
-    ui.set_app_font(family.into());
-    #[cfg(not(target_os = "android"))]
-    ui.window().set_size(slint::LogicalSize::new(1100., 760.));
-    ui.set_app_version(env!("CARGO_PKG_VERSION").into());
-    let (tx, rx) = mpsc::channel();
-    #[cfg(target_os = "android")]
-    {
-        *ANDROID_COMMANDS.lock().unwrap() = Some(tx.clone());
-    }
-    bind(&ui, &tx);
-    bind_covers(&ui, &db);
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        let startup = (|| -> Result<()> {
-            let queue = crate::queue::Queue::restore(&settings)?;
-            let library = Library::open(&db)?;
-            let cache_dir = crate::cover::legacy_path(&db);
-            let downloads = crate::download::Downloads::open(&library, db)?;
-            let mut app = Application {
-                cache_dir,
-                downloads,
-                downloads_tab: 0,
-                queue,
-                ui: weak.clone(),
-                client: Client::new(settings)?,
-                library,
-                page: Page::Login,
-                folder: 0,
-                title: String::new(),
-                items: vec![],
-                total: 0,
-                page_number: 1,
-                folder_total: 0,
-                keyword: String::new(),
-                prompt: None,
-                filling: None,
-            };
-            app.events(rx);
-            Ok(())
-        })();
-        if let Err(e) = startup {
-            let msg = e.to_string();
-            let _ = weak.upgrade_in_event_loop(move |w| {
-                w.set_login_state("error".into());
-                w.set_message(msg.into());
-            });
-        }
-    });
-    let result = ui.run();
-    #[cfg(target_os = "android")]
-    {
-        ANDROID_COMMANDS.lock().unwrap().take();
-    }
-    Ok(result?)
-}
-
-fn bind_covers(ui: &PlayerWindow, db: &std::path::Path) {
-    let legacy = crate::cover::legacy_path(db);
-    let (tx, rx) = mpsc::channel::<String>();
-    let outstanding = std::sync::Arc::new(std::sync::Mutex::new(HashSet::new()));
-    let active = outstanding.clone();
-    let weak = ui.as_weak();
-    thread::spawn(move || {
-        let cache = crate::cover::Cache::new(legacy);
-        for url in rx {
-            let result = cache.load(&url);
-            let pending = active.clone();
-            let _ = weak.upgrade_in_event_loop(move |ui| {
-                pending.lock().unwrap().remove(&url);
-                let Some(image) = result
-                    .ok()
-                    .and_then(|p| slint::Image::load_from_path(&p).ok())
-                else {
-                    return;
-                };
-                if ui.get_small_cover_url().as_str() == url {
-                    ui.set_small_cover(image.clone());
-                }
-                if ui.get_large_cover_url().as_str() == url {
-                    ui.set_large_cover(image.clone());
-                }
-                let rows = ui.get_entries();
-                for i in 0..rows.row_count() {
-                    if let Some(mut r) = rows.row_data(i)
-                        && r.cover_url.as_str() == url
-                    {
-                        r.cover = image.clone();
-                        rows.set_row_data(i, r);
-                    }
-                }
-            });
-        }
-    });
-    ui.on_need_cover(move |url| {
-        let url = url.to_string();
-        if !url.is_empty() && outstanding.lock().unwrap().insert(url.clone()) {
-            let _ = tx.send(url);
-        }
-    });
-}
-
-fn bind(ui: &PlayerWindow, tx: &Sender<Command>) {
-    let sender = tx.clone();
-    ui.on_set_download_option(move |k, v| {
-        let _ = sender.send(Command::SetDownloadOption(k.into(), v));
-    });
-    let sender = tx.clone();
-    ui.on_clear_cache(move || {
-        let _ = sender.send(Command::ClearCache);
-    });
-    let sender = tx.clone();
-    ui.on_clear_cooldown(move || {
-        let _ = sender.send(Command::ClearCooldown);
-    });
-    let sender = tx.clone();
-    let weak = ui.as_weak();
-    ui.on_select_media({
-        let weak = weak.clone();
-        move |id, mode| {
-            let Some(ui) = weak.upgrade() else { return };
-            let model = ui.get_entries();
-            let mut count = 0;
-            for i in 0..model.row_count() {
-                if let Some(mut row) = model.row_data(i) {
-                    let selected = match mode {
-                        1 => true,
-                        2 => false,
-                        _ if row.key == id => !row.selected,
-                        _ => row.selected,
-                    };
-                    if selected != row.selected {
-                        row.selected = selected;
-                        model.set_row_data(i, row);
-                    }
-                    count += i32::from(selected);
-                }
-            }
-            ui.set_selected_count(count);
-        }
-    });
-    ui.on_download(move || {
-        let Some(ui) = weak.upgrade() else { return };
-        let ids = if ui.get_selecting() {
-            let ids: Vec<_> = ui
-                .get_entries()
-                .iter()
-                .filter(|r| r.selected)
-                .map(|r| r.key.to_string())
-                .collect();
-            if ids.is_empty() {
-                return;
-            }
-            ids
-        } else {
-            vec![]
-        };
-        ui.set_selecting(false);
-        ui.invoke_select_media("".into(), 2);
-        let _ = sender.send(Command::Download(ids));
-    });
-    let sender = tx.clone();
-    ui.on_downloads_tab(move |tab| {
-        let _ = sender.send(Command::DownloadsTab(tab));
-    });
-    let sender = tx.clone();
-    ui.on_download_action(move |id, action| {
-        let _ = sender.send(Command::DownloadAction(id.into(), action.into()));
-    });
-    let sender = tx.clone();
-    ui.on_account_status(move || {
-        let _ = sender.send(Command::Account);
-    });
-    let sender = tx.clone();
-    ui.on_logout(move || {
-        let _ = sender.send(Command::Logout);
-    });
-    let sender = tx.clone();
-    ui.on_retry(move || {
-        let _ = sender.send(Command::Retry);
-    });
-    let sender = tx.clone();
-    ui.on_navigate(move |p| {
-        let _ = sender.send(Command::Navigate(p));
-    });
-    let sender = tx.clone();
-    ui.on_choose(move |k, t| {
-        let _ = sender.send(Command::Choose(k.into(), t.into()));
-    });
-    let sender = tx.clone();
-    ui.on_more(move || {
-        let _ = sender.send(Command::More);
-    });
-    let sender = tx.clone();
-    ui.on_theme(move |t| {
-        let _ = sender.send(Command::Theme(t.into()));
-    });
-    let sender = tx.clone();
-    let controls = tx.clone();
-    ui.on_transport(move |a, i| {
-        let _ = controls.send(Command::Transport(a, i));
-    });
-    let seeker = tx.clone();
-    ui.on_seek(move |pos| {
-        let _ = seeker.send(Command::Seek(pos));
-    });
-    let timer = slint::Timer::default();
-    ui.on_search(move |s| {
-        let tx = sender.clone();
-        timer.start(
-            slint::TimerMode::SingleShot,
-            Duration::from_millis(400),
-            move || {
-                let _ = tx.send(Command::Search(s.to_string()));
-            },
-        );
-    });
+pub(crate) fn run(
+    db: PathBuf,
+    settings: Settings,
+    view: View,
+    rx: Receiver<Command>,
+) -> Result<()> {
+    let queue = crate::queue::Queue::restore(&settings)?;
+    let library = Library::open(&db)?;
+    let cache_dir = crate::cover::legacy_path(&db);
+    let downloads = crate::download::Downloads::open(&library, db)?;
+    let mut app = Application {
+        cache_dir,
+        downloads,
+        downloads_tab: 0,
+        queue,
+        view,
+        client: Client::new(settings)?,
+        library,
+        page: Page::Login,
+        folder: 0,
+        title: String::new(),
+        items: vec![],
+        total: 0,
+        page_number: 1,
+        folder_total: 0,
+        keyword: String::new(),
+        prompt: None,
+        filling: None,
+    };
+    app.events(rx);
+    Ok(())
 }
 
 struct Prompt {
+    _image: tempfile::TempPath,
     code: String,
     expires: Instant,
     next: Instant,
@@ -324,7 +100,7 @@ struct Application {
     downloads: crate::download::Downloads,
     downloads_tab: i32,
     queue: crate::queue::Queue,
-    ui: slint::Weak<PlayerWindow>,
+    view: View,
     client: Client,
     library: Library,
     page: Page,
@@ -340,28 +116,26 @@ struct Application {
 }
 
 impl Application {
-    fn show(&self, update: impl FnOnce(PlayerWindow) + Send + 'static) {
-        let _ = self.ui.upgrade_in_event_loop(update);
+    fn show(&self, update: impl FnOnce(&mut Snapshot)) {
+        self.view.update(update);
     }
     fn entries(&self, rows: Rows, more: bool) {
         self.show(move |ui| {
             let rows = rows
                 .into_iter()
                 .map(|(key, title, detail, cover)| Entry {
-                    cover_url: cover.into(),
-                    cover: Default::default(),
-                    selected: false,
+                    cover_url: cover,
+
                     status: Default::default(),
-                    key: key.into(),
-                    title: title.into(),
-                    detail: detail.into(),
+                    key,
+                    title,
+                    detail,
                 })
                 .collect::<Vec<_>>();
-            ui.set_selecting(false);
-            ui.set_selected_count(0);
-            ui.set_entries(ModelRc::from(Rc::new(VecModel::from(rows))));
-            ui.set_has_more(more);
-            ui.set_message("".into());
+
+            ui.entries = rows;
+            ui.has_more = more;
+            ui.message = "".into();
         });
     }
     fn events(&mut self, rx: Receiver<Command>) {
@@ -371,7 +145,7 @@ impl Application {
             .get("theme_mode")
             .unwrap_or("SYSTEM")
             .to_owned();
-        self.show(move |ui| ui.set_theme_mode(theme.into()));
+        self.show(move |ui| ui.theme_mode = theme);
         let _ = self.client.ensure_buvid();
         if self
             .client
@@ -470,15 +244,19 @@ impl Application {
                 }
             };
             let result = match command {
-                Command::SetDownloadOption(key, value) => self.client.settings.update(|v| {
-                    let setting = match key.as_str() {
-                        "wifi_only" | "api_rate_limit_enabled" => (value != 0).to_string(),
-                        "api_rate_limit_per_minute" => value.clamp(10, 60).to_string(),
-                        "max_concurrent_downloads" => value.clamp(1, 8).to_string(),
-                        _ => return,
-                    };
-                    v.insert(key, setting);
-                }),
+                Command::SetDownloadOption(key, value) => self
+                    .client
+                    .settings
+                    .update(|v| {
+                        let setting = match key.as_str() {
+                            "wifi_only" | "api_rate_limit_enabled" => (value != 0).to_string(),
+                            "api_rate_limit_per_minute" => value.clamp(10, 60).to_string(),
+                            "max_concurrent_downloads" => value.clamp(1, 8).to_string(),
+                            _ => return,
+                        };
+                        v.insert(key, setting);
+                    })
+                    .and_then(|()| self.download_settings(false)),
                 Command::ClearCooldown => self.client.settings.update(|v| {
                     for key in ["gate_level", "gate_last", "gate_cooldown"] {
                         v.insert(key.into(), "0".into());
@@ -523,7 +301,7 @@ impl Application {
                         .client
                         .account_status()
                         .unwrap_or_else(|e| format!("暂时无法检查：{e}"));
-                    self.show(move |ui| ui.set_account_detail(text.into()));
+                    self.show(move |ui| ui.account_detail = text);
                     Ok(())
                 }
                 Command::Logout => self
@@ -531,6 +309,9 @@ impl Application {
                     .logout()
                     .and_then(|()| self.navigate(Page::Login, false))
                     .and_then(|()| self.qr()),
+                Command::Navigate(Page::Login) => {
+                    self.navigate(Page::Login, false).and_then(|()| self.qr())
+                }
                 Command::Navigate(p) => self.navigate(p, false),
                 Command::Retry if self.page == Page::Login => self.qr(),
                 Command::Retry => self.navigate(self.page, true),
@@ -567,7 +348,7 @@ impl Application {
                     .update(|v| {
                         v.insert("theme_mode".into(), s.clone());
                     })
-                    .map(|()| self.show(move |ui| ui.set_theme_mode(s.into()))),
+                    .map(|()| self.show(move |ui| ui.theme_mode = s)),
             };
             if let Err(e) = result {
                 self.error(e);
@@ -600,12 +381,12 @@ impl Application {
             format!("{size} B")
         };
         self.show(move |ui| {
-            ui.set_download_dir(dir.into());
-            ui.set_cache_size(size.into());
-            ui.set_wifi_only(wifi);
-            ui.set_rate_enabled(enabled);
-            ui.set_rate_limit(limit);
-            ui.set_concurrent(concurrent);
+            ui.download_dir = dir;
+            ui.cache_size = size;
+            ui.wifi_only = wifi;
+            ui.rate_enabled = enabled;
+            ui.rate_limit = limit;
+            ui.concurrent = concurrent;
         });
         Ok(())
     }
@@ -614,7 +395,7 @@ impl Application {
         crate::android_platform::request_music_access()?;
         let count = crate::download::enqueue(&mut self.library, media)?;
         self.downloads.wake();
-        self.show(move |ui| ui.set_message(format!("已加入下载队列：{count} 首").into()));
+        self.show(move |ui| ui.message = format!("已加入下载队列：{count} 首"));
         Ok(())
     }
     fn download_entries(&self) -> Result<()> {
@@ -623,14 +404,14 @@ impl Application {
             let rows = rows
                 .into_iter()
                 .map(|(id, title, detail, status)| Entry {
-                    key: id.into(),
-                    title: title.into(),
-                    detail: detail.into(),
-                    status: status.into(),
+                    key: id,
+                    title,
+                    detail,
+                    status,
                     ..Default::default()
                 })
                 .collect::<Vec<_>>();
-            ui.set_entries(ModelRc::from(Rc::new(VecModel::from(rows))));
+            ui.entries = rows;
         });
         Ok(())
     }
@@ -691,37 +472,30 @@ impl Application {
             return;
         }
         self.show(move |ui| {
-            if ui.get_small_cover_url() != small.as_str() {
-                ui.set_small_cover(Default::default());
-                ui.set_small_cover_url(small.into());
-            }
-            if ui.get_large_cover_url() != large.as_str() {
-                ui.set_large_cover(Default::default());
-                ui.set_large_cover_url(large.into());
-            }
-            ui.set_local_track(local);
-            ui.set_track_title(title.into());
-            ui.set_artist(artist.into());
-            ui.set_playing(playing);
-            ui.set_position(pos as f32 / 1000.);
-            ui.set_duration(duration as f32 / 1000.);
-            ui.set_queue_index(index as i32);
-            ui.set_repeat_mode(repeat);
-            ui.set_shuffle(shuffle);
+            ui.small_cover_url = small;
+            ui.large_cover_url = large;
+            ui.local_track = local;
+            ui.track_title = title;
+            ui.artist = artist;
+            ui.playing = playing;
+            ui.position = pos as f32 / 1000.;
+            ui.duration = duration as f32 / 1000.;
+            ui.queue_index = index as i32;
+            ui.repeat_mode = repeat;
+            ui.shuffle = shuffle;
             if let Some(rows) = rows {
                 let entries = rows
                     .into_iter()
                     .map(|(title, detail)| Entry {
-                        selected: false,
                         status: Default::default(),
                         key: "".into(),
                         cover_url: "".into(),
-                        cover: Default::default(),
-                        title: title.into(),
-                        detail: detail.into(),
+
+                        title,
+                        detail,
                     })
                     .collect::<Vec<_>>();
-                ui.set_queue(ModelRc::from(Rc::new(VecModel::from(entries))));
+                ui.queue = entries;
             }
         });
     }
@@ -797,33 +571,41 @@ impl Application {
         let is_login = self.page == Page::Login;
         let msg = e.to_string();
         self.show(move |ui| {
-            ui.set_message(msg.into());
+            ui.message = msg;
             if is_login {
-                ui.set_login_state("error".into());
+                ui.login_state = "error".into();
             }
         });
     }
     fn qr(&mut self) -> Result<()> {
         self.prompt = None;
-        self.show(|ui| ui.set_login_state("generating".into()));
+        self.show(|ui| ui.login_state = "generating".into());
         let (url, code) = self.client.start_qr()?;
         let qr = QrCode::new(url.as_bytes())?;
-        self.show(move |ui| {
-            let width = qr.width();
-            let mut image = SharedPixelBuffer::<Rgb8Pixel>::new(width as u32, width as u32);
-            for (index, pixel) in image.make_mut_slice().iter_mut().enumerate() {
-                let c = if qr[(index % width, index / width)] == Color::Dark {
-                    0
-                } else {
-                    255
-                };
-                *pixel = Rgb8Pixel::new(c, c, c);
-            }
-            ui.set_qr(slint::Image::from_rgb8(image));
-            ui.set_login_state("waiting".into());
+        let size = qr.width();
+        let pixels = (size + 8) * 6;
+        let image = image::GrayImage::from_fn(pixels as u32, pixels as u32, |x, y| {
+            let x = (x as usize / 6).checked_sub(4);
+            let y = (y as usize / 6).checked_sub(4);
+            let dark = x
+                .zip(y)
+                .is_some_and(|(x, y)| x < size && y < size && qr[(x, y)] == Color::Dark);
+            image::Luma([if dark { 0 } else { 255 }])
+        });
+        std::fs::create_dir_all(&self.cache_dir)?;
+        let file = tempfile::Builder::new()
+            .prefix("login-")
+            .suffix(".png")
+            .tempfile_in(&self.cache_dir)?;
+        image.write_to(&mut file.as_file(), image::ImageFormat::Png)?;
+        let file = file.into_temp_path();
+        self.show(|ui| {
+            ui.qr = file.to_string_lossy().into_owned();
+            ui.login_state = "waiting".into();
         });
         let now = Instant::now();
         self.prompt = Some(Prompt {
+            _image: file,
             code,
             expires: now + Duration::from_secs(180),
             next: now + Duration::from_secs(4),
@@ -835,8 +617,8 @@ impl Application {
         if Instant::now() >= p.expires {
             self.prompt = None;
             self.show(|ui| {
-                ui.set_login_state("expired".into());
-                ui.set_message("二维码已过期".into());
+                ui.login_state = "expired".into();
+                ui.message = "二维码已过期".into();
             });
         } else if self.client.poll_qr(&p.code).unwrap_or(false) {
             self.prompt = None;
@@ -863,6 +645,9 @@ impl Application {
         }
     }
     fn navigate(&mut self, p: Page, force: bool) -> Result<()> {
+        if p != Page::Login {
+            self.prompt = None;
+        }
         self.page = p;
         self.keyword.clear();
         self.items.clear();
@@ -871,15 +656,12 @@ impl Application {
         self.page_number = 1;
         let title = self.title.clone();
         self.show(move |ui| {
-            ui.set_page(p);
-            ui.set_entries(ModelRc::default());
-            ui.set_message("".into());
-            ui.set_has_more(false);
-            ui.set_selecting(false);
-            ui.set_selected_count(0);
-            ui.set_query("".into());
-            ui.set_searching(false);
-            ui.set_folder_title(title.into());
+            ui.page = p;
+            ui.entries = Vec::new();
+            ui.message = "".into();
+            ui.has_more = false;
+
+            ui.folder_title = title;
         });
         match p {
             Page::Favorites => {
@@ -942,7 +724,7 @@ impl Application {
                     ),
                     None => "未登录".into(),
                 };
-                self.show(move |ui| ui.set_account(user.into()));
+                self.show(move |ui| ui.account = user);
             }
             _ => {}
         }
@@ -982,11 +764,11 @@ impl Application {
         self.search("")?;
         if _force {
             self.show(move |ui| {
-                ui.set_message(if count == 0 {
+                ui.message = if count == 0 {
                     "未找到新的本地文件".into()
                 } else {
-                    format!("已恢复 {count} 首本地歌曲").into()
-                })
+                    format!("已恢复 {count} 首本地歌曲")
+                }
             });
         }
         Ok(())
@@ -1116,13 +898,4 @@ fn unique(mut rows: Vec<Media>) -> Vec<Media> {
     let mut seen = HashSet::new();
     rows.retain(|m| seen.insert(m.bvid.clone()));
     rows
-}
-
-#[cfg(not(target_os = "android"))]
-pub fn desktop() -> Result<()> {
-    let dir = crate::settings::desktop_dir()?;
-    let settings = Settings::open(dir.join("settings.properties"), || {
-        Ok(crate::settings::Values::new())
-    })?;
-    run(dir.join("bili_music_database"), settings)
 }

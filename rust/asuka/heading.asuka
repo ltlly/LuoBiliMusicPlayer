@@ -1,0 +1,53 @@
+// The sleeve is drawn locally. Opening a section requests only the covers
+// belonging to its visible rows.
+component Sleeve {
+  Canvas(g => {
+    let x = g.width * 0.56
+    let y = g.height * 0.69
+    let r = g.height * 0.53
+    let circle = Path().arc(x, y, r, start: 0, end: 6.283185)
+    g.fill(circle, #162D31)
+    for i in 1..7 {
+      let radius = r * (0.35 + i.float() * 0.084)
+      g.stroke(Path().arc(x, y, radius, start: 0, end: 6.283185), #426560, StrokeStyle(width: 1))
+    }
+    g.fill(Path().arc(x, y, r * 0.28, start: 0, end: 6.283185), #E9B88B)
+    g.fill(Path().arc(x, y, r * 0.055, start: 0, end: 6.283185), #183E3A)
+  }) { width: 98; height: 85 }
+}
+
+component Heading(panel: string) {
+  event queue
+  let title = if panel == "player" { "正在播放" } else if panel == "queue" { "播放队列" } else { pageName(player.page) }
+  let count = player.entries.count()
+  let detail = if panel == "queue" { "{player.queue.count()} 首歌曲" }
+    else if !panel.isEmpty() { player.artist }
+    else if player.page == "favorites" { "{count} 个收藏夹" }
+    else if player.page == "library" { "{count} 首本地歌曲" }
+    else { "" }
+  Row {
+    padding: [12, 20, 12, 22]
+    gap: 10
+    align: .center
+    gradient: Gradient(stops: [Stop(color: #163C3C, at: 0), Stop(color: #245954, at: 1)])
+    Column {
+      gap: 5
+      grow: 1
+      if environment().width < 680 { Text("哔哩音乐") { color: #C3DCCF; font: .footnote.semibold() } }
+      Text(title) { color: #FFFAEB; font: .largeTitle.bold(); lines: 1 }
+      if !detail.isEmpty() { Text(detail) { color: #D3EBDC; font: .footnote } }
+    }
+    if !player.trackTitle.isEmpty() {
+      View {
+        role: .button
+        label: "队列"
+        padding: [9, 15]
+        radius: 16
+        background: #D4EADA
+        on press { emit queue }
+        Text("队列") { color: #1C443F; font: .subheadline.semibold() }
+      }
+    }
+    Sleeve()
+  }
+}

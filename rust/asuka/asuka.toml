@@ -1,0 +1,28 @@
+name = "BiliMusicPlayer"
+id = "com.bilimusicplayer"
+version = "1.6.0"
+build = 13
+accent = "#25766D"
+icon = "icon.png"
+orientations = ["portrait", "landscape"]
+
+[c.prebuilt]
+linux-x64 = "native/linux-x64/libbili_music_player.a"
+android-x64 = "native/android-x64/libbili_music_player.a"
+android-arm64 = "native/android-arm64/libbili_music_player.a"
+android-arm = "native/android-arm/libbili_music_player.a"
+windows-x64 = ["native/windows-x64/libbili_music_player.a", "native/windows-x64/libgcc_eh.a"]
+macos-arm64 = "native/macos-arm64/libbili_music_player.a"
+macos-x64 = "native/macos-x64/libbili_music_player.a"
+
+[c.linux]
+libraries = ["dl", "pthread", "m"]
+[c.windows]
+libraries = ["ws2_32", "userenv", "bcrypt", "ntdll", "crypt32", "secur32"]
+[c.android]
+libraries = ["log", "android", "m", "dl"]
+[c.macos]
+frameworks = ["Security", "SystemConfiguration", "CoreFoundation"]
+
+[android]
+permissions = ["android.permission.INTERNET", "android.permission.ACCESS_NETWORK_STATE", "android.permission.FOREGROUND_SERVICE", "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK", "android.permission.READ_MEDIA_AUDIO"]

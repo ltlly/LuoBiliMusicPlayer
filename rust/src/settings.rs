@@ -46,6 +46,9 @@ impl Settings {
 
 #[cfg(not(target_os = "android"))]
 pub fn desktop_dir() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("BILIMUSIC_DATA_DIR").filter(|p| !p.is_empty()) {
+        return Ok(PathBuf::from(path));
+    }
     let home = std::env::home_dir().context("无法定位用户目录")?;
     let parent = if cfg!(target_os = "windows") {
         std::env::var_os("APPDATA")

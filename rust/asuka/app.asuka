@@ -1,0 +1,255 @@
+import std/json
+
+let tabs = ["favorites", "library", "downloads", "settings"]
+
+app {
+  effect { setColorScheme(if player.themeMode == "DARK" { .dark } else if player.themeMode == "LIGHT" { .light } else { .system }) }
+  Window {
+    title: "哔哩音乐"
+    width: 880
+    height: 720
+    minWidth: 330
+    minHeight: 430
+    Music()
+  }
+}
+
+component Art(source: string, size: float, glyph: string = "music.note") {
+  state path = ""
+  task(source) {
+    path = ""
+    let url = source
+    if !url.isEmpty() { path = await spawn { lbm_cover(url) } }
+  }
+  if path.isEmpty() {
+    View {
+      width: size
+      height: size
+      radius: 9
+      align: .center
+      justify: .center
+      background: #245B55
+      if size >= 100 { Sleeve() } else { Glyph(if glyph == "heart.fill" { "favorites" } else { "library" }, #D4F5CF) }
+    }
+  } else {
+    Image(path) { width: size; height: size; radius: 9 }
+  }
+}
+
+component Music(live: bool = true) {
+  let wide = environment().width >= 680
+  state panel = ""
+  state query = ""
+  state selected: [string] = []
+  state selecting = false
+  state tab = 0
+
+  task {
+    if !live { return }
+    lbm_start()
+    while true {
+      let raw = lbm_snapshot(player.revision)
+      if !raw.isEmpty() {
+        if let next = try? json.decode<Player>(raw) {
+          if player.page != next.page {
+            query = ""
+            selecting = false
+            selected = []
+            panel = ""
+          }
+          player = next
+        }
+      }
+      await sleep(250ms)
+    }
+  }
+  task(query) {
+    if !query.isEmpty() {
+      await sleep(400ms)
+      action("search", query)
+    }
+  }
+  onBack {
+    if !panel.isEmpty() { panel = ""; return true }
+    if selecting { selecting = false; selected = []; return true }
+    if !query.isEmpty() { query = ""; action("search", ""); return true }
+    if player.page == "content" { go("favorites"); return true }
+    if player.page == "downloadSettings" { go("settings"); return true }
+    return false
+  }
+  fn openTab(page: string) {
+    panel = ""
+    if page != player.page { go(page) }
+  }
+  fn select(key: string) {
+    if selected.contains(key) { selected.removeWhere(k => k == key) } else { selected.push(key) }
+  }
+  fn sendDownload(ids: [string]) {
+    if let encoded = try? json.encode(ids) { action("download", encoded) }
+    selecting = false
+    selected = []
+  }
+
+  SafeArea {
+    grow: 1
+    Row {
+      grow: 1
+      if wide {
+        Column {
+          width: 154
+          padding: [14, 0]
+          gap: 12
+          Text("哔哩音乐") { padding: [6, 22]; font: .title3.bold() }
+          Navigation(true, panel) { on choose(p) { openTab(p) } }
+        }
+      }
+    Column {
+      grow: 1
+      Heading(panel) {
+        on queue { panel = if panel == "queue" { "" } else { "queue" } }
+      }
+      if panel == "player" || panel == "queue" {
+        NowPlaying(panel) {
+          on dismiss { panel = "" }
+          on queue { panel = if panel == "queue" { "player" } else { "queue" } }
+        }
+      } else {
+        if player.page == "content" || player.page == "downloadSettings" || player.page == "library" || player.page == "favorites" || player.page == "downloads" {
+          Row {
+            align: .center
+            padding: [5, 16]
+            if player.page == "content" || player.page == "downloadSettings" {
+              Button("返回") { on press { go(if player.page == "content" { "favorites" } else { "settings" }) } }
+            }
+            View { grow: 1 }
+            if player.page != "downloadSettings" {
+              Button("刷新") { on press { action("retry") } }
+            }
+          }
+        }
+        if !player.message.isEmpty() {
+          Text(player.message) { color: .secondaryLabel; font: .footnote; padding: [4, 20]; lines: 3 }
+        }
+        if player.page == "login" {
+          Column {
+            grow: 1
+            padding: 20
+            gap: 14
+            align: .center
+            justify: .center
+            if player.loginState == "waiting" && !player.qr.isEmpty() {
+              Image(player.qr) { width: 192; height: 192 }
+              Text("请使用哔哩哔哩客户端扫码") { font: .headline }
+            } else if player.loginState == "error" || player.loginState == "expired" {
+              Symbol("qrcode") { font: .largeTitle; color: .accent }
+              Button("重新获取二维码") { variant: .filled; on press { action("retry") } }
+            } else {
+              Activity()
+              Text("正在获取二维码") { color: .secondaryLabel }
+            }
+          }
+        } else if player.page == "settings" || player.page == "downloadSettings" {
+          Preferences()
+        } else {
+          if player.page != "favorites" {
+            TextField {
+              padding: [4, 20]
+              text: query
+              placeholder: "搜索歌曲或歌手"
+              on change(t) {
+                if t.isEmpty() && !query.isEmpty() { action("search", "") }
+                query = t
+              }
+            }
+          }
+          if player.page == "downloads" {
+            Segmented(["进行中", "已完成", "失败"]) {
+              padding: [4, 20]
+              selected: tab
+              on change(i) { tab = i; action("downloadsTab", "{i}") }
+            }
+          }
+          if player.page == "content" && !player.entries.isEmpty() {
+            Row {
+              gap: 6
+              padding: [4, 16]
+              if selecting {
+                Button("全选") { on press { selected = player.entries.map(e => e.key) } }
+                Button("下载 ({selected.count()})") { disabled: selected.isEmpty(); on press { sendDownload(selected) } }
+                Button("取消") { on press { selecting = false; selected = [] } }
+              } else {
+                Button("选择歌曲") { on press { selecting = true } }
+                Button("下载全部") { on press { sendDownload([]) } }
+              }
+            }
+          }
+          if player.entries.isEmpty() {
+            Column {
+              grow: 1
+              align: .center
+              justify: .center
+              gap: 10
+              Symbol("music.note") { font: .largeTitle; color: .tertiaryLabel }
+              Text(if !query.isEmpty() { "没有匹配的歌曲" } else if player.page == "downloads" { "暂无下载" } else if player.page == "favorites" { "暂无收藏夹" } else { "暂无歌曲" }) { color: .secondaryLabel }
+            }
+          } else {
+            List {
+              grow: 1
+              for e in player.entries key e.key {
+                Row {
+                  padding: [8, 20]
+                  gap: 12
+                  align: .center
+                  role: .button
+                  label: e.title
+                  on press {
+                    if selecting { select(e.key) } else { action("choose", e.key, e.title) }
+                  }
+                  Art(e.coverUrl, 44.0, if player.page == "favorites" { "heart.fill" } else { "music.note" })
+                  Column {
+                    grow: 1
+                    gap: 3
+                    Text(e.title) { font: .headline; lines: 1 }
+                    Text(e.detail) { font: .footnote; color: .secondaryLabel; lines: 1 }
+                  }
+                  if selecting {
+                    Symbol(if selected.contains(e.key) { "checkmark.circle.fill" } else { "circle" })
+                  } else if player.page == "downloads" {
+                    if e.status == "QUEUED" || e.status == "DOWNLOADING" {
+                      Button("取消") { on press { action("downloadAction", e.key, "cancel") } }
+                    } else {
+                      if e.status != "COMPLETED" { Button("重试") { on press { action("downloadAction", e.key, "retry") } } }
+                      Button("移除") { on press { action("downloadAction", e.key, "delete") } }
+                    }
+                  } else { Symbol("chevron.forward") { color: .tertiaryLabel } }
+                }
+              }
+            }
+            if player.hasMore { Button("加载更多") { on press { action("more") } } }
+          }
+        }
+      }
+
+      if panel.isEmpty() && !player.trackTitle.isEmpty() {
+        Row {
+          padding: [7, 16]
+          align: .center
+          gap: 12
+          background: .groupedBackground
+          role: .button
+          on press { panel = "player" }
+          Art(player.smallCoverUrl, 40.0)
+          Column {
+            grow: 1
+            Text(player.trackTitle) { font: .headline; lines: 1 }
+            Text(player.artist) { color: .secondaryLabel; font: .footnote; lines: 1 }
+          }
+          Button("") { icon: if player.playing { "pause.fill" } else { "play.fill" }; label: if player.playing { "暂停" } else { "播放" }; on press { control("toggle") } }
+          Button("下一首") { on press { control("next") } }
+        }
+      }
+      if !wide { Navigation(false, panel) { on choose(p) { openTab(p) } } }
+    }
+    }
+  }
+}

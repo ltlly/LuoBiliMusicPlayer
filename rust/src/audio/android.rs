@@ -9,7 +9,7 @@ use jni::{
 use std::time::Instant;
 
 pub struct Output {
-    vm: JavaVM,
+    vm: &'static JavaVM,
     context: GlobalRef,
     player: GlobalRef,
     started: bool,
@@ -18,11 +18,17 @@ pub struct Output {
 }
 impl Output {
     pub fn new() -> Result<Self> {
-        let ctx = ndk_context::android_context();
-        // android-activity owns both pointers for the life of android_main.
-        let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }?;
+        let (vm, activity) = crate::android_platform::context()?;
         let mut env = vm.attach_current_thread()?;
-        let context = env.new_global_ref(unsafe { JObject::from_raw(ctx.context().cast()) })?;
+        let application = env
+            .call_method(
+                &activity,
+                "getApplicationContext",
+                "()Landroid/content/Context;",
+                &[],
+            )?
+            .l()?;
+        let context = env.new_global_ref(application)?;
         let player = env.new_object("android/media/MediaPlayer", "()V", &[])?;
         let player = env.new_global_ref(player)?;
         drop(env);

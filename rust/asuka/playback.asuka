@@ -1,0 +1,74 @@
+component NowPlaying(panel: string) {
+  event dismiss
+  event queue
+  Column {
+    grow: 1
+    Row {
+      padding: [10, 16]
+      align: .center
+      Button("") { icon: "chevron.down"; label: "收起"; on press { emit dismiss } }
+      View { grow: 1 }
+      Button(if panel == "queue" { "播放器" } else { "队列" }) { on press { emit queue } }
+    }
+    if panel == "queue" {
+      if !player.queue.isEmpty() {
+        Button("清空队列") {
+          on press {
+            alert("清空播放队列？", actions: [
+              .button(title: "取消", role: .cancel),
+              .button(title: "清空", role: .destructive, run: () => control("clear"))
+            ])
+          }
+        }
+      }
+      List {
+        grow: 1
+        for (i, entry) in player.queue.enumerated() key i {
+          Row {
+            padding: [9, 20]
+            gap: 12
+            align: .center
+            on press { control("jump", i) }
+            Text("{i + 1}") { color: if i == player.queueIndex { .accent } else { .secondaryLabel } }
+            Column {
+              grow: 1
+              Text(entry.title) { font: .headline; lines: 1 }
+              Text(entry.detail) { font: .footnote; color: .secondaryLabel; lines: 1 }
+            }
+            Button("") { icon: "minus.circle"; label: "移除歌曲"; on press { control("remove", i) } }
+          }
+        }
+      }
+    } else {
+      Scroll {
+        grow: 1
+        Column {
+          padding: [18, 24]
+          gap: 14
+          align: .center
+          Art(player.largeCoverUrl, 168.0, "opticaldisc")
+          Text(player.trackTitle) { font: .title.bold(); lines: 2 }
+          Text(player.artist) { color: .secondaryLabel; font: .headline }
+          Slider {
+            min: 0
+            max: max(1.0, player.duration)
+            value: player.position
+            on change(v) { action("seek", "{v}") }
+          }
+          Text("{clock(player.position)} / {clock(player.duration)}") { color: .secondaryLabel; font: .footnote }
+          Row {
+            gap: 8
+            Button("上一首") { on press { control("previous") } }
+            Button(if player.playing { "暂停" } else { "播放" }) { variant: .filled; on press { control("toggle") } }
+            Button("下一首") { on press { control("next") } }
+          }
+          Row {
+            gap: 8
+            Button(if player.shuffle { "随机已开启" } else { "随机播放" }) { on press { control("shuffle") } }
+            Button(if player.repeatMode == 2 { "列表循环" } else if player.repeatMode == 1 { "单曲循环" } else { "顺序播放" }) { on press { control("repeat") } }
+          }
+        }
+      }
+    }
+  }
+}

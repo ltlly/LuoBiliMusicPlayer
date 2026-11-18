@@ -1,0 +1,11 @@
+test "a restored library opens its existing player and queue" {
+  player = Player(page: "library", trackTitle: "旧曲", artist: "歌手",
+    entries: [Entry(key: "BV1", title: "收藏的曲目", detail: "歌手")],
+    queue: [Entry(title: "旧曲", detail: "歌手")])
+  let ui = mount(Music(false))
+  ui.expect("收藏的曲目", "音乐库")
+  ui.tap("队列")
+  ui.expect("播放队列", "清空队列", "旧曲")
+  ui.tap("播放器")
+  ui.expect("正在播放", "上一首", "下一首")
+}

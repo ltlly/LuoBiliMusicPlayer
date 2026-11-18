@@ -1,0 +1,59 @@
+component Preferences {
+  Scroll {
+    grow: 1
+    Column {
+      gap: 12
+      padding: [8, 20, 20, 20]
+      if player.page == "settings" {
+        Text("账户") { color: .accent; font: .headline }
+        Text(player.account)
+        if !player.accountDetail.isEmpty() { Text(player.accountDetail) { color: .secondaryLabel } }
+        Row {
+          gap: 8
+          Button("检查登录状态") { on press { action("account") } }
+          if player.account == "未登录" {
+            Button("扫码登录") { on press { go("login") } }
+          } else {
+            Button("退出登录") {
+              on press { alert("退出当前账户？", actions: [.button(title: "取消", role: .cancel), .button(title: "退出", role: .destructive, run: () => action("logout"))]) }
+            }
+          }
+        }
+        Text("外观") { color: .accent; font: .headline }
+        Segmented(["跟随系统", "浅色", "深色"]) {
+          selected: if player.themeMode == "DARK" { 2 } else if player.themeMode == "LIGHT" { 1 } else { 0 }
+          on change(i) { action("theme", ["SYSTEM", "LIGHT", "DARK"][i]) }
+        }
+        Button("下载设置") { on press { go("downloadSettings") } }
+        Text("哔哩音乐 1.6.0") { color: .secondaryLabel; font: .footnote }
+      } else {
+        Text("保存目录") { font: .headline }
+        Text(player.downloadDir) { color: .secondaryLabel }
+        Row {
+          align: .center
+          Text("仅 Wi-Fi 下载") { grow: 1 }
+          Toggle { on: player.wifiOnly; on change(v) { action("option", "wifi_only", if v { "1" } else { "0" }) } }
+        }
+        Row {
+          align: .center
+          Text("同时下载 {player.concurrent} 首") { grow: 1 }
+          Stepper { value: player.concurrent.float(); min: 1; max: 8; on change(v) { action("option", "max_concurrent_downloads", "{v.int()}") } }
+        }
+        Row {
+          align: .center
+          Text("限制请求频率") { grow: 1 }
+          Toggle { on: player.rateEnabled; on change(v) { action("option", "api_rate_limit_enabled", if v { "1" } else { "0" }) } }
+        }
+        if player.rateEnabled {
+          Row {
+            align: .center
+            Text("每分钟 {player.rateLimit} 次") { grow: 1 }
+            Stepper { value: player.rateLimit.float(); min: 10; max: 60; on change(v) { action("option", "api_rate_limit_per_minute", "{v.int()}") } }
+          }
+        }
+        Button("清除封面缓存（{player.cacheSize}）") { on press { action("clearCache") } }
+        Button("清除冷却记录") { on press { action("clearCooldown") } }
+      }
+    }
+  }
+}

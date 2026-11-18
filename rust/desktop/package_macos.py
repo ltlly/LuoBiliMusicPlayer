@@ -4,12 +4,9 @@ import plistlib
 import shutil
 import struct
 import tempfile
-import tomllib
+import subprocess
 import zipfile
 from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-CONTENTS = "BiliMusicPlayer.app/Contents"
 
 
 def binary_info(stream):
@@ -34,52 +31,52 @@ def binary_info(stream):
     return cpu, minimum
 
 
-def build(exe, runtime, output):
-    with exe.open("rb") as binary:
-        cpu, minimum = binary_info(binary)
-    with (ROOT / "Cargo.toml").open("rb") as manifest:
-        version = tomllib.load(manifest)["package"]["version"]
-    plist = {
-        "CFBundleExecutable": "BiliMusicPlayer",
-        "CFBundleIconFile": "icon.icns",
-        "CFBundleIdentifier": "com.bilimusicplayer.desktop",
-        "CFBundleInfoDictionaryVersion": "6.0",
-        "CFBundleName": "BiliMusicPlayer",
-        "CFBundlePackageType": "APPL",
-        "CFBundleShortVersionString": version,
-        "CFBundleVersion": version,
-        "NSHighResolutionCapable": True,
-    }
+def build(app, runtime, output, identity):
+    """Retain the native host configuration, resources, Info.plist and entitlements."""
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=output.parent) as staging:
-        archive = Path(staging) / "player.zip"
-        with zipfile.ZipFile(runtime) as libs, zipfile.ZipFile(
-            archive, "w", compression=zipfile.ZIP_DEFLATED
-        ) as bundle:
+    with tempfile.TemporaryDirectory(dir=output.parent) as tmp:
+        stage = Path(tmp)
+        bundle = stage / app.name
+        shutil.copytree(app, bundle, symlinks=True)
+        contents = bundle / "Contents"
+        metadata = contents / "Info.plist"
+        with metadata.open("rb") as source:
+            plist = plistlib.load(source)
+        with (contents / "MacOS" / plist["CFBundleExecutable"]).open("rb") as source:
+            cpu, minimum = binary_info(source)
+        frameworks = contents / "Frameworks"
+        frameworks.mkdir(exist_ok=True)
+        with zipfile.ZipFile(runtime) as libs:
             if "libmpv.2.dylib" not in libs.namelist():
                 raise ValueError("Missing native macOS libmpv")
-            bundle.write(ROOT.parent / "desktopApp/icons/icon.icns", f"{CONTENTS}/Resources/icon.icns")
-            bundle.write(exe, f"{CONTENTS}/MacOS/BiliMusicPlayer")
             for name in libs.namelist():
                 if "/" in name or not name.endswith(".dylib") or name == "libmediampv.dylib":
                     continue
                 with libs.open(name) as source:
                     library_cpu, library_minimum = binary_info(source)
-                    minimum = max(minimum, library_minimum)
                     if library_cpu != cpu:
                         raise ValueError(f"Architecture mismatch: {name}")
+                    minimum = max(minimum, library_minimum)
                     source.seek(0)
-                    with bundle.open(f"{CONTENTS}/Frameworks/{name}", "w") as dest:
+                    library = frameworks / name
+                    with library.open("wb") as dest:
                         shutil.copyfileobj(source, dest)
-            plist["LSMinimumSystemVersion"] = f"{minimum >> 16}.{(minimum >> 8) & 255}.{minimum & 255}"
-            bundle.writestr(f"{CONTENTS}/Info.plist", plistlib.dumps(plist))
+                subprocess.run(["codesign", "--force", "--sign", identity, library], check=True)
+        plist["LSMinimumSystemVersion"] = f"{minimum >> 16}.{(minimum >> 8) & 255}.{minimum & 255}"
+        with metadata.open("wb") as dest:
+            plistlib.dump(plist, dest)
+        subprocess.run(["codesign", "--force", "--preserve-metadata=entitlements,flags",
+                        "--sign", identity, bundle], check=True)
+        subprocess.run(["codesign", "--verify", "--deep", "--strict", bundle], check=True)
+        archive = stage / "player.zip"
+        subprocess.run(["ditto", "-c", "-k", "--keepParent", bundle, archive], check=True)
         archive.replace(output)
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--exe", required=True, type=Path)
+    parser.add_argument("--app", required=True, type=Path, help="Asuka's built .app bundle")
     parser.add_argument("--runtime", required=True, type=Path, help="MediaMP macOS runtime JAR")
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--sign", default="-", help="macOS signing identity (default: ad hoc)")
     args = parser.parse_args()
-    build(args.exe, args.runtime, args.output)
+    build(args.app, args.runtime, args.output, args.sign)
