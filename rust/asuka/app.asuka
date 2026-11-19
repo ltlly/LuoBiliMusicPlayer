@@ -245,7 +245,7 @@ component Music(live: bool = true) {
                 }
               } else {
                 List {
-                  grow: 1; margin: [2,inset,4,inset]
+                  grow: 1; margin: [2,inset,4,inset]; background: palette.paper
                   appearance: .bare
                   for (i,e) in player.entries.enumerated() key e.key {
                     EntryRow(e, i, selecting, selected.contains(e.key)) {
@@ -297,8 +297,10 @@ component EntryRow(e: Entry, index: int, selecting: bool, checked: bool) {
   event choose
   let downloads = player.page == "downloads"
   Row {
-    background: if checked { palette.accentWash } else { palette.paper }
-    radius: 6; padding: [7, 2]; gap: 12; align: .center
+    padding: [7, 2]; gap: 12; align: .center
+    if checked {
+      View { absolute: true; top: 0; bottom: 0; left: 0; right: 0; radius: 6; background: palette.accentWash }
+    }
     Row {
       grow: 1; shrink: 1; align: .center; gap: 12; role: .button; label: e.title
       on press { emit choose }

@@ -37,7 +37,16 @@ public final class QualityTasks {
         labelDirectory = null;
     }
 
-    private synchronized JSONObject qualityLabels(JSONObject args) throws Exception {
+    private synchronized String qualityLabels(JSONObject args) throws Exception {
+        SharedPreferences meta = context.getSharedPreferences("download_audio_quality", Context.MODE_PRIVATE);
+        JSONArray paths = args.optJSONArray("paths");
+        Map<String, ?> saved = paths == null ? meta.getAll() : null;
+        if (saved != null) {
+            if (saved.isEmpty()) return "{}";
+            // Each saved download normally has three entries: label, size and rank.
+            // If most records may be obsolete, ask for the smaller set of library paths.
+            if (saved.size() / 3 > args.getLong("count") * 2) return "null";
+        }
         File dir = new File(args.getString("dir"));
         if (!dir.equals(labelDirectory)) {
             resetLabels();
@@ -58,24 +67,34 @@ public final class QualityTasks {
                 labelDirectory = dir;
             }
         }
-        JSONArray paths = args.getJSONArray("paths");
-        SharedPreferences meta = context.getSharedPreferences("download_audio_quality", Context.MODE_PRIVATE);
         JSONObject labels = new JSONObject();
-        for (int i = 0; i < paths.length(); i++) {
-            String path = paths.getString(i);
-            if (!meta.contains(path)) continue;
-            File file = new File(path);
-            boolean watched = labelDirectory != null && labelDirectory.equals(file.getParentFile());
-            String name = file.getName();
-            Long size = watched ? labelSizes.get(name) : null;
-            if (size == null) {
-                size = file.length();
-                if (watched) labelSizes.put(name, size);
+        if (saved != null) {
+            for (Map.Entry<String, ?> entry : saved.entrySet()) {
+                String path = entry.getKey();
+                if (entry.getValue() instanceof String label && saved.get("size:" + path) instanceof Long size)
+                    addVerifiedLabel(labels, path, label, size);
             }
-            if (size > 0 && size == meta.getLong("size:" + path, -1))
-                labels.put(path, meta.getString(path, ""));
+        } else {
+            for (int i = 0; i < paths.length(); i++) {
+                String path = paths.getString(i);
+                String label = meta.getString(path, null);
+                if (label != null) addVerifiedLabel(labels, path, label, meta.getLong("size:" + path, -1));
+            }
         }
-        return labels;
+        return labels.toString();
+    }
+
+    private void addVerifiedLabel(JSONObject labels, String path, String label, long expected) throws JSONException {
+        if (label == null || expected <= 0) return;
+        File file = new File(path);
+        boolean watched = labelDirectory != null && labelDirectory.equals(file.getParentFile());
+        String name = file.getName();
+        Long size = watched ? labelSizes.get(name) : null;
+        if (size == null) {
+            size = file.length();
+            if (watched) labelSizes.put(name, size);
+        }
+        if (size == expected) labels.put(path, label);
     }
 
     private QualityTasks(Context app) {
@@ -119,7 +138,7 @@ public final class QualityTasks {
         }
         if ("pending".equals(op)) { String pending = journal.pending(); return pending.isEmpty() ? "null" : pending; }
         if ("resetLabels".equals(op)) { resetLabels(); return "null"; }
-        if ("labels".equals(op)) return qualityLabels(new JSONObject(raw)).toString();
+        if ("labels".equals(op)) return qualityLabels(new JSONObject(raw));
         JSONObject args = new JSONObject(raw);
         if ("saveQuality".equals(op)) {
             saveQuality(new File(args.getString("path")), args.getString("label"), args.getInt("rank"));

@@ -54,10 +54,14 @@ pub(crate) enum Transport {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Entry {
     pub key: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub video: String,
     pub title: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub cover_url: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub status: String,
 }
 

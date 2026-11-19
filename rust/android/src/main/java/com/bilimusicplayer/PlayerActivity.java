@@ -1,6 +1,7 @@
 package com.bilimusicplayer;
 
 import android.Manifest;
+import android.animation.ValueAnimator;
 import android.os.Bundle;
 import dev.asuka.AsukaActivity;
 import android.content.Intent;
@@ -22,6 +23,13 @@ public final class PlayerActivity extends AsukaActivity {
         removal = new LibraryRemoval(this);
         freshLaunch = state == null;
         super.onCreate(state);
+        getSplashScreen().setOnExitAnimationListener(splash -> {
+            if (ValueAnimator.areAnimatorsEnabled()) {
+                splash.animate().alpha(0f).setDuration(100).withEndAction(splash::remove).start();
+            } else {
+                splash.remove();
+            }
+        });
         upgradeMode = state == null ? null : state.getString("upgradeMode");
         requestingUpgrade = upgradeMode != null;
     }

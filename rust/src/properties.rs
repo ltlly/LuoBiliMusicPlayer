@@ -2,7 +2,7 @@
 //! code-unit escapes. A supplementary character occupies two escaped units.
 use crate::settings::Values;
 use anyhow::{Context, Result, bail};
-use std::io::{Read, Write};
+use std::io::{BufWriter, Read, Write};
 
 fn whitespace(c: u8) -> bool {
     matches!(c, b' ' | b'\t' | 0x0c)
@@ -100,7 +100,8 @@ fn decode(s: &[u8]) -> Result<String> {
     Ok(String::from_utf16(&chars)?)
 }
 
-pub fn write(mut file: impl Write, values: &Values) -> Result<()> {
+pub fn write(file: impl Write, values: &Values) -> Result<()> {
+    let mut file = BufWriter::new(file);
     let mut entries = values.iter().collect::<Vec<_>>();
     entries.sort_by_key(|(k, _)| *k);
     for (key, value) in entries {
@@ -109,6 +110,7 @@ pub fn write(mut file: impl Write, values: &Values) -> Result<()> {
         encode(&mut file, value, false)?;
         file.write_all(b"\n")?;
     }
+    file.flush()?;
     Ok(())
 }
 fn encode(file: &mut impl Write, s: &str, key: bool) -> Result<()> {
@@ -125,4 +127,24 @@ fn encode(file: &mut impl Write, s: &str, key: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_io_failure_when_flushing_small_settings() {
+        struct FullDisk;
+        impl Write for FullDisk {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("disk full"))
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let values = Values::from([("theme_mode".into(), "DARK".into())]);
+        assert!(write(FullDisk, &values).is_err());
+    }
 }

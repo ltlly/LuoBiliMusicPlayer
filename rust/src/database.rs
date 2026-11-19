@@ -292,21 +292,25 @@ impl Library {
     }
 
     pub fn downloaded(&self) -> Result<Vec<crate::playback::Track>> {
-        Ok(self
-            .downloaded_with_video()?
-            .into_iter()
-            .map(|(track, _)| track)
-            .collect())
+        self.map_downloaded(|track, _| Ok(track))
     }
     pub(crate) fn downloaded_with_video(&self) -> Result<Vec<(crate::playback::Track, String)>> {
+        self.map_downloaded(|track, row| {
+            let video = linked_video(&track.id, row.get_ref(6)?.as_str()?, row.get(7)?);
+            Ok((track, video))
+        })
+    }
+    fn map_downloaded<T>(
+        &self,
+        map: impl Fn(crate::playback::Track, &rusqlite::Row<'_>) -> rusqlite::Result<T>,
+    ) -> Result<Vec<T>> {
         let mut query=self.0.prepare(
             "SELECT id,title,artist,localPath,coverUrl,duration,bvid,aid FROM songs WHERE isDownloaded=1 ORDER BY addedDate DESC"
         )?;
         let rows = query.query_map([], |r| {
             let id: String = r.get(0)?;
             let local: Option<String> = r.get(3)?;
-            let video = linked_video(&id, r.get_ref(6)?.as_str()?, r.get(7)?);
-            Ok((
+            map(
                 crate::playback::Track {
                     uri: local.unwrap_or_else(|| format!("bili://{id}")),
                     id,
@@ -315,8 +319,8 @@ impl Library {
                     cover: r.get(4)?,
                     duration_ms: r.get::<_, i64>(5)? * 1000,
                 },
-                video,
-            ))
+                r,
+            )
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }

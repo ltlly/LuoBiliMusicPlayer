@@ -1432,13 +1432,23 @@ impl Application {
                 .filter(|(t, _)| lower.is_empty() || t.matches(&lower))
                 .collect::<Vec<_>>();
             #[cfg(target_os = "android")]
-            let labels = crate::android_platform::quality_call(
-                "labels",
-                &serde_json::json!({
+            let labels = if tracks.is_empty() {
+                serde_json::Value::Null
+            } else {
+                let mut args = serde_json::json!({
                     "dir": crate::download::directory(&self.client)?,
-                    "paths": tracks.iter().map(|(t, _)| &t.uri).collect::<Vec<_>>(),
-                }),
-            )?;
+                    "count": tracks.len(),
+                });
+                let mut labels = serde_json::Value::Null;
+                if lower.is_empty() {
+                    labels = crate::android_platform::quality_call("labels", &args)?;
+                }
+                if labels.is_null() {
+                    args["paths"] = tracks.iter().map(|(t, _)| t.uri.as_str()).collect();
+                    labels = crate::android_platform::quality_call("labels", &args)?;
+                }
+                labels
+            };
             #[cfg(not(target_os = "android"))]
             let labels = serde_json::Value::Null;
             let rows = library_rows(tracks, &labels);

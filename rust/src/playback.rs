@@ -19,7 +19,8 @@ pub struct Track {
 }
 impl Track {
     pub fn matches(&self, lowercase: &str) -> bool {
-        self.title.to_lowercase().contains(lowercase)
+        lowercase.is_empty()
+            || self.title.to_lowercase().contains(lowercase)
             || self.artist.to_lowercase().contains(lowercase)
     }
     pub fn from_media(m: &crate::database::Media) -> Self {
