@@ -46,7 +46,7 @@ Linux 原生验证需要 GTK 4.14、libadwaita 1.5 或更高版本。播放时�
 python android/build.py --gradle /path/to/gradle-8.14.3/bin/gradle
 ```
 
-脚本把 Asuka 界面和 Rust 链接成 AAR，再编译包含 MediaSession、MediaStore 和权限处理的宿主。默认给当前 ARM64 手机生成 `target/asuka/BiliMusicPlayer-1.7.3-arm64-v8a.apk`。x86_64 模拟器使用 `--abi x86_64`，需要同时分发给三种架构时使用 `--abi universal`。正式包会裁剪未使用的 Java 代码、资源和原生调试符号。签名密码可由终端输入或通过环境变量 `BILI_STORE_PASSWORD`、`BILI_KEY_PASSWORD` 提供。使用原签名后，可用 `adb -s <设备序列号> install -r <APK>` 保留数据覆盖安装。
+脚本把 Asuka 界面和 Rust 链接成 AAR，再编译包含 MediaSession、MediaStore 和权限处理的宿主。默认给当前 ARM64 手机生成 `target/asuka/BiliMusicPlayer-1.7.4-arm64-v8a.apk`。x86_64 模拟器使用 `--abi x86_64`，需要同时分发给三种架构时使用 `--abi universal`。正式包会裁剪未使用的 Java 代码、资源和原生调试符号。签名密码可由终端输入或通过环境变量 `BILI_STORE_PASSWORD`、`BILI_KEY_PASSWORD` 提供。使用原签名后，可用 `adb -s <设备序列号> install -r <APK>` 保留数据覆盖安装。
 
 ### Windows x64
 
@@ -63,7 +63,7 @@ python desktop/build_windows_audio.py --output target/windows-audio
 python desktop/package_windows.py \
   --asuka-host /path/to/asuka-0.2.9/platform/windows \
   --audio-runtime target/windows-audio \
-  --output target/dist/windows-x64/BiliMusicPlayer-1.7.3.exe
+  --output target/dist/windows-x64/BiliMusicPlayer-1.7.4.exe
 ```
 
 ### macOS（暂缓）

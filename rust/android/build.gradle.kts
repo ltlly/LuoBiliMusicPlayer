@@ -16,8 +16,8 @@ android {
         applicationId = "com.bilimusicplayer"
         minSdk = 33
         targetSdk = 36
-        versionCode = 18
-        versionName = "1.7.3"
+        versionCode = 19
+        versionName = "1.7.4"
     }
     buildTypes {
         release {
@@ -38,7 +38,7 @@ android {
     sourceSets["main"].res.srcDir("../../app/src/main/res")
 }
 dependencies {
-    implementation("com.bilimusicplayer:bilimusicplayer:1.7.3")
+    implementation("com.bilimusicplayer:bilimusicplayer:1.7.4")
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-database:1.11.1")
     implementation("androidx.work:work-runtime:2.12.0")

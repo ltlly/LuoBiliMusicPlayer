@@ -73,7 +73,7 @@ component Preferences {
             }
           }
         }
-        Text("哔哩音乐 1.7.3") { color: palette.secondary; font: .footnote; alignSelf: .center }
+        Text("哔哩音乐 1.7.4") { color: palette.secondary; font: .footnote; alignSelf: .center }
       } else {
         Card {
           SectionName("保存目录","favorites")
